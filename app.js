@@ -1,6 +1,6 @@
 const STORAGE_KEY = "mtg-pod-validator-players";
 const RANGE_TOLERANCE = 1; // max power spread allowed within a pod
-const PLAYGROUP_URL = "https://playgroup.gg/playgroups/51996"; // "Amass a Gathering"
+const PLAYGROUP_URL = "https://playgroup.gg/tracker";
 
 // Default roster — the group's real players/decks/power ratings. Used to
 // seed local storage the first time the app runs in a browser; after that,
