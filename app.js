@@ -2,6 +2,11 @@ const STORAGE_KEY = "mtg-pod-validator-players";
 const RANGE_TOLERANCE = 1; // max power spread allowed within a pod
 const PLAYGROUP_URL = "https://playgroup.gg/tracker";
 
+// Cloudflare Worker relay for the Games to Update tab. Set once the Worker
+// is deployed (see cloudflare-worker/README.md) -- until then, submission
+// is disabled and only "Copy row" is available.
+const GAME_SUBMIT_RELAY_URL = "";
+
 // Default roster — the group's real players/decks/power ratings. Used to
 // seed local storage the first time the app runs in a browser; after that,
 // whatever's in local storage (including edits) takes over.
@@ -1222,6 +1227,62 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
   hint.className = "hint";
   hint.textContent = `Row order for pasting into Game Log Season 3: Game Date, Game #, Player Name, Commander, Commander Strength, Game Result, Place, Pod Size, Knockouts, Adjusted Pod Size Win/Loss Score, Knockout Score, Deck Strength Comparison Differential, Win Probability based on Deck Strength, Player Score, Normalized Player Score, TOV, Normalized TOV, Pop-Off, Disruptions, Successful Recoveries, Deck Resilience Score, Games Clearly Behind, Current Deck Bracket, Game Calculated Deck Strength. Suggested next Game # is ${nextGameNum} — check it doesn't collide if you're filling in more than one game.`;
   resultsEl.appendChild(hint);
+
+  const submitBtn = document.createElement("button");
+  submitBtn.className = "primary gtu-submit-btn";
+  const statusEl = document.createElement("span");
+  statusEl.className = "gtu-submit-status";
+
+  if (!GAME_SUBMIT_RELAY_URL) {
+    submitBtn.textContent = "Submit to Spreadsheet (not configured)";
+    submitBtn.disabled = true;
+    statusEl.textContent = "Relay not deployed yet — use Copy row for now.";
+  } else {
+    submitBtn.textContent = "Submit to Spreadsheet";
+    submitBtn.addEventListener("click", async () => {
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Submitting...";
+      statusEl.textContent = "";
+      const payload = {
+        date: pgGame.date,
+        podSize,
+        participants: rows.map(row => ({
+          player: row.player,
+          commander: row.commander,
+          strength: row.strength,
+          result: row.result,
+          place: row.place,
+          knockouts: row.knockouts,
+          tov: row.tov,
+          popOff: row.popOff,
+          disruptions: row.disruptions,
+          recoveries: row.recoveries,
+          gamesClearlyBehind: row.behind,
+          bracket: row.bracket,
+        })),
+      };
+      try {
+        const res = await fetch(GAME_SUBMIT_RELAY_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.error || `HTTP ${res.status}`);
+        }
+        submitBtn.textContent = "Submitted ✓";
+        statusEl.textContent = "GitHub Actions is updating the spreadsheet now — usually takes 1-3 minutes. Refresh this tab after that to see it reflected.";
+      } catch (err) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Submit to Spreadsheet";
+        statusEl.textContent = `Submission failed: ${err.message}`;
+      }
+    });
+  }
+
+  resultsEl.appendChild(submitBtn);
+  resultsEl.appendChild(statusEl);
 }
 
 // ---------- init ----------

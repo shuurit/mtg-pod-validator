@@ -523,6 +523,17 @@ tbody tr:hover {
   margin-top: 12px;
 }
 
+.gtu-submit-btn {
+  margin-top: 4px;
+}
+
+.gtu-submit-status {
+  display: block;
+  margin-top: 8px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
 .suggestion-chip {
   display: inline-block;
   background: var(--good-bg);
