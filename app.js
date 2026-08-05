@@ -369,11 +369,14 @@ function renderPlayersTable() {
       const powerInput = document.createElement("input");
       powerInput.type = "number";
       powerInput.step = "0.1";
+      powerInput.min = "0";
+      powerInput.max = "5";
       powerInput.className = "power-input";
       powerInput.value = deck.power;
       powerInput.addEventListener("change", () => {
         const v = parseFloat(powerInput.value);
-        if (!Number.isNaN(v)) deck.power = v;
+        if (!Number.isNaN(v)) deck.power = Math.min(5, Math.max(0, v));
+        powerInput.value = deck.power;
         savePlayers();
       });
       powerTd.appendChild(powerInput);
