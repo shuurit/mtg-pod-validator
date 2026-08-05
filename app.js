@@ -753,9 +753,98 @@ function runValidation() {
 
 document.getElementById("validate-btn").addEventListener("click", runValidation);
 
+// ---------- tabs ----------
+
+function initTabs() {
+  const buttons = document.querySelectorAll(".tab-btn");
+  buttons.forEach(btn => {
+    btn.addEventListener("click", () => {
+      buttons.forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      document.querySelectorAll(".tab-panel").forEach(p => { p.hidden = true; });
+      document.getElementById(`tab-${btn.dataset.tab}`).hidden = false;
+    });
+  });
+}
+
+// ---------- player win rates (read-only) ----------
+
+const WIN_RATES_FILE = "player-win-rates.json";
+
+function formatPct(v) {
+  return v === null || v === undefined ? null : `${v.toFixed(1)}%`;
+}
+
+async function loadWinRates() {
+  const statusEl = document.getElementById("winrates-sync-status");
+  const noteEl = document.getElementById("winrates-note");
+  const tableEl = document.getElementById("winrates-table");
+  try {
+    const res = await fetch(WIN_RATES_FILE, { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+
+    const table = document.createElement("table");
+    table.className = "winrates-table";
+    table.innerHTML = `
+      <thead>
+        <tr>
+          <th>Player</th>
+          <th>Win Rate (playgroup.gg)</th>
+          <th>Player Adjusted Win Rate</th>
+        </tr>
+      </thead>
+    `;
+    const tbody = document.createElement("tbody");
+
+    for (const p of data.players || []) {
+      const tr = document.createElement("tr");
+
+      const nameTd = document.createElement("td");
+      nameTd.textContent = p.player;
+
+      const pgTd = document.createElement("td");
+      pgTd.className = "num";
+      const pgPct = formatPct(p.playgroup_win_rate);
+      if (pgPct) {
+        pgTd.textContent = `${pgPct} (${p.playgroup_record})`;
+      } else {
+        pgTd.className += " muted";
+        pgTd.innerHTML = `<span class="na">${p.playgroup_note || "no data"}</span>`;
+      }
+
+      const adjTd = document.createElement("td");
+      adjTd.className = "num";
+      const adjPct = formatPct(p.player_adjusted_win_rate);
+      if (adjPct) {
+        adjTd.textContent = `${adjPct} (${p.player_adjusted_record})`;
+      } else {
+        adjTd.className += " muted";
+        adjTd.innerHTML = `<span class="na">${p.player_adjusted_note || "no data"}</span>`;
+      }
+
+      tr.appendChild(nameTd);
+      tr.appendChild(pgTd);
+      tr.appendChild(adjTd);
+      tbody.appendChild(tr);
+    }
+
+    table.appendChild(tbody);
+    tableEl.innerHTML = "";
+    tableEl.appendChild(table);
+
+    statusEl.textContent = `Loaded from ${WIN_RATES_FILE} (generated ${data.generated_at || "unknown date"}).`;
+    noteEl.textContent = data.source_note || "";
+  } catch (err) {
+    statusEl.textContent = `Couldn't load ${WIN_RATES_FILE} (${err.message}).`;
+  }
+}
+
 // ---------- init ----------
 
 initPlayerCountSelect();
 renderPlayersTable();
 renderPodSlots();
 syncFromRepoWorkbook();
+initTabs();
+loadWinRates();

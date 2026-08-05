@@ -1,0 +1,85 @@
+{
+  "generated_at": "2026-08-05",
+  "source_note": "playgroup_win_rate is tallied from ALL games recorded in playgroup.gg for this group (all-time on-platform). player_adjusted_win_rate is read directly from the spreadsheet's Player Adjusted Ranks tab, which only covers Game Log Season 3. These two numbers are NOT on the same time window -- do not read a gap between them as inconsistency without accounting for that.",
+  "players": [
+    {
+      "player": "Becca",
+      "playgroup_win_rate": 22.5,
+      "playgroup_record": "9-31",
+      "player_adjusted_win_rate": 25.77,
+      "player_adjusted_record": "2-5"
+    },
+    {
+      "player": "Manny",
+      "playgroup_win_rate": 25.3,
+      "playgroup_record": "19-56",
+      "player_adjusted_win_rate": 20.92,
+      "player_adjusted_record": "3-10"
+    },
+    {
+      "player": "Mateo",
+      "playgroup_win_rate": 36.1,
+      "playgroup_record": "22-39",
+      "player_adjusted_win_rate": 37.2,
+      "player_adjusted_record": "5-7"
+    },
+    {
+      "player": "Ryan",
+      "playgroup_win_rate": 25.3,
+      "playgroup_record": "19-56",
+      "player_adjusted_win_rate": 27.47,
+      "player_adjusted_record": "3-7"
+    },
+    {
+      "player": "Kristy",
+      "playgroup_win_rate": null,
+      "playgroup_record": null,
+      "playgroup_note": "No playgroup.gg account in this playgroup",
+      "player_adjusted_win_rate": 0,
+      "player_adjusted_record": "0-2"
+    },
+    {
+      "player": "Joseph",
+      "playgroup_win_rate": null,
+      "playgroup_record": null,
+      "playgroup_note": "No playgroup.gg account in this playgroup",
+      "player_adjusted_win_rate": 0,
+      "player_adjusted_record": "0-1"
+    },
+    {
+      "player": "Red",
+      "playgroup_win_rate": 0.0,
+      "playgroup_record": "0-13",
+      "player_adjusted_win_rate": null,
+      "player_adjusted_record": "0-0",
+      "player_adjusted_note": "No games logged in Game Log Season 3"
+    },
+    {
+      "player": "Michelle",
+      "playgroup_win_rate": 0.0,
+      "playgroup_record": "0-10",
+      "player_adjusted_win_rate": 0,
+      "player_adjusted_record": "0-3"
+    }
+  ],
+  "other_playgroup_participants": [
+    {
+      "username": "Hiccup_The_Hero",
+      "wins": 0,
+      "losses": 2,
+      "note": "Appears in playgroup.gg game history but does not map to a spreadsheet player"
+    },
+    {
+      "username": "Thatscrazii",
+      "wins": 3,
+      "losses": 18,
+      "note": "Appears in playgroup.gg game history but does not map to a spreadsheet player"
+    },
+    {
+      "username": "Lord_zion10",
+      "wins": 5,
+      "losses": 18,
+      "note": "Appears in playgroup.gg game history but does not map to a spreadsheet player"
+    }
+  ]
+}

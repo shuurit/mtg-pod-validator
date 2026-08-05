@@ -13,53 +13,70 @@
     <p class="subtitle">Pick a player count, choose each player's deck, and check the pod's power level spread.</p>
   </header>
 
-  <section class="card" id="manage-section">
-    <h2>Players &amp; Decks</h2>
-    <p class="hint">Import a list, or add players/decks manually. Data is saved in this browser only.</p>
-    <p class="hint" id="sync-status">Loading latest data from deck-strength.xlsx…</p>
+  <nav class="tabs" id="main-tabs">
+    <button class="tab-btn active" data-tab="pod">Pod Validator</button>
+    <button class="tab-btn" data-tab="winrates">Player Win Rates</button>
+  </nav>
 
-    <div class="import-box">
-      <label for="csv-input">Import (CSV: <code>PlayerName,DeckName,Power</code> — one per line)</label>
-      <textarea id="csv-input" rows="4" placeholder="Alice,Atraxa Superfriends,3.3
+  <div id="tab-pod" class="tab-panel">
+    <section class="card" id="manage-section">
+      <h2>Players &amp; Decks</h2>
+      <p class="hint">Import a list, or add players/decks manually. Data is saved in this browser only.</p>
+      <p class="hint" id="sync-status">Loading latest data from deck-strength.xlsx…</p>
+
+      <div class="import-box">
+        <label for="csv-input">Import (CSV: <code>PlayerName,DeckName,Power</code> — one per line)</label>
+        <textarea id="csv-input" rows="4" placeholder="Alice,Atraxa Superfriends,3.3
 Alice,Mono Red Aggro,2.1
 Bob,Edgar Markov,2.5
 Bob,Meren Value,3.0"></textarea>
-      <div class="row">
-        <button id="import-btn" class="primary">Import</button>
-        <label class="file-btn">
-          Import from file (.csv or .xlsx)
-          <input type="file" id="csv-file" accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
-        </label>
-        <span id="import-msg" class="msg"></span>
+        <div class="row">
+          <button id="import-btn" class="primary">Import</button>
+          <label class="file-btn">
+            Import from file (.csv or .xlsx)
+            <input type="file" id="csv-file" accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
+          </label>
+          <span id="import-msg" class="msg"></span>
+        </div>
+        <p class="hint">.xlsx files are read from their "Current Deck Strength" tab.</p>
       </div>
-      <p class="hint">.xlsx files are read from their "Current Deck Strength" tab.</p>
-    </div>
 
-    <div id="players-table"></div>
+      <div id="players-table"></div>
 
-    <div class="row">
-      <button id="add-player-btn">+ Add Player</button>
-    </div>
-  </section>
+      <div class="row">
+        <button id="add-player-btn">+ Add Player</button>
+      </div>
+    </section>
 
-  <section class="card" id="pod-section">
-    <h2>Set Up Pod</h2>
-    <div class="row align-center">
-      <label for="player-count">Players in this pod</label>
-      <select id="player-count"></select>
-    </div>
+    <section class="card" id="pod-section">
+      <h2>Set Up Pod</h2>
+      <div class="row align-center">
+        <label for="player-count">Players in this pod</label>
+        <select id="player-count"></select>
+      </div>
 
-    <div id="pod-slots"></div>
+      <div id="pod-slots"></div>
 
-    <div class="row">
-      <button id="validate-btn" class="primary">Check Deck Power Spread</button>
-    </div>
-  </section>
+      <div class="row">
+        <button id="validate-btn" class="primary">Check Deck Power Spread</button>
+      </div>
+    </section>
 
-  <section class="card" id="results-section" hidden>
-    <h2>Result</h2>
-    <div id="results"></div>
-  </section>
+    <section class="card" id="results-section" hidden>
+      <h2>Result</h2>
+      <div id="results"></div>
+    </section>
+  </div>
+
+  <div id="tab-winrates" class="tab-panel" hidden>
+    <section class="card">
+      <h2>Player Win Rates</h2>
+      <p class="hint">Read-only. Nothing on this tab can be edited — it's a side-by-side of playgroup.gg's tracked win rate and the spreadsheet's calculated Player Adjusted Win Rate.</p>
+      <p class="hint" id="winrates-sync-status">Loading player-win-rates.json…</p>
+      <div id="winrates-table"></div>
+      <p class="hint" id="winrates-note"></p>
+    </section>
+  </div>
 </div>
 
 <script src="xlsx.full.min.js"></script>
