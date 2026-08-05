@@ -435,9 +435,14 @@ tbody tr:hover {
   font-size: 1.05rem;
   background: var(--good);
   border-color: var(--good);
+  text-align: center;
+  text-decoration: none;
+  color: var(--accent-ink);
+  box-sizing: border-box;
+  cursor: pointer;
 }
 
-.to-game-btn:hover {
+.to-game-btn:hover, .to-game-btn:visited {
   filter: brightness(1.08);
   color: var(--accent-ink);
 }

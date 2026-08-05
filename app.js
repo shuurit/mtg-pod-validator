@@ -752,12 +752,12 @@ function runValidation() {
   }
 
   if (allInRange) {
-    const goBtn = document.createElement("button");
+    const goBtn = document.createElement("a");
     goBtn.className = "primary to-game-btn";
     goBtn.textContent = "To the Game!";
-    goBtn.addEventListener("click", () => {
-      window.open(PLAYGROUP_URL, "_blank", "noopener");
-    });
+    goBtn.href = PLAYGROUP_URL;
+    goBtn.target = "_blank";
+    goBtn.rel = "noopener";
     resultsDiv.appendChild(goBtn);
   }
 }
