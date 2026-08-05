@@ -647,10 +647,16 @@ function evaluatePod(entries) {
   return entries.map(entry => ({ ...entry, compatible: entry.power <= ceiling }));
 }
 
-function suggestAlternates(entry, allEntries) {
+function suggestAlternates(entry, evaluatedEntries) {
   const player = players.find(p => p.id === entry.playerId);
   if (!player) return [];
-  const others = allEntries.filter(e => e.playerId !== entry.playerId || e.deckId !== entry.deckId);
+  // Only constrain against players who are already compatible. An
+  // independently out-of-range player's current pick isn't a fixed target —
+  // they're getting their own suggestions too — so it shouldn't narrow (or
+  // block entirely) the valid window for this player's replacement deck.
+  const others = evaluatedEntries.filter(
+    e => (e.playerId !== entry.playerId || e.deckId !== entry.deckId) && e.compatible
+  );
   const otherPowers = others.map(o => o.power);
   const otherMax = otherPowers.length ? Math.max(...otherPowers) : -Infinity;
   const otherMin = otherPowers.length ? Math.min(...otherPowers) : Infinity;
@@ -721,7 +727,7 @@ function runValidation() {
     resultsDiv.appendChild(row);
 
     if (!entry.compatible) {
-      const alts = suggestAlternates(entry, entries);
+      const alts = suggestAlternates(entry, evaluated);
       const box = document.createElement("div");
       box.className = "suggestions";
       if (alts.length === 0) {
