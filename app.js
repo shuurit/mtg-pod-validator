@@ -834,7 +834,14 @@ async function loadWinRates() {
     tableEl.appendChild(table);
 
     statusEl.textContent = `Loaded from ${WIN_RATES_FILE} (generated ${data.generated_at || "unknown date"}).`;
-    noteEl.textContent = data.source_note || "";
+    noteEl.innerHTML = "";
+    for (const note of [data.league_note, data.source_note]) {
+      if (!note) continue;
+      const p = document.createElement("span");
+      p.className = "note-line";
+      p.textContent = note;
+      noteEl.appendChild(p);
+    }
   } catch (err) {
     statusEl.textContent = `Couldn't load ${WIN_RATES_FILE} (${err.message}).`;
   }
