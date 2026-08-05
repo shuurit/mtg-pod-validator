@@ -378,6 +378,19 @@ tbody tr:hover {
   border-bottom: 1px solid var(--border-soft);
 }
 
+/* Grid items default to min-width:auto, so a <select> with a long
+   option refuses to shrink below its content and forces the track
+   (and the whole page) wider. Let it shrink and ellipsize instead. */
+.slot > * {
+  min-width: 0;
+}
+
+.slot select {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .slot:last-child { border-bottom: none; }
 
 .slot-label {
@@ -469,4 +482,73 @@ tbody tr:hover {
   margin: 4px 6px 0 0;
   font-size: 0.85rem;
   font-weight: 500;
+}
+
+/* ---------- phone / tablet ---------- */
+@media (max-width: 640px) {
+  .wrap {
+    padding: 22px 14px 60px;
+  }
+
+  header h1 {
+    font-size: 1.5rem;
+  }
+
+  .card {
+    padding: 18px 16px 20px;
+  }
+
+  /* Selects were refusing to shrink below their (long) option text,
+     which forced the whole page into a zoomed-out layout. Stack the
+     slot fields instead of cramming them into a 4-column grid. */
+  .slot {
+    grid-template-columns: 1fr;
+    row-gap: 6px;
+    padding: 12px 0;
+  }
+
+  .slot-label {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .slot select {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .slot-power {
+    text-align: left;
+  }
+
+  /* Same shrink issue on the player row header — let it wrap instead
+     of clipping the Remove button off-screen. */
+  .player-block-header {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  .player-block-header-left {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .player-name-input {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  /* Tables (deck editing, win rates) can scroll horizontally on their
+     own rather than forcing the page wide. */
+  table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .to-game-btn {
+    font-size: 1rem;
+    padding: 13px 14px;
+  }
 }
