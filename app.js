@@ -1,5 +1,6 @@
 const STORAGE_KEY = "mtg-pod-validator-players";
 const RANGE_TOLERANCE = 1; // max power spread allowed within a pod
+const PLAYGROUP_URL = "https://playgroup.gg/playgroups/51996"; // "Amass a Gathering"
 
 // Default roster — the group's real players/decks/power ratings. Used to
 // seed local storage the first time the app runs in a browser; after that,
@@ -748,6 +749,16 @@ function runValidation() {
       }
       resultsDiv.appendChild(box);
     }
+  }
+
+  if (allInRange) {
+    const goBtn = document.createElement("button");
+    goBtn.className = "primary to-game-btn";
+    goBtn.textContent = "To the Game!";
+    goBtn.addEventListener("click", () => {
+      window.open(PLAYGROUP_URL, "_blank", "noopener");
+    });
+    resultsDiv.appendChild(goBtn);
   }
 }
 
