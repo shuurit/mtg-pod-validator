@@ -245,13 +245,58 @@ function extractRowsFromWorkbook(workbook) {
 // this same filename — the app doesn't need to know the dated original name.
 const REPO_WORKBOOK_FILE = "deck-strength.xlsx";
 
+// Rows already logged in Game Log Season 3, read fresh from the workbook on
+// every sync. Populated by syncFromRepoWorkbook; used by the Games to
+// Update tab to figure out which playgroup.gg games are missing, and to
+// recompute a player's full Player Adjusted Win Rate with a new game added.
+let gameLogSeason3Rows = [];
+
+function extractGameLogFromWorkbook(workbook, sheetName) {
+  const sheet = workbook.Sheets[sheetName];
+  if (!sheet || !sheet["!ref"]) return [];
+  const range = XLSX.utils.decode_range(sheet["!ref"]);
+
+  const headerRowIndex = 1; // row 2 in Excel (row 1 is merged category labels)
+  const headerCols = {};
+  for (let c = range.s.c; c <= range.e.c; c++) {
+    const cell = sheet[XLSX.utils.encode_cell({ r: headerRowIndex, c })];
+    if (cell && typeof cell.v === "string") headerCols[cell.v.trim()] = c;
+  }
+
+  const get = (r, name) => {
+    const c = headerCols[name];
+    if (c === undefined) return undefined;
+    const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+    return cell ? cell.v : undefined;
+  };
+
+  const rows = [];
+  for (let r = headerRowIndex + 1; r <= range.e.r; r++) {
+    const player = get(r, "Player Name");
+    if (!player) continue;
+    rows.push({
+      gameNum: get(r, "Game #"),
+      date: get(r, "Game Date"),
+      player,
+      commander: get(r, "Commander"),
+      commanderStrength: get(r, "Commander Strength"),
+      result: get(r, "Game Result"),
+      podSize: get(r, "Pod Size"),
+      J: get(r, "Adjusted Pod Size Win/Loss Score"),
+      K: get(r, "Knockout Score"),
+      M: get(r, "Win Probability based on Deck Strength"),
+    });
+  }
+  return rows;
+}
+
 async function syncFromRepoWorkbook() {
   const statusEl = document.getElementById("sync-status");
   try {
     const res = await fetch(REPO_WORKBOOK_FILE, { cache: "no-store" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const buffer = await res.arrayBuffer();
-    const workbook = XLSX.read(buffer, { type: "array" });
+    const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
     const rows = extractRowsFromWorkbook(workbook);
     if (rows.length === 0) throw new Error("no decks found in the sheet");
 
@@ -261,10 +306,15 @@ async function syncFromRepoWorkbook() {
     if (statusEl) {
       statusEl.textContent = `Synced from ${REPO_WORKBOOK_FILE} (${addedPlayers} new player(s), ${addedDecks} deck(s) added/updated).`;
     }
+
+    gameLogSeason3Rows = extractGameLogFromWorkbook(workbook, "Game Log Season 3");
+    renderGamesToUpdate();
   } catch (err) {
     if (statusEl) {
       statusEl.textContent = `Using locally saved data — couldn't load ${REPO_WORKBOOK_FILE} (${err.message}).`;
     }
+    const gtuStatus = document.getElementById("gtu-status");
+    if (gtuStatus) gtuStatus.textContent = `Couldn't load ${REPO_WORKBOOK_FILE} — Games to Update needs it to know what's already logged.`;
   }
 }
 
@@ -858,6 +908,308 @@ async function loadWinRates() {
   }
 }
 
+// ---------- games to update ----------
+
+const PLAYGROUP_GAMES_FILE = "playgroup-games.json";
+let playgroupGamesData = null;
+
+async function loadPlaygroupGames() {
+  const statusEl = document.getElementById("gtu-status");
+  try {
+    const res = await fetch(PLAYGROUP_GAMES_FILE, { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    playgroupGamesData = await res.json();
+    renderGamesToUpdate();
+  } catch (err) {
+    if (statusEl) statusEl.textContent = `Couldn't load ${PLAYGROUP_GAMES_FILE} (${err.message}).`;
+  }
+}
+
+// Same game if the same set of tracked players appears in a Game Log
+// Season 3 game number, within a day of the playgroup.gg timestamp
+// (playgroup.gg logs in UTC+2; the sheet's date can land a day off).
+function findLoggedMatch(pgGame) {
+  const pgPlayers = new Set(pgGame.participants.map(p => p.player));
+  const byGameNum = {};
+  for (const row of gameLogSeason3Rows) {
+    (byGameNum[row.gameNum] ||= []).push(row);
+  }
+  const pgDate = new Date(pgGame.date);
+  for (const gameNum in byGameNum) {
+    const rows = byGameNum[gameNum];
+    const loggedPlayers = new Set(rows.map(r => r.player));
+    // Subset, not exact-size match: a logged game can include a player
+    // with no mapped playgroup.gg account (e.g. Kristy), so playgroup.gg's
+    // tracked participant set can legitimately be smaller than what's
+    // logged for the same real game.
+    if (![...pgPlayers].every(p => loggedPlayers.has(p))) continue;
+    const loggedDate = rows[0].date instanceof Date ? rows[0].date : null;
+    if (!loggedDate) return gameNum;
+    const diffDays = Math.abs((loggedDate - pgDate) / 86400000);
+    if (diffDays <= 1.5) return gameNum;
+  }
+  return null;
+}
+
+function findDefaultStrength(playerName, commanderName) {
+  const player = players.find(p => p.name === playerName);
+  if (!player) return null;
+  const norm = s => (s || "").toLowerCase().split(/[,/]/)[0].trim();
+  const target = norm(commanderName);
+  let deck = player.decks.find(d => norm(d.name) === target);
+  if (!deck) deck = player.decks.find(d => norm(d.name).startsWith(target) || target.startsWith(norm(d.name)));
+  return deck ? deck.power : null;
+}
+
+function renderGamesToUpdate() {
+  const statusEl = document.getElementById("gtu-status");
+  const listEl = document.getElementById("gtu-game-list");
+  if (!playgroupGamesData || !statusEl || !listEl) return;
+  if (gameLogSeason3Rows.length === 0) {
+    statusEl.textContent = "Waiting on deck-strength.xlsx to load...";
+    return;
+  }
+
+  const missing = playgroupGamesData.games.filter(g => !findLoggedMatch(g));
+  statusEl.textContent = `${missing.length} of ${playgroupGamesData.games.length} ${playgroupGamesData.league || ""} games aren't in the Game Log yet.`;
+
+  listEl.innerHTML = "";
+  if (missing.length === 0) {
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.textContent = "Nothing missing — every tracked game is already logged.";
+    listEl.appendChild(p);
+    return;
+  }
+
+  for (const g of missing) {
+    const card = document.createElement("div");
+    card.className = "gtu-game-card";
+
+    const summary = g.participants.map(p => `${p.player} (${p.commander}${p.result === "win" ? " — won" : ""})`).join(", ");
+    const header = document.createElement("div");
+    header.className = "gtu-game-summary";
+    header.innerHTML = `<strong>${g.date}</strong> — ${summary}`;
+
+    const fillBtn = document.createElement("button");
+    fillBtn.textContent = "Fill in";
+    fillBtn.addEventListener("click", () => openGameForm(g));
+
+    card.appendChild(header);
+    card.appendChild(fillBtn);
+    if (g.note) {
+      const note = document.createElement("p");
+      note.className = "hint";
+      note.textContent = g.note;
+      card.appendChild(note);
+    }
+    listEl.appendChild(card);
+  }
+}
+
+function computeGameRowFormulas({ commanderStrength, otherStrengths, result, podSize, knockouts, place, tov, popOff, disruptions, recoveries, gamesClearlyBehind, bracket }) {
+  const J = result - (1 / podSize);
+  const K = ((knockouts - ((podSize - 1) / podSize)) - (-5 / 6)) / 5;
+  const otherAvg = otherStrengths.length ? otherStrengths.reduce((a, b) => a + b, 0) / (podSize - 1) : 0;
+  const L = commanderStrength - otherAvg;
+  const M = 0.5 + (L * 0.09);
+  const N = ((podSize - (place - 1)) / podSize) * (knockouts !== 0 ? (knockouts + podSize) / podSize : 1);
+  const O = (N - (1 / 6)) / (10 / 6);
+  const Q = result === 1
+    ? (((1 - ((tov - 3) / 15)) * 0.5) + 0.5)
+    : ((tov / 18) * 0.5);
+  const U = disruptions === 0 ? 1 : (recoveries / disruptions);
+  const X = (O * 0.3) + (Q * 0.175) + (popOff * 0.175) + (U * 0.175) + ((1 - gamesClearlyBehind) * 0.175) + bracket;
+  return { J, K, L, M, N, O, Q, U, X };
+}
+
+// Replicates the Player Adjusted Ranks tab's aggregate formulas exactly
+// (verified against the sheet's own values earlier). newRow is optional —
+// omit it to just report the player's current rate.
+function computePlayerAdjustedWinRate(existingRows, newRow) {
+  const all = newRow ? [...existingRows, newRow] : existingRows;
+  const wins = all.filter(g => g.result === 1);
+  const losses = all.filter(g => g.result === 0);
+  const C = wins.length, D = losses.length;
+  const F = wins.reduce((s, g) => s + g.J, 0);
+  const avgJLosses = D ? losses.reduce((s, g) => s + g.J, 0) / D : 0;
+  const G = (1 - (avgJLosses * -1)) * D;
+  const H = (F + G) ? F / (F + G) : 0;
+  // Guarded on win count (C), not on whether any games exist at all --
+  // matches the sheet's =IF(C8<>0, AVERAGEIF(...), 0) exactly. A player
+  // with zero wins gets I=0 regardless of their actual knockout average.
+  const I = C ? all.reduce((s, g) => s + g.K, 0) / all.length : 0;
+  const avgMWins = C ? wins.reduce((s, g) => s + g.M, 0) / C : 0;
+  const Jagg = (1 - (avgMWins - 0.5)) * C;
+  const avgMLosses = D ? losses.reduce((s, g) => s + g.M, 0) / D : 0;
+  const Kagg = (1 + (avgMLosses - 0.5)) * D;
+  const L = (Jagg + Kagg) ? Jagg / (Jagg + Kagg) : 0;
+  const B = H * 0.3 + I * 0.2 + L * 0.5;
+  return { B, wins: C, losses: D };
+}
+
+function openGameForm(pgGame) {
+  const areaEl = document.getElementById("gtu-form-area");
+  areaEl.innerHTML = "";
+
+  const box = document.createElement("div");
+  box.className = "gtu-form";
+
+  const title = document.createElement("h3");
+  title.textContent = `${pgGame.date} — ${pgGame.participants.map(p => p.player).join(", ")}`;
+  box.appendChild(title);
+
+  const table = document.createElement("table");
+  table.className = "gtu-input-table";
+  table.innerHTML = `
+    <thead><tr>
+      <th>Player</th><th>Commander</th><th>Result</th>
+      <th>Cmdr Strength</th><th>Place</th><th>KOs</th><th>TOV</th>
+      <th>Pop-Off</th><th>Disruptions</th><th>Recoveries</th><th>Behind</th><th>Bracket</th>
+    </tr></thead>
+  `;
+  const tbody = document.createElement("tbody");
+
+  pgGame.participants.forEach((p, i) => {
+    const tr = document.createElement("tr");
+    const defaultStrength = findDefaultStrength(p.player, p.commander);
+    const defaultPlace = p.result === "win" ? 1 : "";
+    tr.innerHTML = `
+      <td>${p.player}</td>
+      <td>${p.commander}</td>
+      <td>${p.result === "win" ? "Win ✓" : "Loss"}</td>
+      <td><input type="number" step="0.1" min="0" max="5" class="gtu-in gtu-strength" value="${defaultStrength ?? ""}" data-i="${i}"></td>
+      <td><input type="number" min="1" max="${pgGame.pod_size}" class="gtu-in gtu-place" value="${defaultPlace}" data-i="${i}"></td>
+      <td><input type="number" min="0" class="gtu-in gtu-knockouts" value="0" data-i="${i}"></td>
+      <td><input type="number" min="1" class="gtu-in gtu-tov" value="" data-i="${i}"></td>
+      <td><input type="checkbox" class="gtu-in gtu-popoff" data-i="${i}"></td>
+      <td><input type="number" min="0" class="gtu-in gtu-disruptions" value="0" data-i="${i}"></td>
+      <td><input type="number" min="0" class="gtu-in gtu-recoveries" value="0" data-i="${i}"></td>
+      <td><input type="checkbox" class="gtu-in gtu-behind" data-i="${i}"></td>
+      <td><input type="number" min="1" max="5" class="gtu-in gtu-bracket" value="" data-i="${i}"></td>
+    `;
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  box.appendChild(table);
+
+  const calcBtn = document.createElement("button");
+  calcBtn.className = "primary";
+  calcBtn.textContent = "Calculate";
+  const resultsEl = document.createElement("div");
+  resultsEl.className = "gtu-results";
+
+  const runCalculation = () => calculateGameToUpdate(pgGame, box, resultsEl);
+  calcBtn.addEventListener("click", runCalculation);
+  box.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && e.target.classList.contains("gtu-in")) {
+      e.preventDefault();
+      runCalculation();
+    }
+  });
+
+  box.appendChild(calcBtn);
+  box.appendChild(resultsEl);
+  areaEl.appendChild(box);
+  areaEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function calculateGameToUpdate(pgGame, box, resultsEl) {
+  const podSize = pgGame.pod_size;
+  const readInputs = (i) => ({
+    strength: parseFloat(box.querySelector(`.gtu-strength[data-i="${i}"]`).value),
+    place: parseInt(box.querySelector(`.gtu-place[data-i="${i}"]`).value, 10),
+    knockouts: parseInt(box.querySelector(`.gtu-knockouts[data-i="${i}"]`).value, 10) || 0,
+    tov: parseInt(box.querySelector(`.gtu-tov[data-i="${i}"]`).value, 10),
+    popOff: box.querySelector(`.gtu-popoff[data-i="${i}"]`).checked ? 1 : 0,
+    disruptions: parseInt(box.querySelector(`.gtu-disruptions[data-i="${i}"]`).value, 10) || 0,
+    recoveries: parseInt(box.querySelector(`.gtu-recoveries[data-i="${i}"]`).value, 10) || 0,
+    behind: box.querySelector(`.gtu-behind[data-i="${i}"]`).checked ? 1 : 0,
+    bracket: parseInt(box.querySelector(`.gtu-bracket[data-i="${i}"]`).value, 10),
+  });
+
+  const inputs = pgGame.participants.map((p, i) => ({ ...p, ...readInputs(i) }));
+  const missingField = inputs.find(inp =>
+    Number.isNaN(inp.strength) || Number.isNaN(inp.place) || Number.isNaN(inp.tov) || Number.isNaN(inp.bracket)
+  );
+  if (missingField) {
+    resultsEl.innerHTML = `<p class="hint">Fill in Commander Strength, Place, TOV, and Bracket for every player first (missing for ${missingField.player}).</p>`;
+    return;
+  }
+
+  const strengths = inputs.map(inp => inp.strength);
+  const rows = inputs.map((inp, i) => {
+    const otherStrengths = strengths.filter((_, j) => j !== i);
+    const formulas = computeGameRowFormulas({
+      commanderStrength: inp.strength,
+      otherStrengths,
+      result: inp.result === "win" ? 1 : 0,
+      podSize,
+      knockouts: inp.knockouts,
+      place: inp.place,
+      tov: inp.tov,
+      popOff: inp.popOff,
+      disruptions: inp.disruptions,
+      recoveries: inp.recoveries,
+      gamesClearlyBehind: inp.behind,
+      bracket: inp.bracket,
+    });
+    return { ...inp, ...formulas };
+  });
+
+  const nextGameNum = Math.max(0, ...gameLogSeason3Rows.map(r => Number(r.gameNum) || 0)) + 1;
+
+  resultsEl.innerHTML = "";
+  const table = document.createElement("table");
+  table.className = "gtu-results-table";
+  table.innerHTML = `<thead><tr><th>Player</th><th>Commander</th><th>Result</th><th>Current PAWR</th><th>PAWR w/ this game</th><th></th></tr></thead>`;
+  const tbody = document.createElement("tbody");
+
+  for (const row of rows) {
+    const existing = gameLogSeason3Rows.filter(r => r.player === row.player && typeof r.J === "number");
+    const before = computePlayerAdjustedWinRate(existing);
+    const after = computePlayerAdjustedWinRate(existing, { result: row.result === "win" ? 1 : 0, J: row.J, K: row.K, M: row.M });
+
+    const tr = document.createElement("tr");
+    const delta = after.B - before.B;
+    const deltaStr = `${delta >= 0 ? "+" : ""}${(delta * 100).toFixed(2)}pt`;
+
+    const rowValues = [
+      pgGame.date, nextGameNum, row.player, row.commander, row.strength.toFixed(1),
+      row.result === "win" ? 1 : 0, row.place, podSize, row.knockouts,
+      row.J.toFixed(6), row.K.toFixed(6), row.L.toFixed(6), row.M.toFixed(6),
+      row.N.toFixed(6), row.O.toFixed(6), row.tov, row.Q.toFixed(6), row.popOff,
+      row.disruptions, row.recoveries, row.U.toFixed(6), row.behind, row.bracket, row.X.toFixed(6),
+    ];
+
+    const copyBtn = document.createElement("button");
+    copyBtn.textContent = "Copy row";
+    copyBtn.addEventListener("click", () => {
+      navigator.clipboard.writeText(rowValues.join("\t"));
+      copyBtn.textContent = "Copied!";
+      setTimeout(() => { copyBtn.textContent = "Copy row"; }, 1500);
+    });
+
+    tr.innerHTML = `
+      <td>${row.player}</td>
+      <td>${row.commander}</td>
+      <td>${row.result === "win" ? "Win" : "Loss"}</td>
+      <td>${(before.B * 100).toFixed(2)}% (${before.wins}-${before.losses})</td>
+      <td>${(after.B * 100).toFixed(2)}% (${after.wins}-${after.losses}) — ${deltaStr}</td>
+      <td></td>
+    `;
+    tr.lastElementChild.appendChild(copyBtn);
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  resultsEl.appendChild(table);
+
+  const hint = document.createElement("p");
+  hint.className = "hint";
+  hint.textContent = `Row order for pasting into Game Log Season 3: Game Date, Game #, Player Name, Commander, Commander Strength, Game Result, Place, Pod Size, Knockouts, Adjusted Pod Size Win/Loss Score, Knockout Score, Deck Strength Comparison Differential, Win Probability based on Deck Strength, Player Score, Normalized Player Score, TOV, Normalized TOV, Pop-Off, Disruptions, Successful Recoveries, Deck Resilience Score, Games Clearly Behind, Current Deck Bracket, Game Calculated Deck Strength. Suggested next Game # is ${nextGameNum} — check it doesn't collide if you're filling in more than one game.`;
+  resultsEl.appendChild(hint);
+}
+
 // ---------- init ----------
 
 initPlayerCountSelect();
@@ -866,3 +1218,4 @@ renderPodSlots();
 syncFromRepoWorkbook();
 initTabs();
 loadWinRates();
+loadPlaygroupGames();

@@ -16,6 +16,7 @@
   <nav class="tabs" id="main-tabs">
     <button class="tab-btn active" data-tab="pod">Pod Validator</button>
     <button class="tab-btn" data-tab="winrates">Player Win Rates</button>
+    <button class="tab-btn" data-tab="games-to-update">Games to Update</button>
   </nav>
 
   <div id="tab-pod" class="tab-panel">
@@ -75,6 +76,16 @@ Bob,Meren Value,3.0"></textarea>
       <p class="hint" id="winrates-sync-status">Loading player-win-rates.json…</p>
       <div id="winrates-table"></div>
       <p class="hint" id="winrates-note"></p>
+    </section>
+  </div>
+
+  <div id="tab-games-to-update" class="tab-panel" hidden>
+    <section class="card">
+      <h2>Games to Update</h2>
+      <p class="hint">Games from playgroup.gg that aren't in the spreadsheet's Game Log Season 3 yet. Fill in what playgroup.gg can't supply, then copy the finished row(s) into the real Game Log — this app never edits deck-strength.xlsx itself.</p>
+      <p class="hint" id="gtu-status">Loading…</p>
+      <div id="gtu-game-list"></div>
+      <div id="gtu-form-area"></div>
     </section>
   </div>
 </div>
