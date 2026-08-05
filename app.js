@@ -5,7 +5,7 @@ const PLAYGROUP_URL = "https://playgroup.gg/tracker";
 // Cloudflare Worker relay for the Games to Update tab. Set once the Worker
 // is deployed (see cloudflare-worker/README.md) -- until then, submission
 // is disabled and only "Copy row" is available.
-const GAME_SUBMIT_RELAY_URL = "";
+const GAME_SUBMIT_RELAY_URL = "https://mtg-pod-validator-relay.mattdomi18.workers.dev/";
 
 // Default roster — the group's real players/decks/power ratings. Used to
 // seed local storage the first time the app runs in a browser; after that,
