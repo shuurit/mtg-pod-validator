@@ -282,6 +282,7 @@ function extractGameLogFromWorkbook(workbook, sheetName) {
       commanderStrength: get(r, "Commander Strength"),
       result: get(r, "Game Result"),
       podSize: get(r, "Pod Size"),
+      bracket: get(r, "Current Deck Bracket"),
       J: get(r, "Adjusted Pod Size Win/Loss Score"),
       K: get(r, "Knockout Score"),
       M: get(r, "Win Probability based on Deck Strength"),
@@ -961,6 +962,18 @@ function findDefaultStrength(playerName, commanderName) {
   return deck ? deck.power : null;
 }
 
+// Bracket default: the most recent Game Log entry for this same
+// player+commander, on the idea that a deck's bracket doesn't usually
+// change game to game. Still editable in the form.
+function findDefaultBracket(playerName, commanderName) {
+  const matches = gameLogSeason3Rows.filter(
+    r => r.player === playerName && r.commander === commanderName && typeof r.bracket === "number"
+  );
+  if (matches.length === 0) return "";
+  matches.sort((a, b) => (b.date instanceof Date ? b.date : 0) - (a.date instanceof Date ? a.date : 0));
+  return matches[0].bracket;
+}
+
 function renderGamesToUpdate() {
   const statusEl = document.getElementById("gtu-status");
   const listEl = document.getElementById("gtu-game-list");
@@ -1074,6 +1087,7 @@ function openGameForm(pgGame) {
     const tr = document.createElement("tr");
     const defaultStrength = findDefaultStrength(p.player, p.commander);
     const defaultPlace = p.result === "win" ? 1 : "";
+    const defaultBracket = findDefaultBracket(p.player, p.commander);
     tr.innerHTML = `
       <td>${p.player}</td>
       <td>${p.commander}</td>
@@ -1086,7 +1100,7 @@ function openGameForm(pgGame) {
       <td><input type="number" min="0" class="gtu-in gtu-disruptions" value="0" data-i="${i}"></td>
       <td><input type="number" min="0" class="gtu-in gtu-recoveries" value="0" data-i="${i}"></td>
       <td><input type="checkbox" class="gtu-in gtu-behind" data-i="${i}"></td>
-      <td><input type="number" min="1" max="5" class="gtu-in gtu-bracket" value="" data-i="${i}"></td>
+      <td><input type="number" min="1" max="5" class="gtu-in gtu-bracket" value="${defaultBracket}" data-i="${i}"></td>
     `;
     tbody.appendChild(tr);
   });
