@@ -1,12 +1,13 @@
 /**
  * Relay Worker for mtg-pod-validator.
  *
- * Two jobs, two secrets, each used for exactly one thing:
+ * Three jobs, two secrets, each used for exactly one thing:
  *
  * - POST /            -> GITHUB_TOKEN: fires a repository_dispatch event at
  *   the repo. Never touches repo contents directly -- the GitHub Actions
  *   workflow does the actual file edit, using GitHub's own auto-issued
- *   token for that run.
+ *   token for that run. Also used by POST /apply-roster-update below, same
+ *   dispatch pattern, different event_type.
  *
  * - GET  /playgroup-games -> PLAYGROUP_API_KEY: reads playgroup.gg on the
  *   app's behalf. playgroup.gg has no league field on a game, so active-
@@ -35,6 +36,15 @@
  *   response's known_players field carries that out to app.js, so nothing
  *   else needs a matching code change.
  *
+ * - GET  /roster-diff -> PLAYGROUP_API_KEY: returns every playgroup member
+ *   (not just tracked ones) and every member's full deck list, independent
+ *   of games played -- lets the app detect a new player or new deck the
+ *   moment it exists on playgroup.gg, not just after a game gets logged.
+ *   This Worker doesn't know what's already in deck-strength.xlsx, so it
+ *   doesn't diff anything itself -- same division of labor as
+ *   /playgroup-games: raw playgroup.gg data here, comparison against the
+ *   synced workbook happens client-side in app.js.
+ *
  * Deploy with: wrangler deploy
  * Secrets:     wrangler secret put GITHUB_TOKEN
  *              wrangler secret put PLAYGROUP_API_KEY
@@ -55,6 +65,13 @@ const CACHE_TTL_SECONDS = 300; // 5 minutes
 const MAX_DECK_CHECKS_PER_RUN = 32;
 const MAX_COMMANDER_LOOKUPS_PER_RUN = 12;
 const COMMANDER_NAME_MAX_AGE_MS = 21 * 24 * 60 * 60 * 1000; // 21 days
+
+// /roster-diff: one call for the member list, one more per member for their
+// deck list -- unlike league classification this isn't expensive to derive
+// (no per-game history needed), so no KV caching, just a generous cap and a
+// longer response TTL since roster changes are rare.
+const MAX_MEMBER_DECK_LOOKUPS_PER_RUN = 40;
+const ROSTER_DIFF_CACHE_TTL_SECONDS = 900; // 15 minutes
 
 // Only these usernames map to a tracked spreadsheet player. Participants
 // outside this map (guests, other accounts) are dropped from the output,
@@ -344,6 +361,77 @@ async function handlePlaygroupGames(env, ctx) {
   return response;
 }
 
+// ---------- GET /roster-diff : who/what is on playgroup.gg but not yet tracked ----------
+
+// Returns the raw "world according to playgroup.gg" -- every member (not
+// just tracked ones, so the app can preview what a brand-new player would
+// bring in) and every member's full deck list, independent of games played.
+// This Worker doesn't know what's already in deck-strength.xlsx (only the
+// app does, via the synced workbook), so it doesn't attempt to diff -- same
+// division of responsibility as /playgroup-games: Worker supplies the raw
+// playgroup.gg data, app.js compares it against what it already parsed.
+async function computeRosterDiff(env) {
+  const membersRes = await pgFetch(`/playgroups/${PLAYGROUP_ID}/members`, env);
+  if (!membersRes.ok) throw new Error(`playgroup members failed: HTTP ${membersRes.status}`);
+  const rawMembers = await membersRes.json();
+
+  const members = rawMembers.map(m => ({
+    user_id: m.user_id,
+    username: m.username,
+    tracked: m.username in USERNAME_TO_PLAYER,
+    mapped_player: USERNAME_TO_PLAYER[m.username] || null,
+    joined_at: m.joined_at,
+  }));
+
+  const lookups = members.slice(0, MAX_MEMBER_DECK_LOOKUPS_PER_RUN);
+  const decksByUsername = {};
+  await Promise.all(lookups.map(async m => {
+    const res = await pgFetch(`/users/${m.user_id}/decks?include_archived=true`, env);
+    if (!res.ok) return;
+    const decks = await res.json();
+    decksByUsername[m.username] = decks.map(d => ({
+      id: d.id,
+      name: d.name,
+      commander_name: d.commander ? d.commander.name : d.name,
+      power_level: typeof d.power_level === "number" ? d.power_level : null,
+      bracket: d.bracket ?? null,
+      archived: !!d.archived,
+    }));
+  }));
+
+  return {
+    generated_at: new Date().toISOString(),
+    known_players: [...new Set(Object.values(USERNAME_TO_PLAYER))],
+    members,
+    decks_by_username: decksByUsername,
+    debug: {
+      total_members: members.length,
+      member_deck_lookups_made: lookups.length,
+      member_deck_lookups_truncated: Math.max(0, members.length - lookups.length),
+      approx_subrequests: 1 + lookups.length,
+    },
+  };
+}
+
+async function handleRosterDiff(env, ctx) {
+  const cache = caches.default;
+  const cacheKey = new Request(`https://cache.internal/roster-diff`);
+
+  const cached = await cache.match(cacheKey);
+  if (cached) return cached;
+
+  let data;
+  try {
+    data = await computeRosterDiff(env);
+  } catch (err) {
+    return jsonResponse({ error: "Failed to read playgroup.gg roster", detail: err.message }, 502);
+  }
+
+  const response = jsonResponse(data, 200, { "Cache-Control": `public, max-age=${ROSTER_DIFF_CACHE_TTL_SECONDS}` });
+  ctx.waitUntil(cache.put(cacheKey, response.clone()));
+  return response;
+}
+
 // ---------- router ----------
 
 export default {
@@ -356,6 +444,10 @@ export default {
 
     if (request.method === "GET" && url.pathname === "/playgroup-games") {
       return handlePlaygroupGames(env, ctx);
+    }
+
+    if (request.method === "GET" && url.pathname === "/roster-diff") {
+      return handleRosterDiff(env, ctx);
     }
 
     if (request.method === "POST" && url.pathname === "/") {
