@@ -26,7 +26,9 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from datetime import datetime
+from pathlib import Path
 
 import openpyxl
 
@@ -125,34 +127,79 @@ def main():
     recalc()
 
 
-def recalc():
-    abs_path = os.path.abspath(XLSX_PATH)
-    outdir = os.path.dirname(abs_path)
-    result = subprocess.run(
-        [
-            "soffice", "--headless", "--norestore",
-            "--convert-to", "xlsx:Calc MS Excel 2007 XML",
-            "--outdir", outdir, abs_path,
-        ],
-        capture_output=True, text=True, timeout=180,
-    )
-    print(result.stdout)
-    if result.returncode != 0:
-        print(result.stderr, file=sys.stderr)
-        raise RuntimeError("LibreOffice recalculation failed")
+RECALCULATE_MACRO = """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE script:module PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "module.dtd">
+<script:module xmlns:script="http://openoffice.org/2000/script" script:name="Module1" script:language="StarBasic">
+    Sub RecalculateAndSave()
+      ThisComponent.calculateAll()
+      ThisComponent.store()
+      ThisComponent.close(True)
+    End Sub
+</script:module>"""
 
-    # sanity check: scan for formula error strings anywhere in the workbook
-    wb = openpyxl.load_workbook(abs_path, data_only=True)
-    errors = []
+
+def recalc():
+    # Plain `soffice --convert-to` does NOT reliably force a full formula
+    # recalculation -- confirmed the hard way: it silently produced a file
+    # where every formula cell across the whole workbook was simply missing
+    # (not an error value, just absent), because openpyxl's save() had
+    # stripped their cached values and convert-to never recomputed them.
+    # A macro that explicitly calls calculateAll() before store() is the
+    # reliable way to force it.
+    abs_path = os.path.abspath(XLSX_PATH)
+
+    with tempfile.TemporaryDirectory(prefix="lo_profile_") as profile_dir:
+        profile_url = Path(profile_dir).as_uri()
+
+        # bootstrap the profile so LibreOffice has created its basic/Standard dir
+        boot = subprocess.run(
+            ["soffice", "--headless", "--terminate_after_init", f"-env:UserInstallation={profile_url}"],
+            capture_output=True, text=True, timeout=60,
+        )
+        if boot.returncode != 0:
+            print(boot.stderr, file=sys.stderr)
+            raise RuntimeError("LibreOffice failed to initialize its profile")
+
+        macro_dir = Path(profile_dir) / "user" / "basic" / "Standard"
+        if not macro_dir.exists():
+            raise RuntimeError("LibreOffice did not create a usable profile directory")
+        (macro_dir / "Module1.xba").write_text(RECALCULATE_MACRO)
+
+        result = subprocess.run(
+            [
+                "soffice", "--headless", "--norestore",
+                f"-env:UserInstallation={profile_url}",
+                "vnd.sun.star.script:Standard.Module1.RecalculateAndSave?language=Basic&location=application",
+                abs_path,
+            ],
+            capture_output=True, text=True, timeout=180,
+        )
+        print(result.stdout)
+        if result.returncode != 0:
+            print(result.stderr, file=sys.stderr)
+            raise RuntimeError("LibreOffice recalculation failed")
+
+    # verify: every formula cell must have a real cached value, and none of
+    # them may be an Excel error
+    wb_formulas = openpyxl.load_workbook(abs_path, data_only=False)
+    wb_values = openpyxl.load_workbook(abs_path, data_only=True)
     error_markers = ("#DIV/0!", "#REF!", "#VALUE!", "#NAME?", "#N/A", "#NULL!", "#NUM!")
-    for sheet in wb.worksheets:
-        for row in sheet.iter_rows():
+    problems = []
+    for sheet_name in wb_formulas.sheetnames:
+        ws_f = wb_formulas[sheet_name]
+        ws_v = wb_values[sheet_name]
+        for row in ws_f.iter_rows():
             for cell in row:
-                if isinstance(cell.value, str) and cell.value in error_markers:
-                    errors.append(f"{sheet.title}!{cell.coordinate} = {cell.value}")
-    if errors:
-        raise RuntimeError("Formula errors found after recalculation:\n" + "\n".join(errors))
-    print("Recalculation clean, no formula errors.")
+                if not (isinstance(cell.value, str) and cell.value.startswith("=")):
+                    continue
+                v = ws_v[cell.coordinate].value
+                if v is None:
+                    problems.append(f"{sheet_name}!{cell.coordinate} formula produced no cached value")
+                elif isinstance(v, str) and v in error_markers:
+                    problems.append(f"{sheet_name}!{cell.coordinate} = {v}")
+    if problems:
+        raise RuntimeError("Recalculation problems found:\n" + "\n".join(problems[:50]))
+    print("Recalculation clean: every formula has a real cached value, no errors.")
 
 
 if __name__ == "__main__":
