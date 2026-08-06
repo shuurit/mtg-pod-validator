@@ -1,11 +1,8 @@
 name = "mtg-pod-validator-relay"
 main = "relay.js"
 compatibility_date = "2026-01-01"
+account_id = "8ca62cd3d17495e04f67d67caa28e0a8"
 
-# Bound via dashboard: Worker -> Settings -> Bindings -> Add -> KV Namespace.
-# id is left blank here since this repo doesn't deploy via wrangler CLI;
-# fill it in if you ever do (`wrangler kv namespace list`).
 [[kv_namespaces]]
 binding = "DECK_CACHE"
 id = "77b23dc700d94ad59b05dbc2712dfe63"
-account_id = "8ca62cd3d17495e04f67d67caa28e0a8"
