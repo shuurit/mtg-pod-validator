@@ -170,6 +170,83 @@ async function handleAddGame(request, env) {
   return jsonResponse({ ok: true }, 202);
 }
 
+// ---------- POST /apply-roster-update : new player / new deck dispatch ----------
+
+function isValidRosterUpdatePayload(payload) {
+  if (!payload || typeof payload !== "object") return false;
+  const newPlayers = payload.newPlayers || [];
+  const newDecks = payload.newDecksForExisting || [];
+  if (!Array.isArray(newPlayers) || !Array.isArray(newDecks)) return false;
+  if (newPlayers.length === 0 && newDecks.length === 0) return false;
+
+  const validDeck = d =>
+    d && typeof d === "object" && typeof d.name === "string" && d.name && typeof d.power === "number";
+
+  const validNewPlayer = p =>
+    p && typeof p === "object" &&
+    typeof p.username === "string" && p.username &&
+    typeof p.displayName === "string" && p.displayName &&
+    Array.isArray(p.decks) && p.decks.length > 0 && p.decks.every(validDeck);
+
+  const validExistingDeck = d =>
+    d && typeof d === "object" && typeof d.player === "string" && d.player && validDeck(d);
+
+  return newPlayers.every(validNewPlayer) && newDecks.every(validExistingDeck);
+}
+
+async function hashPayload(payload) {
+  const data = new TextEncoder().encode(JSON.stringify(payload));
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function handleApplyRosterUpdate(request, env) {
+  let payload;
+  try {
+    payload = await request.json();
+  } catch {
+    return jsonResponse({ error: "Invalid JSON" }, 400);
+  }
+
+  if (!isValidRosterUpdatePayload(payload)) {
+    return jsonResponse({ error: "Payload missing required fields" }, 400);
+  }
+
+  // The GitHub Action this dispatches takes 1-3 minutes, long enough for a
+  // second click or a page reload to beat a client-side disabled-button
+  // guard -- reject an exact repeat of the same payload within a short
+  // window using the KV binding this Worker already has for other reasons.
+  if (env.DECK_CACHE) {
+    const dedupeKey = `roster_update_submit:${await hashPayload(payload)}`;
+    const alreadySubmitted = await env.DECK_CACHE.get(dedupeKey);
+    if (alreadySubmitted) {
+      return jsonResponse({ error: "This exact update was already submitted moments ago." }, 409);
+    }
+    await env.DECK_CACHE.put(dedupeKey, "1", { expirationTtl: 120 });
+  }
+
+  const dispatchRes = await fetch(
+    `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/dispatches`,
+    {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${env.GITHUB_TOKEN}`,
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "mtg-pod-validator-relay",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ event_type: "roster-update", client_payload: payload }),
+    }
+  );
+
+  if (dispatchRes.status !== 204) {
+    const errText = await dispatchRes.text();
+    return jsonResponse({ error: "GitHub dispatch failed", detail: errText }, 502);
+  }
+
+  return jsonResponse({ ok: true }, 202);
+}
+
 // ---------- GET /playgroup-games : live playgroup.gg read ----------
 
 async function getActiveLeagueId(env) {
@@ -452,6 +529,10 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/") {
       return handleAddGame(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/apply-roster-update") {
+      return handleApplyRosterUpdate(request, env);
     }
 
     return new Response("Not found", { status: 404, headers: corsHeaders() });
