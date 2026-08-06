@@ -9,12 +9,13 @@
  *   token for that run.
  *
  * - GET  /playgroup-games -> PLAYGROUP_API_KEY: reads playgroup.gg on the
- *   app's behalf (games list + active-league membership, which needs a
- *   per-deck ELO history check since playgroup.gg's API doesn't expose
- *   league on a game directly) and returns the same shape the old static
- *   playgroup-games.json had. Cached for 5 minutes (Workers' built-in
- *   Cache API) so a burst of checks in one sitting doesn't redo ~30
- *   playgroup.gg calls every time.
+ *   app's behalf (games list + active-league membership, determined by
+ *   sampling one representative deck per tracked player's ELO history for
+ *   a date cutoff, since playgroup.gg's API doesn't expose league on a
+ *   game directly and checking every deck that's ever been played blows
+ *   through Workers' subrequest limit). Cached for 5 minutes (Workers'
+ *   built-in Cache API) so a burst of checks in one sitting doesn't redo
+ *   the ~20-25 playgroup.gg calls every time.
  *
  * Deploy with: wrangler deploy
  * Secrets:     wrangler secret put GITHUB_TOKEN
@@ -141,29 +142,46 @@ async function computePlaygroupGames(env) {
   if (!gamesRes.ok) throw new Error(`games list failed: HTTP ${gamesRes.status}`);
   const allGames = await gamesRes.json();
 
-  const deckIds = new Set();
+  // Which of these games are in the active league? playgroup.gg has no
+  // league field on a game, and checking every unique deck's ELO history
+  // (the only way to learn league membership) blew through Workers'
+  // subrequest limit once there were 40+ decks in the all-time history.
+  //
+  // Instead: sample just each tracked player's single most-played deck
+  // (one call each, so the count stays fixed regardless of how many decks
+  // exist), read the earliest game date that shows up in THAT deck's
+  // active-league history, and use the earliest date found across all
+  // samples as a cutoff -- any game on or after it counts as active-league.
+  // Sampling one deck per player (rather than one deck overall) means a
+  // single player having a slow start to the season can't skew the cutoff
+  // late and wrongly exclude other players' early games.
+  const deckCountsByPlayer = {};
   for (const g of allGames) {
     for (const p of g.participations) {
-      if (p.deck_id) deckIds.add(p.deck_id);
+      const player = p.user_name ? USERNAME_TO_PLAYER[p.user_name] : null;
+      if (!player || !p.deck_id) continue;
+      (deckCountsByPlayer[player] ||= {})[p.deck_id] = (deckCountsByPlayer[player]?.[p.deck_id] || 0) + 1;
     }
   }
+  const sampleDeckIds = Object.values(deckCountsByPlayer).map(counts =>
+    Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0]
+  );
 
-  // Which of these games are in the active league? playgroup.gg has no
-  // league field on a game, but a deck's league-scoped ELO history lists
-  // the game IDs that belong to that league -- check every deck that shows
-  // up anywhere, union the results.
-  const activeGameIds = new Set();
-  await Promise.all([...deckIds].map(async deckId => {
+  let cutoffDate = null;
+  await Promise.all(sampleDeckIds.map(async deckId => {
     const res = await pgFetch(
       `/decks/${deckId}/elo_history?playgroup_id=${PLAYGROUP_ID}&league_id=${activeLeague.id}`,
       env
     );
     if (!res.ok) return;
     const data = await res.json();
-    for (const h of data.history || []) activeGameIds.add(h.game_id);
+    for (const h of data.history || []) {
+      if (!cutoffDate || h.played_at < cutoffDate) cutoffDate = h.played_at;
+    }
   }));
+  if (!cutoffDate) throw new Error("Could not determine the active league's date range from sampled decks");
 
-  const activeGames = allGames.filter(g => activeGameIds.has(g.id));
+  const activeGames = allGames.filter(g => g.started_at >= cutoffDate);
 
   // Commander names aren't in the games/participations payload, only on
   // the deck itself -- fetch details just for decks that actually appear
