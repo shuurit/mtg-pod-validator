@@ -10,24 +10,33 @@ never sees either of them:
   membership) so the app doesn't need a manually-regenerated static file.
   Responses are cached for 5 minutes.
 
-## Updating an already-deployed Worker (new code, new secret)
+It also uses a **KV namespace** (`DECK_CACHE`, no secret involved — just
+storage) to remember which games have already been confirmed as part of
+the active league, so each run only has to check decks from *new* games
+instead of re-checking the whole season's history every time.
 
-You already have this Worker running with `GITHUB_TOKEN` set. To add live
-playgroup.gg data:
+## Updating an already-deployed Worker (new code, new KV binding)
+
+You already have this Worker running with both secrets set. To pick up
+the incremental caching fix:
 
 1. Go to https://dash.cloudflare.com → **Workers & Pages** → your Worker
    (`mtg-pod-validator-relay`) → **Edit code**
 2. Replace everything with the current contents of `relay.js` from this
    folder → **Deploy**
-3. Go to **Settings** → **Variables and Secrets** → **Add**
-   - Name: exactly `PLAYGROUP_API_KEY`
-   - Type: **Secret**
-   - Value: your playgroup.gg API key (Account Settings → API keys on
-     playgroup.gg — reuse the one you already generated, or make a new
-     one if you don't have it handy anymore)
-   - Save
-4. That's it — no URL change, no app changes needed on your end. The
-   existing `GITHUB_TOKEN` secret is untouched.
+3. Create the KV namespace (one-time): **Workers & Pages** → **KV** (left
+   sidebar) → **Create a namespace** → name it e.g.
+   `mtg-pod-validator-cache` → **Add**
+4. Bind it to the Worker: your Worker → **Settings** → **Bindings** →
+   **Add** → **KV Namespace**
+   - Variable name: exactly `DECK_CACHE`
+   - KV namespace: the one you just created
+   - Save (this redeploys the Worker with the binding attached)
+5. That's it — no URL change, no app changes, no new secret. The first
+   request after this may be slightly slower (or show a smaller "Games to
+   Update" list than expected) while it classifies the season's existing
+   games for the first time; after that it stays fast since it's only
+   ever checking what's new.
 
 ## Fresh setup (if starting from scratch)
 
@@ -39,8 +48,10 @@ playgroup.gg data:
 3. **Deploy**: Cloudflare dashboard → Workers & Pages → Create → Worker →
    Start with Hello World → paste in `relay.js` → Deploy.
 4. **Secrets**: Worker → Settings → Variables and Secrets → add both
-   `GITHUB_TOKEN` and `PLAYGROUP_API_KEY` as above.
-5. Copy the Worker's `workers.dev` URL and hand it back so it can be wired
+   `GITHUB_TOKEN` and `PLAYGROUP_API_KEY`.
+5. **KV namespace**: follow steps 3-4 under "Updating an already-deployed
+   Worker" above to create and bind `DECK_CACHE`.
+6. Copy the Worker's `workers.dev` URL and hand it back so it can be wired
    into `app.js` (`RELAY_BASE_URL`).
 
 ## Notes on scope

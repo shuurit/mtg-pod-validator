@@ -11,19 +11,28 @@
  * - GET  /playgroup-games -> PLAYGROUP_API_KEY: reads playgroup.gg on the
  *   app's behalf. playgroup.gg has no league field on a game, so active-
  *   league membership is only knowable via a deck's league-scoped ELO
- *   history -- checking every deck ever played (40-70+) blows Workers'
- *   subrequest limit, and a pure date cutoff is NOT safe (casual pickup
- *   games with no league at all can fall inside the season's date range).
- *   So this runs two tiers of real ID-based confirmation, capped: tier 1
- *   checks one deck per tracked player (fixed cost), tier 2 checks decks
- *   from any still-unconfirmed games in a date window derived from tier 1.
- *   Dates only ever narrow which decks get checked -- never the final
- *   answer. Cached for 5 minutes (Workers' built-in Cache API) so a burst
- *   of checks in one sitting doesn't redo the ~40 playgroup.gg calls.
+ *   history. Checking every deck ever played (40-70+ and growing every
+ *   season) would blow Workers' 50-subrequest limit, and a pure date
+ *   cutoff is NOT safe -- confirmed the hard way: casual pickup games with
+ *   no league at all can fall inside the season's date range.
+ *
+ *   So a game's classification (in the active league, or not), once
+ *   determined, is a permanent fact -- it's cached forever in Workers KV
+ *   under the active league's ID. Every run only has to classify games it
+ *   hasn't seen before, which after the first few runs is normally just
+ *   "whatever was played since the last check" (usually 0-a few games),
+ *   not the whole season's history. A hard per-run cap still protects the
+ *   subrequest limit during the initial catch-up (or if a lot happened at
+ *   once) -- anything left over just gets classified on the next run.
+ *
+ *   Commander names (not present on the game/participation payload) are
+ *   cached the same way, with a soft expiry, since a deck's commander can
+ *   change over time in a way league membership never does.
  *
  * Deploy with: wrangler deploy
  * Secrets:     wrangler secret put GITHUB_TOKEN
  *              wrangler secret put PLAYGROUP_API_KEY
+ * Bindings:    KV namespace bound as DECK_CACHE
  */
 
 const GITHUB_OWNER = "shuurit";
@@ -33,6 +42,13 @@ const ALLOWED_ORIGIN = "https://shuurit.github.io";
 const PLAYGROUP_ID = 51996;
 const PLAYGROUP_API_BASE = "https://playgroup.gg/api/public/v1";
 const CACHE_TTL_SECONDS = 300; // 5 minutes
+
+// Hard per-run caps so a cold cache (or a big backlog) can never exceed
+// Workers' 50-subrequest limit. Fixed overhead is 3 calls (/me, playgroups,
+// games list), so these two caps must sum to well under 47.
+const MAX_DECK_CHECKS_PER_RUN = 32;
+const MAX_COMMANDER_LOOKUPS_PER_RUN = 12;
+const COMMANDER_NAME_MAX_AGE_MS = 21 * 24 * 60 * 60 * 1000; // 21 days
 
 // Only these usernames map to a tracked spreadsheet player. Participants
 // outside this map (guests, other accounts) are dropped from the output,
@@ -68,6 +84,16 @@ function pgFetch(path, env) {
       "User-Agent": "mtg-pod-validator-relay",
     },
   });
+}
+
+async function kvGetJson(env, key, fallback) {
+  const raw = await env.DECK_CACHE.get(key);
+  if (!raw) return fallback;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
 }
 
 // ---------- POST / : add-game dispatch ----------
@@ -156,91 +182,88 @@ async function confirmGameIdsForDecks(deckIds, activeLeague, env) {
   return ids;
 }
 
+function deckIdsInGame(game) {
+  const ids = new Set();
+  for (const p of game.participations) {
+    if (p.deck_id) ids.add(p.deck_id);
+  }
+  return ids;
+}
+
 async function computePlaygroupGames(env) {
+  if (!env.DECK_CACHE) {
+    throw new Error("DECK_CACHE KV namespace is not bound to this Worker (Settings -> Bindings)");
+  }
+
   const activeLeague = await getActiveLeagueId(env);
 
   const gamesRes = await pgFetch(`/playgroups/${PLAYGROUP_ID}/games?limit=100`, env);
   if (!gamesRes.ok) throw new Error(`games list failed: HTTP ${gamesRes.status}`);
   const allGames = await gamesRes.json();
 
-  // Which of these games are in the active league? playgroup.gg has no
-  // league field on a game -- the only ground truth is a deck's
-  // league-scoped ELO history, and checking every unique deck ever played
-  // (40-70+ across a group's history) blows Workers' subrequest limit.
-  // A pure date-cutoff shortcut is NOT safe either -- confirmed the hard
-  // way: casual pickup games that aren't tagged to any league at all can
-  // fall inside the season's date range and get misclassified as
-  // in-league. Only actual game-ID confirmation from ELO history is
-  // trustworthy; dates are only ever used here to shrink which decks get
-  // checked, never as the final answer.
-  //
-  // Tier 1: check just each tracked player's single most-played deck
-  // (fixed cost, 6 calls regardless of total deck history size). This
-  // alone confirms a large fraction of games, since prolific players
-  // reuse their top deck often.
-  const deckCountsByPlayer = {};
-  for (const g of allGames) {
-    for (const p of g.participations) {
-      const player = p.user_name ? USERNAME_TO_PLAYER[p.user_name] : null;
-      if (!player || !p.deck_id) continue;
-      (deckCountsByPlayer[player] ||= {})[p.deck_id] = (deckCountsByPlayer[player]?.[p.deck_id] || 0) + 1;
-    }
-  }
-  const sampleDeckIds = Object.values(deckCountsByPlayer).map(counts =>
-    Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0]
-  );
-  const confirmedIds = await confirmGameIdsForDecks(sampleDeckIds, activeLeague, env);
-  const tier1ConfirmedCount = confirmedIds.size;
+  // ---- Per-game league classification, cached permanently per league ----
+  // A game's league membership never changes once played, so once we know
+  // it we never need to ask again. Only games this cache hasn't seen yet
+  // need any playgroup.gg calls at all.
+  const classifiedKey = `classified_games:${activeLeague.id}`;
+  const classified = await kvGetJson(env, classifiedKey, {});
+  const unclassifiedGames = allGames.filter(g => !(g.id in classified));
 
-  let cutoffDate = null;
-  for (const g of allGames) {
-    if (confirmedIds.has(g.id) && (!cutoffDate || g.started_at < cutoffDate)) cutoffDate = g.started_at;
-  }
-  if (!cutoffDate) throw new Error("Could not determine the active league's date range from sampled decks");
-
-  // Tier 2: for games not yet confirmed, narrow to a generous date window
-  // (using tier 1's earliest confirmed date -- a lower bound, not a
-  // classifier) so we're not re-deriving decks from the whole all-time
-  // history, then check THEIR decks precisely too. Capped so total cost
-  // always stays under the subrequest limit; anything beyond the cap
-  // just won't surface as a detected active-league game (safe failure,
-  // not a wrong answer).
-  const MAX_TIER2_DECK_CHECKS = 25;
   const uncoveredDeckIds = new Set();
-  for (const g of allGames) {
-    if (confirmedIds.has(g.id) || g.started_at < cutoffDate) continue;
-    for (const p of g.participations) {
-      if (p.deck_id) uncoveredDeckIds.add(p.deck_id);
+  for (const g of unclassifiedGames) {
+    for (const id of deckIdsInGame(g)) uncoveredDeckIds.add(id);
+  }
+  const deckIdsToCheck = [...uncoveredDeckIds].slice(0, MAX_DECK_CHECKS_PER_RUN);
+  const checkedDeckIdSet = new Set(deckIdsToCheck);
+
+  let decksCheckedCount = 0;
+  if (deckIdsToCheck.length > 0) {
+    decksCheckedCount = deckIdsToCheck.length;
+    const confirmedIds = await confirmGameIdsForDecks(deckIdsToCheck, activeLeague, env);
+
+    let changed = false;
+    for (const g of unclassifiedGames) {
+      const gameDeckIds = deckIdsInGame(g);
+      const allDecksChecked = [...gameDeckIds].every(id => checkedDeckIdSet.has(id));
+      if (!allDecksChecked) continue; // retry this game next run once its remaining decks are checked
+      classified[g.id] = confirmedIds.has(g.id);
+      changed = true;
+    }
+    if (changed) {
+      await env.DECK_CACHE.put(classifiedKey, JSON.stringify(classified));
     }
   }
-  const tier2DeckIds = [...uncoveredDeckIds].slice(0, MAX_TIER2_DECK_CHECKS);
-  const tier2Ids = await confirmGameIdsForDecks(tier2DeckIds, activeLeague, env);
-  for (const id of tier2Ids) confirmedIds.add(id);
 
-  const activeGames = allGames.filter(g => confirmedIds.has(g.id));
+  const activeGames = allGames.filter(g => classified[g.id] === true);
 
-  // Commander names aren't in the games/participations payload, only on
-  // the deck itself -- fetch details just for decks that actually appear
-  // in an active-league game. Capped: fixed overhead is ~9 (me + playgroups
-  // + games + 6 samples) and tier 2 can use up to 25 more, so this has to
-  // share what's left of the 50-subrequest budget. Anything beyond the cap
-  // just falls back to showing the deck's nickname instead of its real
-  // commander name -- a cosmetic loss, not a failure.
-  const MAX_DECK_DETAIL_CALLS = 14;
+  // ---- Commander names, cached with a soft expiry ----
+  // Not present on the games/participations payload, only on the deck
+  // itself. Cached (unlike league membership) because a deck's commander
+  // can legitimately change over time.
+  const commanderCache = await kvGetJson(env, "commander_names", {});
+  const now = Date.now();
   const activeDeckIds = new Set();
   for (const g of activeGames) {
-    for (const p of g.participations) {
-      if (p.deck_id) activeDeckIds.add(p.deck_id);
-    }
+    for (const id of deckIdsInGame(g)) activeDeckIds.add(id);
   }
-  const deckIdsToLookUp = [...activeDeckIds].slice(0, MAX_DECK_DETAIL_CALLS);
-  const deckCommander = {};
-  await Promise.all(deckIdsToLookUp.map(async deckId => {
-    const res = await pgFetch(`/decks/${deckId}`, env);
-    if (!res.ok) return;
-    const deck = await res.json();
-    deckCommander[deckId] = deck.commander ? deck.commander.name : deck.name;
-  }));
+  const staleOrMissing = [...activeDeckIds].filter(id => {
+    const entry = commanderCache[id];
+    return !entry || (now - entry.cachedAt) > COMMANDER_NAME_MAX_AGE_MS;
+  });
+  const deckIdsToLookUp = staleOrMissing.slice(0, MAX_COMMANDER_LOOKUPS_PER_RUN);
+
+  if (deckIdsToLookUp.length > 0) {
+    await Promise.all(deckIdsToLookUp.map(async deckId => {
+      const res = await pgFetch(`/decks/${deckId}`, env);
+      if (!res.ok) return;
+      const deck = await res.json();
+      commanderCache[deckId] = {
+        name: deck.commander ? deck.commander.name : deck.name,
+        cachedAt: now,
+      };
+    }));
+    await env.DECK_CACHE.put("commander_names", JSON.stringify(commanderCache));
+  }
 
   const games = [];
   for (const g of activeGames.sort((a, b) => a.started_at.localeCompare(b.started_at))) {
@@ -249,9 +272,10 @@ async function computePlaygroupGames(env) {
     for (const p of g.participations) {
       const player = p.user_name ? USERNAME_TO_PLAYER[p.user_name] : null;
       if (!player) { untracked++; continue; }
+      const cachedCommander = commanderCache[p.deck_id];
       participants.push({
         player,
-        commander: deckCommander[p.deck_id] || p.deck_name,
+        commander: (cachedCommander && cachedCommander.name) || p.deck_name,
         deck_name: p.deck_name,
         result: p.winner ? "win" : "loss",
       });
@@ -276,17 +300,16 @@ async function computePlaygroupGames(env) {
     games,
     debug: {
       all_time_games: allGames.length,
-      tier1_sample_decks: sampleDeckIds.length,
-      tier1_confirmed_games: tier1ConfirmedCount,
-      cutoff_date: cutoffDate,
-      tier2_uncovered_decks_found: uncoveredDeckIds.size,
-      tier2_decks_checked: tier2DeckIds.length,
-      tier2_deck_checks_truncated: Math.max(0, uncoveredDeckIds.size - tier2DeckIds.length),
+      games_already_classified: allGames.length - unclassifiedGames.length,
+      games_needing_classification: unclassifiedGames.length,
+      unique_decks_needing_check: uncoveredDeckIds.size,
+      decks_checked_this_run: decksCheckedCount,
+      decks_left_for_next_run: Math.max(0, uncoveredDeckIds.size - deckIdsToCheck.length),
       active_games: activeGames.length,
       active_unique_decks: activeDeckIds.size,
-      deck_detail_calls_made: deckIdsToLookUp.length,
-      deck_detail_calls_truncated: Math.max(0, activeDeckIds.size - deckIdsToLookUp.length),
-      approx_subrequests: 2 + 1 + sampleDeckIds.length + tier2DeckIds.length + deckIdsToLookUp.length,
+      commander_lookups_made: deckIdsToLookUp.length,
+      commander_lookups_left: Math.max(0, staleOrMissing.length - deckIdsToLookUp.length),
+      approx_subrequests: 3 + deckIdsToCheck.length + deckIdsToLookUp.length,
     },
   };
 }
