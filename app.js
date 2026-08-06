@@ -2,10 +2,19 @@ const STORAGE_KEY = "mtg-pod-validator-players";
 const RANGE_TOLERANCE = 1; // max power spread allowed within a pod
 const PLAYGROUP_URL = "https://playgroup.gg/tracker";
 
-// Cloudflare Worker relay for the Games to Update tab. Set once the Worker
-// is deployed (see cloudflare-worker/README.md) -- until then, submission
-// is disabled and only "Copy row" is available.
-const GAME_SUBMIT_RELAY_URL = "https://mtg-pod-validator-relay.mattdomi18.workers.dev/";
+// Cloudflare Worker relay. Set once the Worker is deployed (see
+// cloudflare-worker/README.md). GAME_SUBMIT_RELAY_URL empty disables
+// submission (Copy row still works); PLAYGROUP_GAMES_RELAY_URL empty
+// disables live playgroup.gg data (Games to Update and Player Win Rates
+// show a "not configured" message instead).
+const RELAY_BASE_URL = "https://mtg-pod-validator-relay.mattdomi18.workers.dev";
+const GAME_SUBMIT_RELAY_URL = RELAY_BASE_URL + "/";
+const PLAYGROUP_GAMES_RELAY_URL = RELAY_BASE_URL + "/playgroup-games";
+
+// Players known to have a playgroup.gg account in this playgroup (matches
+// the Worker's own USERNAME_TO_PLAYER map). Kristy and Joseph don't have
+// one, so they never appear in the live games data at all.
+const PLAYERS_WITH_PLAYGROUP_ACCOUNT = ["Becca", "Manny", "Mateo", "Ryan", "Michelle", "Red"];
 
 // Default roster — the group's real players/decks/power ratings. Used to
 // seed local storage the first time the app runs in a browser; after that,
@@ -315,6 +324,7 @@ async function syncFromRepoWorkbook() {
 
     gameLogSeason3Rows = extractGameLogFromWorkbook(workbook, "Game Log Season 3");
     renderGamesToUpdate();
+    loadWinRates();
   } catch (err) {
     if (statusEl) {
       statusEl.textContent = `Using locally saved data — couldn't load ${REPO_WORKBOOK_FILE} (${err.message}).`;
@@ -836,20 +846,34 @@ function initTabs() {
 
 // ---------- player win rates (read-only) ----------
 
-const WIN_RATES_FILE = "player-win-rates.json";
-
-function formatPct(v) {
-  return v === null || v === undefined ? null : `${v.toFixed(1)}%`;
+function tallyPlaygroupWinRates(games) {
+  const tally = {};
+  for (const g of games) {
+    for (const p of g.participants) {
+      (tally[p.player] ||= { wins: 0, losses: 0 })[p.result === "win" ? "wins" : "losses"]++;
+    }
+  }
+  return tally;
 }
 
 async function loadWinRates() {
   const statusEl = document.getElementById("winrates-sync-status");
   const noteEl = document.getElementById("winrates-note");
   const tableEl = document.getElementById("winrates-table");
+
+  if (!PLAYGROUP_GAMES_RELAY_URL) {
+    statusEl.textContent = "Live playgroup.gg data not configured.";
+    return;
+  }
+
   try {
-    const res = await fetch(WIN_RATES_FILE, { cache: "no-store" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const res = await fetch(PLAYGROUP_GAMES_RELAY_URL, { cache: "no-store" });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || body.error || `HTTP ${res.status}`);
+    }
     const data = await res.json();
+    const tally = tallyPlaygroupWinRates(data.games || []);
 
     const table = document.createElement("table");
     table.className = "winrates-table";
@@ -864,30 +888,36 @@ async function loadWinRates() {
     `;
     const tbody = document.createElement("tbody");
 
-    for (const p of data.players || []) {
+    for (const player of players) {
+      const name = player.name;
       const tr = document.createElement("tr");
 
       const nameTd = document.createElement("td");
-      nameTd.textContent = p.player;
+      nameTd.textContent = name;
 
       const pgTd = document.createElement("td");
       pgTd.className = "num";
-      const pgPct = formatPct(p.playgroup_win_rate);
-      if (pgPct) {
-        pgTd.textContent = `${pgPct} (${p.playgroup_record})`;
+      const t = tally[name];
+      if (t && (t.wins + t.losses) > 0) {
+        const pct = (t.wins / (t.wins + t.losses)) * 100;
+        pgTd.textContent = `${pct.toFixed(1)}% (${t.wins}-${t.losses})`;
       } else {
         pgTd.className += " muted";
-        pgTd.innerHTML = `<span class="na">${p.playgroup_note || "no data"}</span>`;
+        const note = PLAYERS_WITH_PLAYGROUP_ACCOUNT.includes(name)
+          ? "No games in the active league yet"
+          : "No playgroup.gg account in this playgroup";
+        pgTd.innerHTML = `<span class="na">${note}</span>`;
       }
 
       const adjTd = document.createElement("td");
       adjTd.className = "num";
-      const adjPct = formatPct(p.player_adjusted_win_rate);
-      if (adjPct) {
-        adjTd.textContent = `${adjPct} (${p.player_adjusted_record})`;
+      const rows = gameLogSeason3Rows.filter(r => r.player === name && typeof r.J === "number");
+      if (rows.length > 0) {
+        const adj = computePlayerAdjustedWinRate(rows);
+        adjTd.textContent = `${(adj.B * 100).toFixed(1)}% (${adj.wins}-${adj.losses})`;
       } else {
         adjTd.className += " muted";
-        adjTd.innerHTML = `<span class="na">${p.player_adjusted_note || "no data"}</span>`;
+        adjTd.innerHTML = `<span class="na">No games logged in Game Log Season 3</span>`;
       }
 
       tr.appendChild(nameTd);
@@ -900,34 +930,37 @@ async function loadWinRates() {
     tableEl.innerHTML = "";
     tableEl.appendChild(table);
 
-    statusEl.textContent = `Loaded from ${WIN_RATES_FILE} (generated ${data.generated_at || "unknown date"}).`;
+    statusEl.textContent = `Live as of ${new Date(data.generated_at).toLocaleTimeString()} (playgroup.gg data may be cached up to 5 min).`;
     noteEl.innerHTML = "";
-    for (const note of [data.league_note, data.source_note]) {
-      if (!note) continue;
-      const p = document.createElement("span");
-      p.className = "note-line";
-      p.textContent = note;
-      noteEl.appendChild(p);
-    }
+    const note = document.createElement("span");
+    note.className = "note-line";
+    note.textContent = `Scoped to the active league (${data.league || "unknown"}). Player Adjusted Win Rate is computed live from the spreadsheet's Game Log Season 3.`;
+    noteEl.appendChild(note);
   } catch (err) {
-    statusEl.textContent = `Couldn't load ${WIN_RATES_FILE} (${err.message}).`;
+    statusEl.textContent = `Couldn't load live win rates (${err.message}).`;
   }
 }
 
 // ---------- games to update ----------
 
-const PLAYGROUP_GAMES_FILE = "playgroup-games.json";
 let playgroupGamesData = null;
 
 async function loadPlaygroupGames() {
   const statusEl = document.getElementById("gtu-status");
+  if (!PLAYGROUP_GAMES_RELAY_URL) {
+    if (statusEl) statusEl.textContent = "Live playgroup.gg data not configured.";
+    return;
+  }
   try {
-    const res = await fetch(PLAYGROUP_GAMES_FILE, { cache: "no-store" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const res = await fetch(PLAYGROUP_GAMES_RELAY_URL, { cache: "no-store" });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || body.error || `HTTP ${res.status}`);
+    }
     playgroupGamesData = await res.json();
     renderGamesToUpdate();
   } catch (err) {
-    if (statusEl) statusEl.textContent = `Couldn't load ${PLAYGROUP_GAMES_FILE} (${err.message}).`;
+    if (statusEl) statusEl.textContent = `Couldn't load live playgroup.gg data (${err.message}).`;
   }
 }
 

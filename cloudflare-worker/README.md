@@ -1,53 +1,55 @@
-# Games to Update relay
+# mtg-pod-validator relay
 
-This Worker is the only piece of this pipeline that touches a GitHub write
-credential. It does one thing: takes a game payload from the app and fires
-a `repository_dispatch` event at the repo. The actual spreadsheet edit runs
-in GitHub Actions using GitHub's own auto-issued token, not this one.
+This Worker holds two write/read credentials server-side so the browser
+never sees either of them:
 
-## 1. Create the GitHub token
+- **GITHUB_TOKEN** — fires a `repository_dispatch` event at the repo when
+  a game is submitted. The actual spreadsheet edit runs in GitHub Actions
+  using GitHub's own auto-issued token, not this one.
+- **PLAYGROUP_API_KEY** — reads playgroup.gg live (games + active-league
+  membership) so the app doesn't need a manually-regenerated static file.
+  Responses are cached for 5 minutes.
 
-1. Go to https://github.com/settings/personal-access-tokens/new
-2. **Resource owner**: your account
-3. **Repository access**: "Only select repositories" → `mtg-pod-validator`
-4. **Permissions** → Repository permissions → **Contents**: Read and write
-   (this is the permission GitHub requires to fire a `repository_dispatch`
-   event — it's scoped to this one repo only, not your whole account)
-5. Generate, copy the token (starts with `github_pat_...`) — you won't see
-   it again.
+## Updating an already-deployed Worker (new code, new secret)
 
-## 2. Deploy the Worker
+You already have this Worker running with `GITHUB_TOKEN` set. To add live
+playgroup.gg data:
 
-From this folder:
+1. Go to https://dash.cloudflare.com → **Workers & Pages** → your Worker
+   (`mtg-pod-validator-relay`) → **Edit code**
+2. Replace everything with the current contents of `relay.js` from this
+   folder → **Deploy**
+3. Go to **Settings** → **Variables and Secrets** → **Add**
+   - Name: exactly `PLAYGROUP_API_KEY`
+   - Type: **Secret**
+   - Value: your playgroup.gg API key (Account Settings → API keys on
+     playgroup.gg — reuse the one you already generated, or make a new
+     one if you don't have it handy anymore)
+   - Save
+4. That's it — no URL change, no app changes needed on your end. The
+   existing `GITHUB_TOKEN` secret is untouched.
 
-```bash
-npx wrangler login       # opens a browser to authorize your Cloudflare account
-npx wrangler deploy
-```
+## Fresh setup (if starting from scratch)
 
-This publishes the Worker and prints its URL, something like:
-`https://mtg-pod-validator-relay.<your-subdomain>.workers.dev`
+1. **GitHub token**: https://github.com/settings/personal-access-tokens/new
+   → Resource owner: your account → Repository access: only
+   `mtg-pod-validator` → Permissions → Contents: Read and write → Generate.
+2. **playgroup.gg token**: playgroup.gg → Account Settings → API keys →
+   create one.
+3. **Deploy**: Cloudflare dashboard → Workers & Pages → Create → Worker →
+   Start with Hello World → paste in `relay.js` → Deploy.
+4. **Secrets**: Worker → Settings → Variables and Secrets → add both
+   `GITHUB_TOKEN` and `PLAYGROUP_API_KEY` as above.
+5. Copy the Worker's `workers.dev` URL and hand it back so it can be wired
+   into `app.js` (`RELAY_BASE_URL`).
 
-## 3. Set the secret
+## Notes on scope
 
-```bash
-npx wrangler secret put GITHUB_TOKEN
-```
-
-Paste the token from step 1 when prompted. It's stored encrypted by
-Cloudflare and is never visible in the Worker's source or in any client
-request — the browser never sees it.
-
-## 4. Give the Worker URL back
-
-The app needs the Worker's URL to know where to POST. Once deployed, hand
-the printed `workers.dev` URL over so it can be wired into `app.js`.
-
-## Note on scope
-
-GitHub doesn't offer a narrower permission than "Contents: write" for
-triggering `repository_dispatch`, so this token technically *could* also
-write files directly via GitHub's API. In practice this Worker's own code
-only ever calls the dispatch endpoint — but if you want to shrink the blast
-radius further later, GitHub Apps support finer-grained installation tokens
-than personal access tokens do.
+- GitHub doesn't offer a narrower permission than "Contents: write" for
+  triggering `repository_dispatch`, so that token technically *could* also
+  write files directly via GitHub's API. This Worker's own code only ever
+  calls the dispatch endpoint. GitHub Apps support finer-grained
+  installation tokens than personal access tokens if you want to shrink
+  this further later.
+- The playgroup.gg key is scoped by playgroup.gg's own account-level API
+  key system — it can read whatever your account can read there.
