@@ -1,0 +1,35 @@
+name: Recalculate Spreadsheet
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  recalculate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install LibreOffice and dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libreoffice-calc
+          pip install openpyxl
+
+      - name: Recalculate and refresh pivot tables
+        run: python scripts/recalculate.py
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add deck-strength.xlsx
+          git diff --staged --quiet && echo "No changes to commit" && exit 0
+          git commit -m "Recalculate spreadsheet and refresh pivot tables (automated)"
+          git push
