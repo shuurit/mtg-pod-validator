@@ -384,7 +384,6 @@ function initPlayerCountSelect() {
   sel.addEventListener("change", () => {
     podCount = parseInt(sel.value, 10);
     renderPodSlots();
-    document.getElementById("results-section").hidden = true;
   });
 }
 
@@ -454,13 +453,11 @@ function renderPodSlots() {
       slot.playerId = playerSelect.value;
       slot.deckId = "";
       refreshDeckOptions();
-      document.getElementById("results-section").hidden = true;
     });
 
     deckSelect.addEventListener("change", () => {
       slot.deckId = deckSelect.value;
       updatePowerDisplay();
-      document.getElementById("results-section").hidden = true;
     });
 
     refreshDeckOptions();
@@ -573,12 +570,19 @@ function runValidation() {
         box.innerHTML = `<span class="none">No other saved deck for ${entry.playerName} fits this pod's range.</span>`;
       } else {
         const label = document.createElement("div");
-        label.textContent = `Decks that would bring ${entry.playerName} into range:`;
+        label.textContent = `Decks that would bring ${entry.playerName} into range — click to swap in:`;
         box.appendChild(label);
         for (const alt of alts) {
-          const chip = document.createElement("span");
+          const chip = document.createElement("button");
+          chip.type = "button";
           chip.className = "suggestion-chip";
           chip.textContent = `${alt.name} (${formatPower(alt.power)})`;
+          chip.addEventListener("click", () => {
+            const slot = podSelections.find(s => s.playerId === entry.playerId);
+            if (!slot) return;
+            slot.deckId = alt.id;
+            renderPodSlots();
+          });
           box.appendChild(chip);
         }
       }

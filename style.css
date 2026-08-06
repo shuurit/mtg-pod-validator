@@ -507,6 +507,12 @@ td.num {
   margin: 4px 6px 0 0;
   font-size: 0.85rem;
   font-weight: 500;
+  cursor: pointer;
+}
+.suggestion-chip:hover {
+  border-color: var(--good);
+  color: var(--good);
+  filter: brightness(1.08);
 }
 
 /* ---------- phone / tablet ---------- */
