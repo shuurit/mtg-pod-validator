@@ -23,7 +23,7 @@ jobs:
           pip install openpyxl
 
       - name: Recalculate and refresh pivot tables
-        run: python scripts/_diagnose_pivot.py
+        run: python scripts/recalculate.py
 
       - name: Commit and push
         run: |

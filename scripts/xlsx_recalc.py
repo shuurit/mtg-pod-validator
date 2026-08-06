@@ -19,25 +19,20 @@ RECALCULATE_MACRO = """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE script:module PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "module.dtd">
 <script:module xmlns:script="http://openoffice.org/2000/script" script:name="Module1" script:language="StarBasic">
     Sub RecalculateAndSave()
-      Dim oSheets As Object
-      Dim oSheet As Object
-      Dim oPivots As Object
-      Dim i As Integer, j As Integer
-
-      oSheets = ThisComponent.getSheets()
-      For i = 0 To oSheets.getCount() - 1
-        oSheet = oSheets.getByIndex(i)
-        oPivots = oSheet.getDataPilotTables()
-        For j = 0 To oPivots.getCount() - 1
-          oPivots.getByIndex(j).refresh()
-        Next j
-      Next i
-
       ThisComponent.calculateAll()
       ThisComponent.store()
       ThisComponent.close(True)
     End Sub
 </script:module>"""
+
+# Deliberately does NOT call .refresh() on any DataPilotTable (pivot table).
+# Tried that -- confirmed the hard way that LibreOffice's pivot refresh
+# re-lays the table out differently than the Excel-native version that
+# created it (adds an extra header row), silently breaking any formula
+# placed next to it expecting a fixed row alignment. This is why "Deck Win
+# Rates" was converted from a pivot table to plain COUNTIFS/SUMIFS formulas
+# -- don't add a pivot table back to this workbook expecting it to survive
+# automated recalculation.
 
 
 def recalc(xlsx_path):
@@ -47,9 +42,7 @@ def recalc(xlsx_path):
     # (not an error value, just absent), because openpyxl's save() had
     # stripped their cached values and convert-to never recomputed them.
     # A macro that explicitly calls calculateAll() before store() is the
-    # reliable way to force it. Pivot tables (DataPilotTables in LibreOffice's
-    # API) are a separate cache calculateAll() doesn't touch on its own --
-    # refreshed explicitly here so Deck Win Rates doesn't go stale again.
+    # reliable way to force it.
     abs_path = os.path.abspath(xlsx_path)
 
     with tempfile.TemporaryDirectory(prefix="lo_profile_") as profile_dir:
