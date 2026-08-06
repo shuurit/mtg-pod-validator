@@ -218,8 +218,10 @@ function importRows(rows) {
 
 // Reads the "Current Deck Strength" tab. Its layout is: a bold player-name
 // row whose Power cell holds an =AVERAGE(...) formula over the deck rows
-// beneath it, followed by plain deck rows (name + numeric power, no
-// formula). We tell the two apart by whether the Power cell has a formula.
+// beneath it, followed by deck rows whose Power cell is itself a formula
+// (=IFERROR(LOOKUP(...), baseline) pulling the latest logged game's Game
+// Calculated Deck Strength, falling back to a manual baseline). We tell the
+// two apart by the formula itself, not just whether one exists.
 function extractRowsFromWorkbook(workbook) {
   const sheetName =
     workbook.SheetNames.find(n => n.trim().toLowerCase() === "current deck strength") ||
@@ -240,7 +242,7 @@ function extractRowsFromWorkbook(workbook) {
     const name = nameCell && typeof nameCell.v === "string" ? nameCell.v.trim() : null;
     if (!name || name.toLowerCase() === "decks") continue;
 
-    const isPlayerHeader = !!(powerCell && typeof powerCell.f === "string");
+    const isPlayerHeader = !!(powerCell && typeof powerCell.f === "string" && powerCell.f.trim().startsWith("AVERAGE"));
     if (isPlayerHeader) {
       currentPlayer = name;
       continue;
