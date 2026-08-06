@@ -1103,12 +1103,15 @@ initTabs();
 loadWinRates();
 loadPlaygroupGames();
 
-// Keeps Player Win Rates (and everything else derived from the sheet) fresh
-// without a manual reload -- syncFromRepoWorkbook re-fetches deck-strength.xlsx
-// and re-runs loadWinRates() as part of it. Paused while the tab isn't
-// visible so it doesn't do pointless work in the background.
+// Keeps everything derived from either data source fresh without a manual
+// reload: syncFromRepoWorkbook re-fetches deck-strength.xlsx (also re-runs
+// loadWinRates as part of it), loadPlaygroupGames re-fetches the live
+// playgroup.gg games list that Games to Update depends on to notice new
+// games. Paused while the tab isn't visible so it doesn't do pointless work
+// in the background.
 const AUTO_REFRESH_INTERVAL_MS = 60000;
 setInterval(() => {
   if (document.hidden) return;
   syncFromRepoWorkbook();
+  loadPlaygroupGames();
 }, AUTO_REFRESH_INTERVAL_MS);
