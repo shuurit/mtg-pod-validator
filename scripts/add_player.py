@@ -5,12 +5,14 @@ layout, so they're extended together). Appends at the end of each sheet --
 safe, since nothing else needs to shift.
 
 Usage:
-    python scripts/add_player.py '{"player": "Alex", "decks": [["Krenko, Mob Boss", 3.2], ["Meren of Clan Nel Toth", 2.8]]}'
+    python scripts/add_player.py '{"player": "Alex", "decks": [["Krenko, Mob Boss", 3.2, 744135], ["Meren of Clan Nel Toth", 2.8, null]]}'
 
-The "decks" powers are a starting baseline -- Current Deck Strength will
-switch to using each deck's latest Game Calculated Deck Strength
-automatically once games get logged for it (falls back to this baseline
-until then).
+Each deck is `[name, power, playgroup_deck_id]` -- the ID is optional (use
+null, or omit the third element entirely) for decks with no playgroup.gg
+account behind them. The power is a starting baseline -- Current Deck
+Strength will switch to using each deck's latest Game Calculated Deck
+Strength automatically once games get logged for it (falls back to this
+baseline until then).
 
 Style IDs (the s="N" on each cell) are read from an existing player row (2)
 and deck row (3) at runtime rather than hardcoded -- LibreOffice renumbers
@@ -51,9 +53,33 @@ def fmt_num(v):
     return repr(float(v))
 
 
+def normalize_decks(raw_decks):
+    """Accepts [name, power] or [name, power, playgroup_deck_id]."""
+    decks = []
+    for d in raw_decks:
+        name, power = d[0], d[1]
+        deck_id = d[2] if len(d) > 2 else None
+        decks.append((name, power, deck_id))
+    return decks
+
+
 def last_row_of(sheet_xml):
     rows = [int(m) for m in re.findall(r'<row r="(\d+)"', sheet_xml)]
     return max(rows)
+
+
+def existing_player_names(sheet_xml, shared_strings_unused=None):
+    """Player header rows are identified the same way is_header_row does in
+    add_deck.py: an AVERAGE( formula in column B."""
+    names = []
+    for m in re.finditer(r'<row r="(\d+)"[^>]*>(.*?)</row>', sheet_xml, re.DOTALL):
+        row_num, inner = int(m.group(1)), m.group(2)
+        if row_num == 1 or "AVERAGE(" not in inner:
+            continue
+        text_m = re.search(r'<is><t[^>]*>(.*?)</t></is>', inner, re.DOTALL)
+        if text_m:
+            names.append(text_m.group(1))
+    return names
 
 
 def row_styles(sheet_xml, rownum, columns):
@@ -73,15 +99,15 @@ def row_styles(sheet_xml, rownum, columns):
 def cds_rows_xml(player, decks, start_row, player_style, deck_style):
     end_row = start_row + len(decks)
     header = (
-        f'<row r="{start_row}" spans="1:4">'
+        f'<row r="{start_row}" spans="1:5">'
         f'<c r="A{start_row}" s="{player_style["A"]}" t="inlineStr"><is><t>{xml_escape(player)}</t></is></c>'
         f'<c r="B{start_row}" s="{player_style["B"]}"><f>AVERAGE(B{start_row + 1}:B{end_row})</f>'
-        f'<v>{fmt_num(sum(p for _, p in decks) / len(decks))}</v></c>'
+        f'<v>{fmt_num(sum(p for _, p, _ in decks) / len(decks))}</v></c>'
         f'<c r="C{start_row}" s="{player_style["C"]}"/>'
         f'</row>'
     )
     parts = [header]
-    for i, (deck_name, power) in enumerate(decks):
+    for i, (deck_name, power, deck_id) in enumerate(decks):
         r = start_row + 1 + i
         formula = (
             f"IFERROR(LOOKUP(2,1/(('{LOG_SHEET}'!$C$3:$C${LOG_MAX_ROW}=\"{player}\")"
@@ -89,12 +115,17 @@ def cds_rows_xml(player, decks, start_row, player_style, deck_style):
             f"*('{LOG_SHEET}'!$X$3:$X${LOG_MAX_ROW}<>\"\")),"
             f"'{LOG_SHEET}'!$X$3:$X${LOG_MAX_ROW}), D{r})"
         )
+        e_cell = (
+            f'<c r="E{r}" s="{deck_style["E"]}" t="inlineStr"><is><t>{xml_escape(str(deck_id))}</t></is></c>'
+            if deck_id else f'<c r="E{r}" s="{deck_style["E"]}"/>'
+        )
         parts.append(
-            f'<row r="{r}" spans="1:4">'
+            f'<row r="{r}" spans="1:5">'
             f'<c r="A{r}" s="{deck_style["A"]}" t="inlineStr"><is><t>{xml_escape(deck_name)}</t></is></c>'
             f'<c r="B{r}" s="{deck_style["B"]}"><f>{xml_escape(formula)}</f><v>{fmt_num(power)}</v></c>'
             f'<c r="C{r}" s="{deck_style["C"]}"/>'
             f'<c r="D{r}" s="{deck_style["D"]}"><v>{fmt_num(power)}</v></c>'
+            f'{e_cell}'
             f'</row>'
         )
     return "".join(parts), end_row
@@ -117,7 +148,7 @@ def dwr_rows_xml(player, decks, start_row, player_style, deck_style):
         f'</row>'
     )
     parts = [header]
-    for i, (deck_name, _power) in enumerate(decks):
+    for i, (deck_name, _power, _deck_id) in enumerate(decks):
         r = start_row + 1 + i
         b_formula = (
             f"COUNTIFS('{LOG_SHEET}'!$C$3:$C${LOG_MAX_ROW},\"{player}\","
@@ -140,8 +171,8 @@ def dwr_rows_xml(player, decks, start_row, player_style, deck_style):
     return "".join(parts), end_row
 
 
-def append_to_sheet(sheet_xml, new_rows_xml, new_last_row):
-    sheet_xml = re.sub(r'<dimension ref="A1:D\d+"/>', f'<dimension ref="A1:D{new_last_row}"/>', sheet_xml)
+def append_to_sheet(sheet_xml, new_rows_xml, new_last_row, last_col):
+    sheet_xml = re.sub(r'<dimension ref="A1:[A-Z]\d+"/>', f'<dimension ref="A1:{last_col}{new_last_row}"/>', sheet_xml)
     sheet_xml = sheet_xml.replace("</sheetData>", new_rows_xml + "</sheetData>")
     return sheet_xml
 
@@ -149,7 +180,7 @@ def append_to_sheet(sheet_xml, new_rows_xml, new_last_row):
 def main():
     payload = json.loads(sys.argv[1])
     player = payload["player"]
-    decks = payload["decks"]
+    decks = normalize_decks(payload["decks"])
     if not player or not decks:
         raise ValueError('payload needs a non-empty "player" and non-empty "decks"')
 
@@ -160,6 +191,10 @@ def main():
     cds_xml = contents[CDS_SHEET_FILE].decode("utf-8")
     dwr_xml = contents[DWR_SHEET_FILE].decode("utf-8")
 
+    existing = existing_player_names(cds_xml)
+    if player in existing:
+        raise ValueError(f'Player "{player}" already exists in Current Deck Strength -- use add_deck.py instead.')
+
     cds_start = last_row_of(cds_xml) + 1
     dwr_start = last_row_of(dwr_xml) + 1
     if cds_start != dwr_start:
@@ -169,15 +204,15 @@ def main():
         )
 
     cds_player_style = row_styles(cds_xml, 2, "ABC")
-    cds_deck_style = row_styles(cds_xml, 3, "ABCD")
+    cds_deck_style = row_styles(cds_xml, 3, "ABCDE")
     dwr_player_style = row_styles(dwr_xml, 2, "ABCD")
     dwr_deck_style = row_styles(dwr_xml, 3, "ABCD")
 
     cds_rows, cds_end = cds_rows_xml(player, decks, cds_start, cds_player_style, cds_deck_style)
     dwr_rows, dwr_end = dwr_rows_xml(player, decks, dwr_start, dwr_player_style, dwr_deck_style)
 
-    contents[CDS_SHEET_FILE] = append_to_sheet(cds_xml, cds_rows, cds_end).encode("utf-8")
-    contents[DWR_SHEET_FILE] = append_to_sheet(dwr_xml, dwr_rows, dwr_end).encode("utf-8")
+    contents[CDS_SHEET_FILE] = append_to_sheet(cds_xml, cds_rows, cds_end, "E").encode("utf-8")
+    contents[DWR_SHEET_FILE] = append_to_sheet(dwr_xml, dwr_rows, dwr_end, "D").encode("utf-8")
 
     tmp_path = str(XLSX_PATH) + ".tmp"
     with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zout:

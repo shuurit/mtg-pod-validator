@@ -6,11 +6,12 @@ append at the end -- the new row has to land inside the player's existing
 block, which means every row below it shifts down by one.
 
 Usage:
-    python scripts/add_deck.py '{"player": "Manny", "deck": "Krenko, Mob Boss", "power": 3.2}'
+    python scripts/add_deck.py '{"player": "Manny", "deck": "Krenko, Mob Boss", "power": 3.2, "playgroupDeckId": 744135}'
 
 "power" is a starting baseline -- Current Deck Strength switches to the
 deck's latest Game Calculated Deck Strength automatically once games get
-logged for it.
+logged for it. "playgroupDeckId" is optional (omit or null for a deck
+with no playgroup.gg account behind it).
 
 Row-shifting only touches: the row's own r="N" attribute, each cell's
 r="COLN" reference, and the small set of self-referential row numbers
@@ -158,10 +159,10 @@ def row_styles(sheet_xml, rownum, columns):
     return styles
 
 
-def process_cds(sheet_xml, player, deck, power, shared_strings):
+def process_cds(sheet_xml, player, deck, power, deck_id, shared_strings):
     header_row, first_deck_row, last_deck_row = find_player_block(sheet_xml, player, True, shared_strings)
     insertion_point = last_deck_row + 1
-    deck_style = row_styles(sheet_xml, first_deck_row, "ABCD")
+    deck_style = row_styles(sheet_xml, first_deck_row, "ABCDE")
 
     rows_by_num = {}
     max_row = 0
@@ -192,18 +193,23 @@ def process_cds(sheet_xml, player, deck, power, shared_strings):
         f"*('{LOG_SHEET}'!$X$3:$X${LOG_MAX_ROW}<>\"\")),"
         f"'{LOG_SHEET}'!$X$3:$X${LOG_MAX_ROW}), D{insertion_point})"
     )
+    e_cell = (
+        f'<c r="E{insertion_point}" s="{deck_style["E"]}" t="inlineStr"><is><t>{xml_escape(str(deck_id))}</t></is></c>'
+        if deck_id else f'<c r="E{insertion_point}" s="{deck_style["E"]}"/>'
+    )
     rows_by_num[insertion_point] = (
-        f'<row r="{insertion_point}" spans="1:4">'
+        f'<row r="{insertion_point}" spans="1:5">'
         f'<c r="A{insertion_point}" s="{deck_style["A"]}" t="inlineStr"><is><t>{xml_escape(deck)}</t></is></c>'
         f'<c r="B{insertion_point}" s="{deck_style["B"]}"><f>{xml_escape(formula)}</f><v>{fmt_num(power)}</v></c>'
         f'<c r="C{insertion_point}" s="{deck_style["C"]}"/>'
         f'<c r="D{insertion_point}" s="{deck_style["D"]}"><v>{fmt_num(power)}</v></c>'
+        f'{e_cell}'
         f'</row>'
     )
 
     new_last_row = max_row + 1
     new_sheet_data = "".join(rows_by_num[n] for n in sorted(rows_by_num))
-    new_xml = re.sub(r'<dimension ref="A1:D\d+"/>', f'<dimension ref="A1:D{new_last_row}"/>', sheet_xml)
+    new_xml = re.sub(r'<dimension ref="A1:[A-Z]\d+"/>', f'<dimension ref="A1:E{new_last_row}"/>', sheet_xml)
     new_xml = re.sub(r"<sheetData>.*</sheetData>", f"<sheetData>{new_sheet_data}</sheetData>", new_xml, flags=re.DOTALL)
     return new_xml, insertion_point
 
@@ -261,6 +267,7 @@ def main():
     player = payload["player"]
     deck = payload["deck"]
     power = payload["power"]
+    deck_id = payload.get("playgroupDeckId")
 
     with zipfile.ZipFile(XLSX_PATH) as zin:
         items = zin.infolist()
@@ -270,7 +277,7 @@ def main():
     cds_xml = contents[CDS_SHEET_FILE].decode("utf-8")
     dwr_xml = contents[DWR_SHEET_FILE].decode("utf-8")
 
-    new_cds_xml, insertion_point = process_cds(cds_xml, player, deck, power, shared_strings)
+    new_cds_xml, insertion_point = process_cds(cds_xml, player, deck, power, deck_id, shared_strings)
     new_dwr_xml = process_dwr(dwr_xml, player, deck, insertion_point, shared_strings)
 
     contents[CDS_SHEET_FILE] = new_cds_xml.encode("utf-8")
