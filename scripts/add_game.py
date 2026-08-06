@@ -1,7 +1,8 @@
 """
-Adds a game to 'Game Log Season 3' in deck-strength.xlsx from a JSON payload,
-then forces a full LibreOffice recalculation so every formula in the
-workbook (including Player Adjusted Ranks) reflects the new game.
+Adds a game to the current season's Game Log tab (season_config.py) in
+deck-strength.xlsx from a JSON payload, then forces a full LibreOffice
+recalculation so every formula in the workbook (including Player Adjusted
+Ranks) reflects the new game.
 
 Expects the payload as JSON in the GAME_PAYLOAD environment variable:
 {
@@ -29,9 +30,10 @@ from datetime import datetime
 import openpyxl
 
 from xlsx_recalc import recalc
+from season_config import CURRENT_SEASON_SHEET
 
 XLSX_PATH = os.path.join(os.path.dirname(__file__), "..", "deck-strength.xlsx")
-SHEET_NAME = "Game Log Season 3"
+SHEET_NAME = CURRENT_SEASON_SHEET
 HEADER_ROW = 2
 COLUMNS = "ABCDEFGHIJKLMNOPQRSTUVWX"
 

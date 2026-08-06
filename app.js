@@ -205,10 +205,16 @@ function extractRowsFromWorkbook(workbook) {
 // this same filename — the app doesn't need to know the dated original name.
 const REPO_WORKBOOK_FILE = "deck-strength.xlsx";
 
-// Rows already logged in Game Log Season 3, read fresh from the workbook on
-// every sync. Populated by syncFromRepoWorkbook; used by the Games to
-// Update tab to figure out which playgroup.gg games are missing, and to
-// recompute a player's full Player Adjusted Win Rate with a new game added.
+// The one place this app needs to know which season is current. Update this
+// (and nothing else in this file) when deck-strength.xlsx rolls to a new
+// Game Log tab -- see scripts/season_rollover.py.
+const CURRENT_SEASON_SHEET = "Game Log Season 3";
+
+// Rows already logged in the current season's Game Log tab, read fresh from
+// the workbook on every sync. Populated by syncFromRepoWorkbook; used by the
+// Games to Update tab to figure out which playgroup.gg games are missing,
+// and to recompute a player's full Player Adjusted Win Rate with a new game
+// added.
 let gameLogSeason3Rows = [];
 
 function extractGameLogFromWorkbook(workbook, sheetName) {
@@ -267,7 +273,7 @@ async function syncFromRepoWorkbook() {
       statusEl.textContent = `Synced from ${REPO_WORKBOOK_FILE} (${players.length} players, ${deckCount} decks; ${podPlayers.length} shown in Pod Validator).`;
     }
 
-    gameLogSeason3Rows = extractGameLogFromWorkbook(workbook, "Game Log Season 3");
+    gameLogSeason3Rows = extractGameLogFromWorkbook(workbook, CURRENT_SEASON_SHEET);
     renderGamesToUpdate();
     loadWinRates();
   } catch (err) {
@@ -693,7 +699,7 @@ async function loadWinRates() {
         adjTd.textContent = `${(adj.B * 100).toFixed(3)}% (${adj.wins}-${adj.losses})`;
       } else {
         adjTd.className += " muted";
-        adjTd.innerHTML = `<span class="na">No games logged in Game Log Season 3</span>`;
+        adjTd.innerHTML = `<span class="na">No games logged in ${CURRENT_SEASON_SHEET}</span>`;
       }
 
       tr.appendChild(nameTd);
@@ -710,7 +716,7 @@ async function loadWinRates() {
     noteEl.innerHTML = "";
     const note = document.createElement("span");
     note.className = "note-line";
-    note.textContent = `Scoped to the active league (${data.league || "unknown"}). Player Adjusted Win Rate is computed live from the spreadsheet's Game Log Season 3.`;
+    note.textContent = `Scoped to the active league (${data.league || "unknown"}). Player Adjusted Win Rate is computed live from the spreadsheet's ${CURRENT_SEASON_SHEET}.`;
     noteEl.appendChild(note);
   } catch (err) {
     statusEl.textContent = `Couldn't load live win rates (${err.message}).`;
@@ -741,9 +747,9 @@ async function loadPlaygroupGames() {
   }
 }
 
-// Same game if the same set of tracked players appears in a Game Log
-// Season 3 game number, within a day of the playgroup.gg timestamp
-// (playgroup.gg logs in UTC+2; the sheet's date can land a day off).
+// Same game if the same set of tracked players appears under a game number
+// in the current season's Game Log tab, within a day of the playgroup.gg
+// timestamp (playgroup.gg logs in UTC+2; the sheet's date can land a day off).
 function findLoggedMatch(pgGame) {
   const pgPlayers = new Set(pgGame.participants.map(p => p.player));
   const byGameNum = {};
@@ -1035,7 +1041,7 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
 
   const hint = document.createElement("p");
   hint.className = "hint";
-  hint.textContent = `Row order for pasting into Game Log Season 3: Game Date, Game #, Player Name, Commander, Commander Strength, Game Result, Place, Pod Size, Knockouts, Adjusted Pod Size Win/Loss Score, Knockout Score, Deck Strength Comparison Differential, Win Probability based on Deck Strength, Player Score, Normalized Player Score, TOV, Normalized TOV, Pop-Off, Disruptions, Successful Recoveries, Deck Resilience Score, Games Clearly Behind, Current Deck Bracket, Game Calculated Deck Strength. Suggested next Game # is ${nextGameNum} — check it doesn't collide if you're filling in more than one game.`;
+  hint.textContent = `Row order for pasting into ${CURRENT_SEASON_SHEET}: Game Date, Game #, Player Name, Commander, Commander Strength, Game Result, Place, Pod Size, Knockouts, Adjusted Pod Size Win/Loss Score, Knockout Score, Deck Strength Comparison Differential, Win Probability based on Deck Strength, Player Score, Normalized Player Score, TOV, Normalized TOV, Pop-Off, Disruptions, Successful Recoveries, Deck Resilience Score, Games Clearly Behind, Current Deck Bracket, Game Calculated Deck Strength. Suggested next Game # is ${nextGameNum} — check it doesn't collide if you're filling in more than one game.`;
   resultsEl.appendChild(hint);
 
   const submitBtn = document.createElement("button");
@@ -1096,6 +1102,11 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
 }
 
 // ---------- init ----------
+
+const gtuIntroEl = document.getElementById("gtu-intro");
+if (gtuIntroEl) {
+  gtuIntroEl.textContent = `Games from playgroup.gg that aren't in the spreadsheet's ${CURRENT_SEASON_SHEET} yet. Fill in what playgroup.gg can't supply, then copy the finished row(s) into the real Game Log — this app never edits deck-strength.xlsx itself.`;
+}
 
 initPlayerCountSelect();
 syncFromRepoWorkbook();

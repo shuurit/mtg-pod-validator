@@ -31,10 +31,12 @@ import sys
 import zipfile
 from pathlib import Path
 
+from season_config import CURRENT_SEASON_SHEET
+
 XLSX_PATH = Path(__file__).parent.parent / "deck-strength.xlsx"
 CDS_SHEET_FILE = "xl/worksheets/sheet4.xml"  # Current Deck Strength
 DWR_SHEET_FILE = "xl/worksheets/sheet5.xml"  # Deck Win Rates
-LOG_SHEET = "Game Log Season 3"
+LOG_SHEET = CURRENT_SEASON_SHEET
 LOG_MAX_ROW = 1000
 
 ROW_RE = re.compile(r'<row r="(\d+)"([^>]*)>(.*?)</row>', re.DOTALL)
