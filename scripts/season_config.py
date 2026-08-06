@@ -5,4 +5,4 @@ this single constant when deck-strength.xlsx rolls to a new Game Log tab
 import it, so nothing drifts out of sync with the others or with app.js's
 own CURRENT_SEASON_SHEET constant.
 """
-CURRENT_SEASON_SHEET = "Game Log Season 4"
+CURRENT_SEASON_SHEET = "Game Log Season 3"

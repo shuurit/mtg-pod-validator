@@ -208,7 +208,7 @@ const REPO_WORKBOOK_FILE = "deck-strength.xlsx";
 // The one place this app needs to know which season is current. Update this
 // (and nothing else in this file) when deck-strength.xlsx rolls to a new
 // Game Log tab -- see scripts/season_rollover.py.
-const CURRENT_SEASON_SHEET = "Game Log Season 4";
+const CURRENT_SEASON_SHEET = "Game Log Season 3";
 
 // Rows already logged in the current season's Game Log tab, read fresh from
 // the workbook on every sync. Populated by syncFromRepoWorkbook; used by the
