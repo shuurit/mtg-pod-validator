@@ -16,6 +16,9 @@
   --bad: #b3312f;
   --bad-bg: #fbeaea;
   --bad-border: #f0c6c5;
+  --warn: #b5720f;
+  --warn-bg: #fdf1de;
+  --warn-border: #f0d5a8;
   --shadow-sm: 0 1px 2px rgba(32, 26, 12, 0.05);
   --shadow-md: 0 10px 30px -14px rgba(32, 26, 12, 0.22);
   --radius-lg: 16px;
@@ -42,6 +45,9 @@
     --bad: #ff9b96;
     --bad-bg: #33191b;
     --bad-border: #5c2a2a;
+    --warn: #ffc266;
+    --warn-bg: #362510;
+    --warn-border: #5c421c;
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
     --shadow-md: 0 14px 36px -16px rgba(0, 0, 0, 0.65);
   }
@@ -225,6 +231,15 @@ button.primary:hover {
   color: var(--accent-ink);
 }
 
+/* Prompts a re-check after a suggestion chip swapped a deck in. */
+@keyframes recheck-glow {
+  0%, 100% { box-shadow: 0 6px 16px -8px var(--accent), 0 0 0 0 var(--warn-border); }
+  50% { box-shadow: 0 6px 16px -8px var(--accent), 0 0 0 6px transparent, 0 0 16px 3px var(--warn); }
+}
+button.primary.glow {
+  animation: recheck-glow 1.4s ease-in-out infinite;
+}
+
 select, input[type="number"], input[type="text"] {
   font-size: 0.9rem;
   padding: 7px 9px;
@@ -393,6 +408,14 @@ td.num {
 
 .result-row.ok { background: var(--good-bg); border-color: var(--good-border); }
 .result-row.out { background: var(--bad-bg); border-color: var(--bad-border); }
+
+/* A suggestion chip was clicked for this row -- the numbers shown are now
+   stale until Check Deck Power Spread runs again. */
+.result-row.pending-recheck {
+  background: var(--warn-bg);
+  border-color: var(--warn-border);
+}
+.result-row.pending-recheck .power { color: var(--warn); }
 
 .result-row .name {
   font-weight: 600;

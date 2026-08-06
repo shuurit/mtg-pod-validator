@@ -93,16 +93,16 @@ const DEFAULT_ROSTER = [
   ]},
 ];
 
-// Which tracked players show up in Pod Validator (Games to Update and
-// Player Win Rates still show everyone -- this only narrows the pod-builder
-// UI, per the "only playgroup-linked players" cleanup). Seeded from the
-// hardcoded list as a fallback for the moment before the Worker's first
-// response arrives; updated live from known_players once it does, so
-// relay.js's USERNAME_TO_PLAYER is the only place a new member needs adding.
+// Which tracked players show up in Pod Validator and Player Win Rates
+// (players with no playgroup.gg account, like Kristy/Joseph, are filtered
+// out of both). Seeded from the hardcoded list as a fallback for the moment
+// before the Worker's first response arrives; updated live from
+// known_players once it does, so relay.js's USERNAME_TO_PLAYER is the only
+// place a new member needs adding.
 let knownPlaygroupPlayers = new Set(PLAYERS_WITH_PLAYGROUP_ACCOUNT);
 
-let players = []; // everyone in Current Deck Strength (used by Player Win Rates)
-let podPlayers = []; // players filtered to knownPlaygroupPlayers (used by Pod Validator)
+let players = []; // everyone in Current Deck Strength, unfiltered
+let podPlayers = []; // players filtered to knownPlaygroupPlayers -- used by Pod Validator and Player Win Rates
 let podCount = 4;
 let podSelections = []; // { playerId, deckId } per slot
 let expandedPlayerIds = new Set(); // player blocks currently showing their deck table
@@ -282,7 +282,7 @@ async function syncFromRepoWorkbook() {
 // ---------- players/decks display (read-only) ----------
 
 function formatPower(power) {
-  return power.toFixed(3);
+  return power.toFixed(1);
 }
 
 function renderPlayersTable() {
@@ -507,6 +507,7 @@ function suggestAlternates(entry, evaluatedEntries) {
 function runValidation() {
   const resultsSection = document.getElementById("results-section");
   const resultsDiv = document.getElementById("results");
+  document.getElementById("validate-btn").classList.remove("glow");
   resultsDiv.innerHTML = "";
   resultsSection.hidden = false;
 
@@ -549,6 +550,7 @@ function runValidation() {
   for (const entry of evaluated) {
     const row = document.createElement("div");
     row.className = "result-row " + (entry.compatible ? "ok" : "out");
+    row.dataset.playerId = entry.playerId;
 
     const name = document.createElement("span");
     name.className = "name";
@@ -582,6 +584,9 @@ function runValidation() {
             if (!slot) return;
             slot.deckId = alt.id;
             renderPodSlots();
+            const staleRow = resultsDiv.querySelector(`.result-row[data-player-id="${entry.playerId}"]`);
+            if (staleRow) staleRow.classList.add("pending-recheck");
+            document.getElementById("validate-btn").classList.add("glow");
           });
           box.appendChild(chip);
         }
@@ -662,7 +667,7 @@ async function loadWinRates() {
     `;
     const tbody = document.createElement("tbody");
 
-    for (const player of players) {
+    for (const player of podPlayers) {
       const name = player.name;
       const tr = document.createElement("tr");
 
@@ -674,13 +679,10 @@ async function loadWinRates() {
       const t = tally[name];
       if (t && (t.wins + t.losses) > 0) {
         const pct = (t.wins / (t.wins + t.losses)) * 100;
-        pgTd.textContent = `${pct.toFixed(1)}% (${t.wins}-${t.losses})`;
+        pgTd.textContent = `${pct.toFixed(3)}% (${t.wins}-${t.losses})`;
       } else {
         pgTd.className += " muted";
-        const note = knownPlaygroupPlayers.has(name)
-          ? "No games in the active league yet"
-          : "No playgroup.gg account in this playgroup";
-        pgTd.innerHTML = `<span class="na">${note}</span>`;
+        pgTd.innerHTML = `<span class="na">No games in the active league yet</span>`;
       }
 
       const adjTd = document.createElement("td");
@@ -688,7 +690,7 @@ async function loadWinRates() {
       const rows = gameLogSeason3Rows.filter(r => r.player === name && typeof r.J === "number");
       if (rows.length > 0) {
         const adj = computePlayerAdjustedWinRate(rows);
-        adjTd.textContent = `${(adj.B * 100).toFixed(1)}% (${adj.wins}-${adj.losses})`;
+        adjTd.textContent = `${(adj.B * 100).toFixed(3)}% (${adj.wins}-${adj.losses})`;
       } else {
         adjTd.className += " muted";
         adjTd.innerHTML = `<span class="na">No games logged in Game Log Season 3</span>`;
@@ -1080,7 +1082,7 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
           throw new Error(body.error || `HTTP ${res.status}`);
         }
         submitBtn.textContent = "Submitted ✓";
-        statusEl.textContent = "GitHub Actions is updating the spreadsheet now — usually takes 1-3 minutes. Refresh this tab after that to see it reflected.";
+        statusEl.textContent = "GitHub Actions is updating the spreadsheet now — usually takes 1-3 minutes. This page checks for updates automatically, no need to refresh.";
       } catch (err) {
         submitBtn.disabled = false;
         submitBtn.textContent = "Submit to Spreadsheet";
@@ -1100,3 +1102,13 @@ syncFromRepoWorkbook();
 initTabs();
 loadWinRates();
 loadPlaygroupGames();
+
+// Keeps Player Win Rates (and everything else derived from the sheet) fresh
+// without a manual reload -- syncFromRepoWorkbook re-fetches deck-strength.xlsx
+// and re-runs loadWinRates() as part of it. Paused while the tab isn't
+// visible so it doesn't do pointless work in the background.
+const AUTO_REFRESH_INTERVAL_MS = 60000;
+setInterval(() => {
+  if (document.hidden) return;
+  syncFromRepoWorkbook();
+}, AUTO_REFRESH_INTERVAL_MS);
