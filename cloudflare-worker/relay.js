@@ -186,14 +186,20 @@ async function computePlaygroupGames(env) {
   // Commander names aren't in the games/participations payload, only on
   // the deck itself -- fetch details just for decks that actually appear
   // in an active-league game (a much smaller set than "every deck ever").
+  // Hard-capped: fixed overhead so far is ~9 calls (me + playgroups + games
+  // + up to 6 samples), so this can safely use most of what's left of the
+  // 50-subrequest budget. Anything beyond the cap just falls back to
+  // showing the deck's nickname instead of its real commander name.
+  const MAX_DECK_DETAIL_CALLS = 35;
   const activeDeckIds = new Set();
   for (const g of activeGames) {
     for (const p of g.participations) {
       if (p.deck_id) activeDeckIds.add(p.deck_id);
     }
   }
+  const deckIdsToLookUp = [...activeDeckIds].slice(0, MAX_DECK_DETAIL_CALLS);
   const deckCommander = {};
-  await Promise.all([...activeDeckIds].map(async deckId => {
+  await Promise.all(deckIdsToLookUp.map(async deckId => {
     const res = await pgFetch(`/decks/${deckId}`, env);
     if (!res.ok) return;
     const deck = await res.json();
@@ -232,6 +238,15 @@ async function computePlaygroupGames(env) {
     league: activeLeague.name,
     note: "pod_size counts only tracked spreadsheet players (matches how the Game Log formulas treat pod size -- every slot needs a Commander Strength value). See per-game \"note\" if untracked participants were excluded.",
     games,
+    debug: {
+      all_time_games: allGames.length,
+      sample_decks_checked: sampleDeckIds.length,
+      cutoff_date: cutoffDate,
+      active_games: activeGames.length,
+      active_unique_decks: activeDeckIds.size,
+      deck_detail_calls_made: deckIdsToLookUp.length,
+      approx_subrequests: 2 + 1 + sampleDeckIds.length + deckIdsToLookUp.length,
+    },
   };
 }
 
