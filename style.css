@@ -163,20 +163,6 @@ header h1 {
   font-size: 0.92rem;
 }
 
-.import-box label {
-  display: block;
-  font-size: 0.85rem;
-  color: var(--muted);
-  margin-bottom: 7px;
-}
-
-.import-box code {
-  background: var(--bg-accent);
-  padding: 1px 6px;
-  border-radius: 5px;
-  font-size: 0.85em;
-}
-
 textarea {
   width: 100%;
   font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
@@ -237,22 +223,6 @@ button.primary:hover {
   background: var(--accent-strong);
   border-color: var(--accent-strong);
   color: var(--accent-ink);
-}
-
-.file-btn {
-  border: 1px solid var(--border);
-  padding: 9px 16px;
-  border-radius: var(--radius-sm);
-  font-size: 0.9rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: border-color 0.15s ease, color 0.15s ease;
-}
-.file-btn:hover { border-color: var(--accent); color: var(--accent); }
-
-.msg {
-  font-size: 0.85rem;
-  color: var(--muted);
 }
 
 select, input[type="number"], input[type="text"] {
@@ -340,18 +310,11 @@ tbody tr:hover {
 }
 .deck-count:hover { color: var(--accent); }
 
-.player-name-input {
+.player-name-display {
   font-weight: 700;
   font-size: 1.02rem;
   color: var(--ink);
-  border: 1px solid transparent;
-  background: transparent;
   padding: 3px 6px;
-  border-radius: 6px;
-}
-.player-name-input:hover, .player-name-input:focus {
-  border-color: var(--border);
-  background: var(--bg-accent);
 }
 
 .icon-btn {
@@ -364,8 +327,8 @@ tbody tr:hover {
 }
 .icon-btn:hover { color: var(--bad); background: var(--bad-bg); }
 
-.power-input {
-  width: 74px;
+td.num {
+  text-align: right;
   font-variant-numeric: tabular-nums;
 }
 
@@ -585,7 +548,7 @@ tbody tr:hover {
   }
 
   /* Same shrink issue on the player row header — let it wrap instead
-     of clipping the Remove button off-screen. */
+     of clipping content off-screen. */
   .player-block-header {
     flex-wrap: wrap;
     row-gap: 8px;
@@ -596,7 +559,7 @@ tbody tr:hover {
     min-width: 0;
   }
 
-  .player-name-input {
+  .player-name-display {
     flex: 1 1 auto;
     min-width: 0;
   }

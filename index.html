@@ -22,31 +22,10 @@
   <div id="tab-pod" class="tab-panel">
     <section class="card" id="manage-section">
       <h2>Players &amp; Decks</h2>
-      <p class="hint">Import a list, or add players/decks manually. Data is saved in this browser only.</p>
+      <p class="hint">Read-only — synced live from deck-strength.xlsx's Current Deck Strength tab. Only players with a playgroup.gg account in this playgroup are shown here.</p>
       <p class="hint" id="sync-status">Loading latest data from deck-strength.xlsx…</p>
 
-      <div class="import-box">
-        <label for="csv-input">Import (CSV: <code>PlayerName,DeckName,Power</code> — one per line)</label>
-        <textarea id="csv-input" rows="4" placeholder="Alice,Atraxa Superfriends,3.3
-Alice,Mono Red Aggro,2.1
-Bob,Edgar Markov,2.5
-Bob,Meren Value,3.0"></textarea>
-        <div class="row">
-          <button id="import-btn" class="primary">Import</button>
-          <label class="file-btn">
-            Import from file (.csv or .xlsx)
-            <input type="file" id="csv-file" accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
-          </label>
-          <span id="import-msg" class="msg"></span>
-        </div>
-        <p class="hint">.xlsx files are read from their "Current Deck Strength" tab.</p>
-      </div>
-
       <div id="players-table"></div>
-
-      <div class="row">
-        <button id="add-player-btn">+ Add Player</button>
-      </div>
     </section>
 
     <section class="card" id="pod-section">

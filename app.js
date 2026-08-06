@@ -1,4 +1,3 @@
-const STORAGE_KEY = "mtg-pod-validator-players";
 const RANGE_TOLERANCE = 1; // max power spread allowed within a pod
 const PLAYGROUP_URL = "https://playgroup.gg/tracker";
 
@@ -11,14 +10,15 @@ const RELAY_BASE_URL = "https://mtg-pod-validator-relay.mattdomi18.workers.dev";
 const GAME_SUBMIT_RELAY_URL = RELAY_BASE_URL + "/";
 const PLAYGROUP_GAMES_RELAY_URL = RELAY_BASE_URL + "/playgroup-games";
 
-// Players known to have a playgroup.gg account in this playgroup (matches
-// the Worker's own USERNAME_TO_PLAYER map). Kristy and Joseph don't have
-// one, so they never appear in the live games data at all.
+// Fallback for knownPlaygroupPlayers below, used only until the Worker's
+// first response arrives. relay.js's USERNAME_TO_PLAYER is the real source
+// of truth -- keep this roughly in sync, but a brand-new player will still
+// show up correctly once the live known_players field loads even if this
+// list is stale.
 const PLAYERS_WITH_PLAYGROUP_ACCOUNT = ["Becca", "Manny", "Mateo", "Ryan", "Michelle", "Red"];
 
-// Default roster — the group's real players/decks/power ratings. Used to
-// seed local storage the first time the app runs in a browser; after that,
-// whatever's in local storage (including edits) takes over.
+// Fallback roster shown only if deck-strength.xlsx fails to load at all
+// (e.g. offline). Real data always comes from Current Deck Strength.
 const DEFAULT_ROSTER = [
   { name: "Becca", decks: [
     ["Ms. Bumbleflower", 2.4],
@@ -93,126 +93,70 @@ const DEFAULT_ROSTER = [
   ]},
 ];
 
-let players = loadPlayers();
+// Which tracked players show up in Pod Validator (Games to Update and
+// Player Win Rates still show everyone -- this only narrows the pod-builder
+// UI, per the "only playgroup-linked players" cleanup). Seeded from the
+// hardcoded list as a fallback for the moment before the Worker's first
+// response arrives; updated live from known_players once it does, so
+// relay.js's USERNAME_TO_PLAYER is the only place a new member needs adding.
+let knownPlaygroupPlayers = new Set(PLAYERS_WITH_PLAYGROUP_ACCOUNT);
+
+let players = []; // everyone in Current Deck Strength (used by Player Win Rates)
+let podPlayers = []; // players filtered to knownPlaygroupPlayers (used by Pod Validator)
 let podCount = 4;
 let podSelections = []; // { playerId, deckId } per slot
 let expandedPlayerIds = new Set(); // player blocks currently showing their deck table
 
-// ---------- persistence ----------
+// ---------- deriving players/decks from source data ----------
+// Current Deck Strength (deck-strength.xlsx) is the only source for this --
+// nothing in the UI edits it. IDs are derived from the name text itself
+// (not random) so a re-sync doesn't invalidate pod selections already made
+// in this session.
 
-function buildDefaultPlayers() {
-  return DEFAULT_ROSTER.map(p => ({
-    id: uid(),
-    name: p.name,
-    decks: p.decks.map(([name, power]) => ({ id: uid(), name, power })),
-  }));
+function slugify(s) {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-+|-+$)/g, "");
 }
 
-function getDefaultPlayer(name) {
-  return DEFAULT_ROSTER.find(p => p.name.toLowerCase() === name.toLowerCase());
+function rosterToRows(roster) {
+  return roster.flatMap(p => p.decks.map(([deck, power]) => ({ name: p.name, deck, power })));
 }
 
-function getMissingPlayers() {
-  return DEFAULT_ROSTER.filter(
-    dp => !players.some(p => p.name.toLowerCase() === dp.name.toLowerCase())
-  );
-}
-
-function getMissingDecksForPlayer(player) {
-  const def = getDefaultPlayer(player.name);
-  if (!def) return [];
-  return def.decks.filter(
-    ([dname]) => !player.decks.some(d => d.name.toLowerCase() === dname.toLowerCase())
-  );
-}
-
-function loadPlayers() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch {
-    // fall through to default roster
-  }
-  const seeded = buildDefaultPlayers();
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(seeded));
-  return seeded;
-}
-
-function savePlayers() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(players));
-}
-
-function uid() {
-  return Math.random().toString(36).slice(2, 10);
-}
-
-// ---------- CSV import ----------
-
-// Splits one line on commas or tabs, respecting "quoted, fields" so deck
-// names like `"Aminatou, Veil Piercer"` survive intact.
-function splitDelimitedLine(line) {
-  const delimiter = line.includes("\t") ? "\t" : ",";
-  const fields = [];
-  let cur = "";
-  let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (inQuotes) {
-      if (ch === '"') {
-        if (line[i + 1] === '"') { cur += '"'; i++; }
-        else inQuotes = false;
-      } else {
-        cur += ch;
-      }
-    } else if (ch === '"') {
-      inQuotes = true;
-    } else if (ch === delimiter) {
-      fields.push(cur.trim());
-      cur = "";
-    } else {
-      cur += ch;
-    }
-  }
-  fields.push(cur.trim());
-  return fields;
-}
-
-function parseCSV(text) {
-  const lines = text.split("\n").map(l => l.replace(/\r$/, "")).filter(l => l.trim());
-  const rows = [];
-  for (const line of lines) {
-    const parts = splitDelimitedLine(line);
-    if (parts.length < 3) continue;
-    const [name, deck, powerStr] = parts;
-    if (/^player\s*name$/i.test(name) || /^name$/i.test(name)) continue; // skip header row
-    const power = parseFloat(powerStr);
-    if (!name || !deck || Number.isNaN(power)) continue;
-    rows.push({ name, deck, power });
-  }
-  return rows;
-}
-
-function importRows(rows) {
-  let addedDecks = 0;
-  let addedPlayers = 0;
+function rowsToPlayers(rows) {
+  const byName = new Map();
   for (const row of rows) {
-    let player = players.find(p => p.name.toLowerCase() === row.name.toLowerCase());
-    if (!player) {
-      player = { id: uid(), name: row.name, decks: [] };
-      players.push(player);
-      addedPlayers++;
-    }
-    let deck = player.decks.find(d => d.name.toLowerCase() === row.deck.toLowerCase());
-    if (deck) {
-      deck.power = row.power;
-    } else {
-      player.decks.push({ id: uid(), name: row.deck, power: row.power });
-      addedDecks++;
-    }
+    if (!byName.has(row.name)) byName.set(row.name, { id: slugify(row.name), name: row.name, decks: [] });
+    const player = byName.get(row.name);
+    player.decks.push({ id: `${player.id}::${slugify(row.deck)}`, name: row.deck, power: row.power });
   }
-  savePlayers();
-  return { addedPlayers, addedDecks };
+  return [...byName.values()];
 }
+
+// Called once with the DEFAULT_ROSTER fallback (so the UI isn't empty
+// before the first fetch resolves), then again with real rows every time
+// deck-strength.xlsx syncs successfully.
+function applyDeckStrengthRows(rows) {
+  players = rowsToPlayers(rows);
+  podPlayers = players.filter(p => knownPlaygroupPlayers.has(p.name));
+  renderPlayersTable();
+  renderPodSlots();
+}
+
+// Picks up known_players from a /playgroup-games response, if it changed
+// the set of who's shown in Pod Validator (e.g. a new player was added to
+// relay.js's USERNAME_TO_PLAYER since this page loaded).
+function applyKnownPlayers(data) {
+  if (!Array.isArray(data.known_players) || data.known_players.length === 0) return;
+  const incoming = new Set(data.known_players);
+  const unchanged = incoming.size === knownPlaygroupPlayers.size &&
+    [...incoming].every(n => knownPlaygroupPlayers.has(n));
+  if (unchanged) return;
+  knownPlaygroupPlayers = incoming;
+  podPlayers = players.filter(p => knownPlaygroupPlayers.has(p.name));
+  renderPlayersTable();
+  renderPodSlots();
+}
+
+applyDeckStrengthRows(rosterToRows(DEFAULT_ROSTER));
 
 // ---------- XLSX import ----------
 
@@ -317,11 +261,10 @@ async function syncFromRepoWorkbook() {
     const rows = extractRowsFromWorkbook(workbook);
     if (rows.length === 0) throw new Error("no decks found in the sheet");
 
-    const { addedPlayers, addedDecks } = importRows(rows);
-    renderPlayersTable();
-    renderPodSlots();
+    applyDeckStrengthRows(rows);
     if (statusEl) {
-      statusEl.textContent = `Synced from ${REPO_WORKBOOK_FILE} (${addedPlayers} new player(s), ${addedDecks} deck(s) added/updated).`;
+      const deckCount = players.reduce((n, p) => n + p.decks.length, 0);
+      statusEl.textContent = `Synced from ${REPO_WORKBOOK_FILE} (${players.length} players, ${deckCount} decks; ${podPlayers.length} shown in Pod Validator).`;
     }
 
     gameLogSeason3Rows = extractGameLogFromWorkbook(workbook, "Game Log Season 3");
@@ -336,21 +279,25 @@ async function syncFromRepoWorkbook() {
   }
 }
 
-// ---------- players/decks management UI ----------
+// ---------- players/decks display (read-only) ----------
+
+function formatPower(power) {
+  return power.toFixed(3);
+}
 
 function renderPlayersTable() {
   const container = document.getElementById("players-table");
   container.innerHTML = "";
 
-  if (players.length === 0) {
+  if (podPlayers.length === 0) {
     const empty = document.createElement("p");
     empty.className = "hint";
-    empty.textContent = "No players yet. Import a list above or add one manually.";
+    empty.textContent = "No playgroup-linked players found in Current Deck Strength yet.";
     container.appendChild(empty);
     return;
   }
 
-  for (const player of players) {
+  for (const player of podPlayers) {
     const isExpanded = expandedPlayerIds.has(player.id);
 
     const block = document.createElement("div");
@@ -369,15 +316,9 @@ function renderPlayersTable() {
       renderPlayersTable();
     });
 
-    const nameInput = document.createElement("input");
-    nameInput.type = "text";
-    nameInput.className = "player-name-input";
-    nameInput.value = player.name;
-    nameInput.addEventListener("change", () => {
-      player.name = nameInput.value.trim() || player.name;
-      savePlayers();
-      renderPodSlots();
-    });
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "player-name-display";
+    nameSpan.textContent = player.name;
 
     const deckCount = document.createElement("span");
     deckCount.className = "deck-count";
@@ -388,25 +329,13 @@ function renderPlayersTable() {
       renderPlayersTable();
     });
 
-    const removePlayerBtn = document.createElement("button");
-    removePlayerBtn.className = "icon-btn";
-    removePlayerBtn.textContent = "Remove player";
-    removePlayerBtn.addEventListener("click", () => {
-      players = players.filter(p => p.id !== player.id);
-      expandedPlayerIds.delete(player.id);
-      savePlayers();
-      renderPlayersTable();
-      renderPodSlots();
-    });
-
     const headerLeft = document.createElement("div");
     headerLeft.className = "player-block-header-left";
     headerLeft.appendChild(toggleBtn);
-    headerLeft.appendChild(nameInput);
+    headerLeft.appendChild(nameSpan);
     headerLeft.appendChild(deckCount);
 
     header.appendChild(headerLeft);
-    header.appendChild(removePlayerBtn);
     block.appendChild(header);
 
     if (!isExpanded) {
@@ -416,7 +345,7 @@ function renderPlayersTable() {
 
     const table = document.createElement("table");
     const thead = document.createElement("thead");
-    thead.innerHTML = "<tr><th>Deck</th><th>Power</th><th></th></tr>";
+    thead.innerHTML = "<tr><th>Deck</th><th>Power</th></tr>";
     table.appendChild(thead);
 
     const tbody = document.createElement("tbody");
@@ -424,183 +353,21 @@ function renderPlayersTable() {
       const tr = document.createElement("tr");
 
       const nameTd = document.createElement("td");
-      const deckNameInput = document.createElement("input");
-      deckNameInput.type = "text";
-      deckNameInput.value = deck.name;
-      deckNameInput.addEventListener("change", () => {
-        deck.name = deckNameInput.value.trim() || deck.name;
-        savePlayers();
-        renderPodSlots();
-      });
-      nameTd.appendChild(deckNameInput);
+      nameTd.textContent = deck.name;
 
       const powerTd = document.createElement("td");
-      const powerInput = document.createElement("input");
-      powerInput.type = "number";
-      powerInput.step = "0.1";
-      powerInput.min = "0";
-      powerInput.max = "5";
-      powerInput.className = "power-input";
-      powerInput.value = deck.power;
-      powerInput.addEventListener("change", () => {
-        const v = parseFloat(powerInput.value);
-        if (!Number.isNaN(v)) deck.power = Math.min(5, Math.max(0, v));
-        powerInput.value = deck.power;
-        savePlayers();
-      });
-      powerTd.appendChild(powerInput);
-
-      const actionTd = document.createElement("td");
-      const delBtn = document.createElement("button");
-      delBtn.className = "icon-btn";
-      delBtn.textContent = "✕";
-      delBtn.addEventListener("click", () => {
-        player.decks = player.decks.filter(d => d.id !== deck.id);
-        savePlayers();
-        renderPlayersTable();
-        renderPodSlots();
-      });
-      actionTd.appendChild(delBtn);
+      powerTd.className = "num";
+      powerTd.textContent = formatPower(deck.power);
 
       tr.appendChild(nameTd);
       tr.appendChild(powerTd);
-      tr.appendChild(actionTd);
       tbody.appendChild(tr);
     }
     table.appendChild(tbody);
     block.appendChild(table);
-
-    const deckActions = document.createElement("div");
-    deckActions.className = "row";
-
-    const addDeckBtn = document.createElement("button");
-    addDeckBtn.textContent = "+ Add Deck";
-    addDeckBtn.addEventListener("click", () => {
-      player.decks.push({ id: uid(), name: "New Deck", power: 3.0 });
-      savePlayers();
-      renderPlayersTable();
-    });
-    deckActions.appendChild(addDeckBtn);
-
-    const missingDecks = getMissingDecksForPlayer(player);
-    if (missingDecks.length > 0) {
-      const restoreSelect = document.createElement("select");
-      for (const [dname, power] of missingDecks) {
-        const opt = document.createElement("option");
-        opt.value = dname;
-        opt.textContent = `${dname} (${power.toFixed(1)})`;
-        restoreSelect.appendChild(opt);
-      }
-      const restoreDeckBtn = document.createElement("button");
-      restoreDeckBtn.textContent = "Restore Deck";
-      restoreDeckBtn.addEventListener("click", () => {
-        const [dname, power] = missingDecks.find(([n]) => n === restoreSelect.value);
-        player.decks.push({ id: uid(), name: dname, power });
-        savePlayers();
-        renderPlayersTable();
-        renderPodSlots();
-      });
-      deckActions.appendChild(restoreSelect);
-      deckActions.appendChild(restoreDeckBtn);
-    }
-
-    block.appendChild(deckActions);
     container.appendChild(block);
   }
-
-  const missingPlayers = getMissingPlayers();
-  if (missingPlayers.length > 0) {
-    const restoreBox = document.createElement("div");
-    restoreBox.className = "row";
-
-    const label = document.createElement("span");
-    label.className = "hint";
-    label.textContent = "Restore removed player:";
-
-    const restoreSelect = document.createElement("select");
-    for (const dp of missingPlayers) {
-      const opt = document.createElement("option");
-      opt.value = dp.name;
-      opt.textContent = dp.name;
-      restoreSelect.appendChild(opt);
-    }
-
-    const restorePlayerBtn = document.createElement("button");
-    restorePlayerBtn.textContent = "Restore Player";
-    restorePlayerBtn.addEventListener("click", () => {
-      const def = getDefaultPlayer(restoreSelect.value);
-      players.push({
-        id: uid(),
-        name: def.name,
-        decks: def.decks.map(([name, power]) => ({ id: uid(), name, power })),
-      });
-      savePlayers();
-      renderPlayersTable();
-      renderPodSlots();
-    });
-
-    restoreBox.appendChild(label);
-    restoreBox.appendChild(restoreSelect);
-    restoreBox.appendChild(restorePlayerBtn);
-    container.appendChild(restoreBox);
-  }
 }
-
-document.getElementById("add-player-btn").addEventListener("click", () => {
-  players.push({ id: uid(), name: "New Player", decks: [] });
-  savePlayers();
-  renderPlayersTable();
-  renderPodSlots();
-});
-
-document.getElementById("import-btn").addEventListener("click", () => {
-  const text = document.getElementById("csv-input").value;
-  const rows = parseCSV(text);
-  const msg = document.getElementById("import-msg");
-  if (rows.length === 0) {
-    msg.textContent = "No valid rows found. Expected: PlayerName,DeckName,Power";
-    return;
-  }
-  const { addedPlayers, addedDecks } = importRows(rows);
-  msg.textContent = `Imported ${addedDecks} deck(s) across ${addedPlayers} new player(s) (existing decks updated in place).`;
-  document.getElementById("csv-input").value = "";
-  renderPlayersTable();
-  renderPodSlots();
-});
-
-document.getElementById("csv-file").addEventListener("change", (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-  const msg = document.getElementById("import-msg");
-  const isXlsx = /\.xlsx$/i.test(file.name);
-  const reader = new FileReader();
-
-  reader.onload = () => {
-    let rows;
-    try {
-      rows = isXlsx
-        ? extractRowsFromWorkbook(XLSX.read(reader.result, { type: "array" }))
-        : parseCSV(String(reader.result));
-    } catch (err) {
-      msg.textContent = `Could not read file: ${err.message}`;
-      return;
-    }
-    if (rows.length === 0) {
-      msg.textContent = isXlsx
-        ? 'No decks found under "Current Deck Strength".'
-        : "No valid rows found in file. Expected: PlayerName,DeckName,Power";
-      return;
-    }
-    const { addedPlayers, addedDecks } = importRows(rows);
-    msg.textContent = `Imported ${addedDecks} deck(s) across ${addedPlayers} new player(s) from file.`;
-    renderPlayersTable();
-    renderPodSlots();
-  };
-
-  if (isXlsx) reader.readAsArrayBuffer(file);
-  else reader.readAsText(file);
-  e.target.value = "";
-});
 
 // ---------- pod setup UI ----------
 
@@ -645,7 +412,7 @@ function renderPodSlots() {
     blankPlayerOpt.value = "";
     blankPlayerOpt.textContent = "Select player…";
     playerSelect.appendChild(blankPlayerOpt);
-    for (const p of players) {
+    for (const p of podPlayers) {
       const opt = document.createElement("option");
       opt.value = p.id;
       opt.textContent = p.name;
@@ -659,7 +426,7 @@ function renderPodSlots() {
 
     function refreshDeckOptions() {
       deckSelect.innerHTML = "";
-      const player = players.find(p => p.id === slot.playerId);
+      const player = podPlayers.find(p => p.id === slot.playerId);
       const blank = document.createElement("option");
       blank.value = "";
       blank.textContent = player ? "Select deck…" : "—";
@@ -669,7 +436,7 @@ function renderPodSlots() {
         for (const d of player.decks) {
           const opt = document.createElement("option");
           opt.value = d.id;
-          opt.textContent = `${d.name} (${d.power.toFixed(1)})`;
+          opt.textContent = `${d.name} (${formatPower(d.power)})`;
           if (d.id === slot.deckId) opt.selected = true;
           deckSelect.appendChild(opt);
         }
@@ -678,9 +445,9 @@ function renderPodSlots() {
     }
 
     function updatePowerDisplay() {
-      const player = players.find(p => p.id === slot.playerId);
+      const player = podPlayers.find(p => p.id === slot.playerId);
       const deck = player ? player.decks.find(d => d.id === slot.deckId) : null;
-      powerSpan.textContent = deck ? deck.power.toFixed(1) : "";
+      powerSpan.textContent = deck ? formatPower(deck.power) : "";
     }
 
     playerSelect.addEventListener("change", () => {
@@ -720,7 +487,7 @@ function evaluatePod(entries) {
 }
 
 function suggestAlternates(entry, evaluatedEntries) {
-  const player = players.find(p => p.id === entry.playerId);
+  const player = podPlayers.find(p => p.id === entry.playerId);
   if (!player) return [];
   // Only constrain against players who are already compatible. An
   // independently out-of-range player's current pick isn't a fixed target —
@@ -756,7 +523,7 @@ function runValidation() {
   }
 
   const entries = podSelections.map(s => {
-    const player = players.find(p => p.id === s.playerId);
+    const player = podPlayers.find(p => p.id === s.playerId);
     const deck = player.decks.find(d => d.id === s.deckId);
     return {
       playerId: player.id,
@@ -776,8 +543,8 @@ function runValidation() {
   const banner = document.createElement("div");
   banner.className = "banner " + (allInRange ? "good" : "bad");
   banner.textContent = allInRange
-    ? `All decks are within range (spread: ${spread.toFixed(1)}, ${min.toFixed(1)}–${max.toFixed(1)}).`
-    : `Spread is ${spread.toFixed(1)} — outside the ±${RANGE_TOLERANCE} target. Some decks need to change.`;
+    ? `All decks are within range (spread: ${formatPower(spread)}, ${formatPower(min)}–${formatPower(max)}).`
+    : `Spread is ${formatPower(spread)} — outside the ±${RANGE_TOLERANCE} target. Some decks need to change.`;
   resultsDiv.appendChild(banner);
 
   const evaluated = evaluatePod(entries);
@@ -792,7 +559,7 @@ function runValidation() {
 
     const power = document.createElement("span");
     power.className = "power";
-    power.textContent = entry.power.toFixed(1) + (entry.compatible ? " ✓" : " ⚠");
+    power.textContent = formatPower(entry.power) + (entry.compatible ? " ✓" : " ⚠");
 
     row.appendChild(name);
     row.appendChild(power);
@@ -811,7 +578,7 @@ function runValidation() {
         for (const alt of alts) {
           const chip = document.createElement("span");
           chip.className = "suggestion-chip";
-          chip.textContent = `${alt.name} (${alt.power.toFixed(1)})`;
+          chip.textContent = `${alt.name} (${formatPower(alt.power)})`;
           box.appendChild(chip);
         }
       }
@@ -875,6 +642,7 @@ async function loadWinRates() {
       throw new Error(body.detail || body.error || `HTTP ${res.status}`);
     }
     const data = await res.json();
+    applyKnownPlayers(data);
     const tally = tallyPlaygroupWinRates(data.games || []);
 
     const table = document.createElement("table");
@@ -905,7 +673,7 @@ async function loadWinRates() {
         pgTd.textContent = `${pct.toFixed(1)}% (${t.wins}-${t.losses})`;
       } else {
         pgTd.className += " muted";
-        const note = PLAYERS_WITH_PLAYGROUP_ACCOUNT.includes(name)
+        const note = knownPlaygroupPlayers.has(name)
           ? "No games in the active league yet"
           : "No playgroup.gg account in this playgroup";
         pgTd.innerHTML = `<span class="na">${note}</span>`;
@@ -960,6 +728,7 @@ async function loadPlaygroupGames() {
       throw new Error(body.detail || body.error || `HTTP ${res.status}`);
     }
     playgroupGamesData = await res.json();
+    applyKnownPlayers(playgroupGamesData);
     renderGamesToUpdate();
   } catch (err) {
     if (statusEl) statusEl.textContent = `Couldn't load live playgroup.gg data (${err.message}).`;
@@ -1323,8 +1092,6 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
 // ---------- init ----------
 
 initPlayerCountSelect();
-renderPlayersTable();
-renderPodSlots();
 syncFromRepoWorkbook();
 initTabs();
 loadWinRates();

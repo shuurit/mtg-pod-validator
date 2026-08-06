@@ -29,6 +29,12 @@
  *   cached the same way, with a soft expiry, since a deck's commander can
  *   change over time in a way league membership never does.
  *
+ *   USERNAME_TO_PLAYER below is the single source of truth for "which
+ *   playgroup.gg accounts map to which tracked spreadsheet player." Adding
+ *   a new player who joins the playgroup means one new line here -- the
+ *   response's known_players field carries that out to app.js, so nothing
+ *   else needs a matching code change.
+ *
  * Deploy with: wrangler deploy
  * Secrets:     wrangler secret put GITHUB_TOKEN
  *              wrangler secret put PLAYGROUP_API_KEY
@@ -297,6 +303,11 @@ async function computePlaygroupGames(env) {
     generated_at: new Date().toISOString(),
     league: activeLeague.name,
     note: "pod_size counts only tracked spreadsheet players (matches how the Game Log formulas treat pod size -- every slot needs a Commander Strength value). See per-game \"note\" if untracked participants were excluded.",
+    // USERNAME_TO_PLAYER above is the one place a new playgroup.gg member
+    // gets added -- everything downstream (app.js's Pod Validator player
+    // list, this games list, commander lookups) picks it up from here
+    // rather than keeping a second hardcoded copy of "who's tracked."
+    known_players: [...new Set(Object.values(USERNAME_TO_PLAYER))],
     games,
     debug: {
       all_time_games: allGames.length,
