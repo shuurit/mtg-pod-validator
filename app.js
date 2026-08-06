@@ -9,6 +9,8 @@ const PLAYGROUP_URL = "https://playgroup.gg/tracker";
 const RELAY_BASE_URL = "https://mtg-pod-validator-relay.mattdomi18.workers.dev";
 const GAME_SUBMIT_RELAY_URL = RELAY_BASE_URL + "/";
 const PLAYGROUP_GAMES_RELAY_URL = RELAY_BASE_URL + "/playgroup-games";
+const ROSTER_DIFF_RELAY_URL = RELAY_BASE_URL + "/roster-diff";
+const ROSTER_UPDATE_RELAY_URL = RELAY_BASE_URL + "/apply-roster-update";
 
 // Fallback for knownPlaygroupPlayers below, used only until the Worker's
 // first response arrives. relay.js's USERNAME_TO_PLAYER is the real source
@@ -126,7 +128,12 @@ function rowsToPlayers(rows) {
   for (const row of rows) {
     if (!byName.has(row.name)) byName.set(row.name, { id: slugify(row.name), name: row.name, decks: [] });
     const player = byName.get(row.name);
-    player.decks.push({ id: `${player.id}::${slugify(row.deck)}`, name: row.deck, power: row.power });
+    player.decks.push({
+      id: `${player.id}::${slugify(row.deck)}`,
+      name: row.deck,
+      power: row.power,
+      playgroupId: row.playgroupId || null,
+    });
   }
   return [...byName.values()];
 }
@@ -183,6 +190,7 @@ function extractRowsFromWorkbook(workbook) {
   for (let r = range.s.r; r <= range.e.r; r++) {
     const nameCell = sheet[XLSX.utils.encode_cell({ r, c: 0 })];
     const powerCell = sheet[XLSX.utils.encode_cell({ r, c: 1 })];
+    const idCell = sheet[XLSX.utils.encode_cell({ r, c: 4 })]; // column E: Playgroup Deck ID
     const name = nameCell && typeof nameCell.v === "string" ? nameCell.v.trim() : null;
     if (!name || name.toLowerCase() === "decks") continue;
 
@@ -194,7 +202,8 @@ function extractRowsFromWorkbook(workbook) {
 
     const power = powerCell && typeof powerCell.v === "number" ? powerCell.v : NaN;
     if (currentPlayer && Number.isFinite(power)) {
-      rows.push({ name: currentPlayer, deck: name, power });
+      const playgroupId = idCell && idCell.v != null && idCell.v !== "" ? String(idCell.v).trim() : null;
+      rows.push({ name: currentPlayer, deck: name, power, playgroupId });
     }
   }
   return rows;
@@ -773,13 +782,24 @@ function findLoggedMatch(pgGame) {
   return null;
 }
 
+// Shared by findDefaultStrength below and computeRosterDiff -- a deck name
+// or commander name reduced to its first segment, case-insensitive, so
+// small naming variations ("Ms. Bumbleflower" vs "Ms. Bumbleflower, Deck")
+// still line up.
+function normalizeCommanderName(s) {
+  return (s || "").toLowerCase().split(/[,/]/)[0].trim();
+}
+
 function findDefaultStrength(playerName, commanderName) {
   const player = players.find(p => p.name === playerName);
   if (!player) return null;
-  const norm = s => (s || "").toLowerCase().split(/[,/]/)[0].trim();
-  const target = norm(commanderName);
-  let deck = player.decks.find(d => norm(d.name) === target);
-  if (!deck) deck = player.decks.find(d => norm(d.name).startsWith(target) || target.startsWith(norm(d.name)));
+  const target = normalizeCommanderName(commanderName);
+  let deck = player.decks.find(d => normalizeCommanderName(d.name) === target);
+  if (!deck) {
+    deck = player.decks.find(d =>
+      normalizeCommanderName(d.name).startsWith(target) || target.startsWith(normalizeCommanderName(d.name))
+    );
+  }
   return deck ? deck.power : null;
 }
 
@@ -1101,6 +1121,204 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
   resultsEl.appendChild(statusEl);
 }
 
+// ---------- update the app (new playgroup members / decks) ----------
+
+let rosterDiffData = null;
+
+async function loadRosterDiff() {
+  const statusEl = document.getElementById("uta-status");
+  if (!ROSTER_DIFF_RELAY_URL) {
+    if (statusEl) statusEl.textContent = "Live playgroup.gg data not configured.";
+    return;
+  }
+  try {
+    const res = await fetch(ROSTER_DIFF_RELAY_URL, { cache: "no-store" });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || body.error || `HTTP ${res.status}`);
+    }
+    rosterDiffData = await res.json();
+    renderUpdateAppTab();
+  } catch (err) {
+    if (statusEl) statusEl.textContent = `Couldn't load live playgroup.gg data (${err.message}).`;
+  }
+}
+
+// Compares the Worker's raw playgroup.gg roster/decks against what's
+// already parsed from Current Deck Strength (the `players` array -- same
+// data source Pod Validator and Player Win Rates already use). Matches by
+// playgroup deck ID first; for rows the ID backfill hasn't reached yet,
+// falls back to the same name normalization findDefaultStrength uses, so
+// backfill completeness is never a hard requirement for correctness.
+function computeRosterDiff(data) {
+  const newPlayers = [];
+  const newDecksForExisting = [];
+
+  for (const member of data.members) {
+    const allDecks = (data.decks_by_username[member.username] || []).filter(d => !d.archived);
+    if (allDecks.length === 0) continue;
+
+    if (!member.tracked) {
+      newPlayers.push({ username: member.username, suggestedDisplayName: member.username, decks: allDecks });
+      continue;
+    }
+
+    const player = players.find(p => p.name === member.mapped_player);
+    const existingDecks = player ? player.decks : [];
+    const existingIds = new Set(existingDecks.map(d => d.playgroupId).filter(Boolean));
+    const existingNames = new Set(existingDecks.map(d => normalizeCommanderName(d.name)));
+
+    const newDecks = allDecks.filter(deck =>
+      !existingIds.has(String(deck.id)) && !existingNames.has(normalizeCommanderName(deck.commander_name))
+    );
+    if (newDecks.length > 0) {
+      newDecksForExisting.push({ player: member.mapped_player, decks: newDecks });
+    }
+  }
+
+  return { newPlayers, newDecksForExisting };
+}
+
+function deckRowHtml(deck, checkboxName, powerName) {
+  const powerValue = typeof deck.power_level === "number" ? deck.power_level.toFixed(1) : "";
+  return `
+    <tr>
+      <td><input type="checkbox" class="${checkboxName}" data-deck-id="${deck.id}" checked></td>
+      <td>${deck.commander_name}${deck.name !== deck.commander_name ? ` <span class="hint">(${deck.name})</span>` : ""}</td>
+      <td><input type="number" class="${powerName}" data-deck-id="${deck.id}" step="0.1" min="0" max="5" value="${powerValue}" placeholder="power"></td>
+    </tr>
+  `;
+}
+
+function renderUpdateAppTab() {
+  const statusEl = document.getElementById("uta-status");
+  const listEl = document.getElementById("uta-list");
+  const formAreaEl = document.getElementById("uta-form-area");
+  if (!listEl) return;
+
+  formAreaEl.innerHTML = "";
+  if (!rosterDiffData) {
+    listEl.innerHTML = "";
+    return;
+  }
+
+  const { newPlayers, newDecksForExisting } = computeRosterDiff(rosterDiffData);
+  statusEl.textContent = `Live as of ${new Date(rosterDiffData.generated_at).toLocaleTimeString()} — ${newPlayers.length} new player(s), ${newDecksForExisting.reduce((n, g) => n + g.decks.length, 0)} new deck(s) for existing players found on playgroup.gg.`;
+
+  if (newPlayers.length === 0 && newDecksForExisting.length === 0) {
+    listEl.innerHTML = '<p class="hint">Nothing new — everyone and everything tracked here matches playgroup.gg.</p>';
+    return;
+  }
+
+  listEl.innerHTML = "";
+
+  newPlayers.forEach((p, pi) => {
+    const box = document.createElement("div");
+    box.className = "uta-group";
+    box.innerHTML = `
+      <div class="uta-group-header">
+        <label>New player (playgroup.gg: <code>${p.username}</code>) — display name:
+          <input type="text" class="uta-display-name" data-player-index="${pi}" value="${p.suggestedDisplayName}">
+        </label>
+      </div>
+      <table class="uta-deck-table">
+        <thead><tr><th></th><th>Deck</th><th>Starting power</th></tr></thead>
+        <tbody>${p.decks.map(d => deckRowHtml(d, `uta-new-player-deck-${pi}`, `uta-new-player-power-${pi}`)).join("")}</tbody>
+      </table>
+    `;
+    listEl.appendChild(box);
+  });
+
+  newDecksForExisting.forEach((g, gi) => {
+    const box = document.createElement("div");
+    box.className = "uta-group";
+    box.innerHTML = `
+      <div class="uta-group-header"><strong>${g.player}</strong> — ${g.decks.length} new deck(s)</div>
+      <table class="uta-deck-table">
+        <thead><tr><th></th><th>Deck</th><th>Starting power</th></tr></thead>
+        <tbody>${g.decks.map(d => deckRowHtml(d, `uta-existing-deck-${gi}`, `uta-existing-power-${gi}`)).join("")}</tbody>
+      </table>
+    `;
+    listEl.appendChild(box);
+  });
+
+  renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting);
+}
+
+function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
+  const submitBtn = document.createElement("button");
+  submitBtn.className = "primary uta-submit-btn";
+  const statusEl = document.createElement("span");
+  statusEl.className = "uta-submit-status";
+
+  if (!ROSTER_UPDATE_RELAY_URL) {
+    submitBtn.textContent = "Add to Spreadsheet (not configured)";
+    submitBtn.disabled = true;
+  } else {
+    submitBtn.textContent = "Add to Spreadsheet";
+    submitBtn.addEventListener("click", async () => {
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Submitting...";
+      statusEl.textContent = "";
+
+      const payload = { newPlayers: [], newDecksForExisting: [] };
+
+      newPlayers.forEach((p, pi) => {
+        const displayName = document.querySelector(`.uta-display-name[data-player-index="${pi}"]`).value.trim();
+        const decks = [];
+        p.decks.forEach(d => {
+          const checked = document.querySelector(`.uta-new-player-deck-${pi}[data-deck-id="${d.id}"]`).checked;
+          if (!checked) return;
+          const power = parseFloat(document.querySelector(`.uta-new-player-power-${pi}[data-deck-id="${d.id}"]`).value);
+          if (!Number.isFinite(power)) return;
+          decks.push({ name: d.commander_name, power, playgroupDeckId: d.id });
+        });
+        if (displayName && decks.length > 0) {
+          payload.newPlayers.push({ username: p.username, displayName, decks });
+        }
+      });
+
+      newDecksForExisting.forEach((g, gi) => {
+        g.decks.forEach(d => {
+          const checked = document.querySelector(`.uta-existing-deck-${gi}[data-deck-id="${d.id}"]`).checked;
+          if (!checked) return;
+          const power = parseFloat(document.querySelector(`.uta-existing-power-${gi}[data-deck-id="${d.id}"]`).value);
+          if (!Number.isFinite(power)) return;
+          payload.newDecksForExisting.push({ player: g.player, name: d.commander_name, power, playgroupDeckId: d.id });
+        });
+      });
+
+      if (payload.newPlayers.length === 0 && payload.newDecksForExisting.length === 0) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Add to Spreadsheet";
+        statusEl.textContent = "Nothing selected (or missing a starting power) — check the boxes and power fields above.";
+        return;
+      }
+
+      try {
+        const res = await fetch(ROSTER_UPDATE_RELAY_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.error || `HTTP ${res.status}`);
+        }
+        submitBtn.textContent = "Submitted ✓";
+        statusEl.textContent = "GitHub Actions is updating the spreadsheet now — usually takes 1-3 minutes. This page checks for updates automatically, no need to refresh.";
+      } catch (err) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Add to Spreadsheet";
+        statusEl.textContent = `Submission failed: ${err.message}`;
+      }
+    });
+  }
+
+  formAreaEl.appendChild(submitBtn);
+  formAreaEl.appendChild(statusEl);
+}
+
 // ---------- init ----------
 
 const gtuIntroEl = document.getElementById("gtu-intro");
@@ -1113,16 +1331,19 @@ syncFromRepoWorkbook();
 initTabs();
 loadWinRates();
 loadPlaygroupGames();
+loadRosterDiff();
 
 // Keeps everything derived from either data source fresh without a manual
 // reload: syncFromRepoWorkbook re-fetches deck-strength.xlsx (also re-runs
 // loadWinRates as part of it), loadPlaygroupGames re-fetches the live
 // playgroup.gg games list that Games to Update depends on to notice new
-// games. Paused while the tab isn't visible so it doesn't do pointless work
-// in the background.
+// games, loadRosterDiff re-fetches the live roster/deck list that Update
+// the App depends on. Paused while the tab isn't visible so it doesn't do
+// pointless work in the background.
 const AUTO_REFRESH_INTERVAL_MS = 60000;
 setInterval(() => {
   if (document.hidden) return;
   syncFromRepoWorkbook();
   loadPlaygroupGames();
+  loadRosterDiff();
 }, AUTO_REFRESH_INTERVAL_MS);
