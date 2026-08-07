@@ -83,7 +83,6 @@ const USERNAME_TO_PLAYER = {
   "Ecthelion": "Ryan",
   "MLMyBelle": "Michelle",
   "Red": "Red",
-  "Hiccup_The_Hero": "Hiccup_The_Hero",
 };
 
 function corsHeaders() {
@@ -291,7 +290,7 @@ function deckIdsInGame(game) {
   return ids;
 }
 
-async function computePlaygroupGames(env) {
+async function computePlaygroupGames(env, forceRecheckGameId) {
   if (!env.DECK_CACHE) {
     throw new Error("DECK_CACHE KV namespace is not bound to this Worker (Settings -> Bindings)");
   }
@@ -306,8 +305,19 @@ async function computePlaygroupGames(env) {
   // A game's league membership never changes once played, so once we know
   // it we never need to ask again. Only games this cache hasn't seen yet
   // need any playgroup.gg calls at all.
+  //
+  // That "permanent" assumption breaks if a game gets classified before
+  // playgroup.gg has finished processing it -- e.g. its deck ELO history
+  // (what confirmGameIdsForDecks actually checks) can lag behind the game
+  // record itself being complete, so a check made in that window can
+  // permanently cache a wrong "not in this league" result. ?recheck=<id>
+  // clears one game's cached entry so it goes through classification again
+  // on this run, for exactly that situation.
   const classifiedKey = `classified_games:${activeLeague.id}`;
   const classified = await kvGetJson(env, classifiedKey, {});
+  if (forceRecheckGameId != null && forceRecheckGameId in classified) {
+    delete classified[forceRecheckGameId];
+  }
   const unclassifiedGames = allGames.filter(g => !(g.id in classified));
 
   const uncoveredDeckIds = new Set();
@@ -420,10 +430,12 @@ async function computePlaygroupGames(env) {
   };
 }
 
-async function handlePlaygroupGames(env, ctx) {
+async function handlePlaygroupGames(env, ctx, request) {
+  const forceRecheckGameId = new URL(request.url).searchParams.get("recheck");
+
   let data;
   try {
-    data = await computePlaygroupGames(env);
+    data = await computePlaygroupGames(env, forceRecheckGameId);
   } catch (err) {
     return jsonResponse({ error: "Failed to read playgroup.gg", detail: err.message }, 502);
   }
@@ -505,7 +517,7 @@ export default {
     const url = new URL(request.url);
 
     if (request.method === "GET" && url.pathname === "/playgroup-games") {
-      return handlePlaygroupGames(env, ctx);
+      return handlePlaygroupGames(env, ctx, request);
     }
 
     if (request.method === "GET" && url.pathname === "/roster-diff") {

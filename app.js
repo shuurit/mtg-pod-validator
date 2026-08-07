@@ -1650,17 +1650,40 @@ initTabs();
 refreshPlaygroupGames();
 loadRosterDiff();
 
-// Keeps everything derived from either data source fresh without a manual
-// reload: syncFromRepoWorkbook re-fetches deck-strength.xlsx (also re-runs
-// renderWinRatesTable as part of it), refreshPlaygroupGames re-fetches the
-// live playgroup.gg games list that both Games to Update and Player Win
-// Rates depend on, loadRosterDiff re-fetches the live roster/deck list that
-// Update the App depends on. Paused while the tab isn't visible so it
-// doesn't do pointless work in the background.
+// Re-fetches everything derived from either data source: syncFromRepoWorkbook
+// re-reads deck-strength.xlsx (also re-runs renderWinRatesTable as part of
+// it), refreshPlaygroupGames re-fetches the live playgroup.gg games list
+// that both Games to Update and Player Win Rates depend on, loadRosterDiff
+// re-fetches the live roster/deck list that Update the App depends on.
+// Shared by the periodic interval below, the manual refresh button (for
+// installs with no reliable browser reload/pull-to-refresh -- an "Add to
+// Home Screen" shortcut can lack both), and the visibility-change listener
+// that catches an install back up the moment it's actually looked at again.
+async function refreshEverything() {
+  const btn = document.getElementById("global-refresh-btn");
+  if (btn) btn.classList.add("spinning");
+  try {
+    await Promise.all([syncFromRepoWorkbook(), refreshPlaygroupGames(), loadRosterDiff()]);
+  } finally {
+    if (btn) btn.classList.remove("spinning");
+  }
+}
+
+const globalRefreshBtn = document.getElementById("global-refresh-btn");
+if (globalRefreshBtn) {
+  globalRefreshBtn.addEventListener("click", refreshEverything);
+}
+
+// The periodic interval already skips work while document.hidden -- an
+// installed home-screen app can sit backgrounded well past one interval
+// tick, so this catches it up the instant it's foregrounded again instead
+// of leaving stale data on screen until the next scheduled tick.
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) refreshEverything();
+});
+
 const AUTO_REFRESH_INTERVAL_MS = 60000;
 setInterval(() => {
   if (document.hidden) return;
-  syncFromRepoWorkbook();
-  refreshPlaygroupGames();
-  loadRosterDiff();
+  refreshEverything();
 }, AUTO_REFRESH_INTERVAL_MS);
