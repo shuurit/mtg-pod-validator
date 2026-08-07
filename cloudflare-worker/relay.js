@@ -17,14 +17,18 @@
  *   cutoff is NOT safe -- confirmed the hard way: casual pickup games with
  *   no league at all can fall inside the season's date range.
  *
- *   So a game's classification (in the active league, or not), once
- *   determined, is a permanent fact -- it's cached forever in Workers KV
- *   under the active league's ID. Every run only has to classify games it
- *   hasn't seen before, which after the first few runs is normally just
- *   "whatever was played since the last check" (usually 0-a few games),
- *   not the whole season's history. A hard per-run cap still protects the
- *   subrequest limit during the initial catch-up (or if a lot happened at
- *   once) -- anything left over just gets classified on the next run.
+ *   So a game's classification (in the active league, or not) is cached in
+ *   Workers KV under the active league's ID -- old games are trusted
+ *   forever once classified, but a game within RECLASSIFY_WINDOW_MS of
+ *   being played gets periodically re-verified (see computePlaygroupGames),
+ *   since a human can still reassign or remove its league on playgroup.gg
+ *   after the fact. Every run only has to classify/re-verify games in that
+ *   small recent set, which after the first few runs is normally just
+ *   "whatever was played or corrected since the last check" (usually
+ *   0-a few games), not the whole season's history. A hard per-run cap
+ *   still protects the subrequest limit during the initial catch-up (or if
+ *   a lot happened at once) -- anything left over just gets classified on
+ *   the next run.
  *
  *   Commander names (not present on the game/participation payload) are
  *   cached the same way, with a soft expiry, since a deck's commander can
@@ -63,6 +67,12 @@ const PLAYGROUP_API_BASE = "https://playgroup.gg/api/public/v1";
 const MAX_DECK_CHECKS_PER_RUN = 32;
 const MAX_COMMANDER_LOOKUPS_PER_RUN = 12;
 const COMMANDER_NAME_MAX_AGE_MS = 21 * 24 * 60 * 60 * 1000; // 21 days
+
+// See computePlaygroupGames -- a game's league classification is trusted
+// forever once it's older than this, but stays open to correction while
+// still within it (re-verified at most once per RECLASSIFY_MIN_INTERVAL_MS).
+const RECLASSIFY_WINDOW_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
+const RECLASSIFY_MIN_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 
 // /roster-diff: one call for the member list, one more per member for their
 // deck list -- unlike league classification this isn't expensive to derive
@@ -301,24 +311,43 @@ async function computePlaygroupGames(env, forceRecheckGameId) {
   if (!gamesRes.ok) throw new Error(`games list failed: HTTP ${gamesRes.status}`);
   const allGames = await gamesRes.json();
 
-  // ---- Per-game league classification, cached permanently per league ----
-  // A game's league membership never changes once played, so once we know
-  // it we never need to ask again. Only games this cache hasn't seen yet
-  // need any playgroup.gg calls at all.
-  //
-  // That "permanent" assumption breaks if a game gets classified before
-  // playgroup.gg has finished processing it -- e.g. its deck ELO history
-  // (what confirmGameIdsForDecks actually checks) can lag behind the game
-  // record itself being complete, so a check made in that window can
-  // permanently cache a wrong "not in this league" result. ?recheck=<id>
-  // clears one game's cached entry so it goes through classification again
-  // on this run, for exactly that situation.
+  // ---- Per-game league classification ----
+  // A game played weeks ago essentially never has its league membership
+  // changed again, so classifying it once and trusting that forever is
+  // safe and keeps this cheap. But it's NOT actually permanent: a human
+  // can reassign or remove a game's league on playgroup.gg after the
+  // fact (confirmed both directions -- a brand-new game's deck ELO
+  // history can lag behind the game record being complete, reading as
+  // "not in this league" before playgroup.gg finishes processing it; and
+  // someone can deliberately un-league a game later). RECLASSIFY_WINDOW_MS
+  // keeps recent games' classification on a short leash -- re-verified at
+  // most once per RECLASSIFY_MIN_INTERVAL_MS -- so a correction on
+  // playgroup.gg's end shows up here within one refresh cycle instead of
+  // needing a manual ?recheck=<id>. Games older than the window are
+  // treated as settled and never re-checked again, which is what keeps
+  // this affordable.
   const classifiedKey = `classified_games:${activeLeague.id}`;
-  const classified = await kvGetJson(env, classifiedKey, {});
+  const rawClassified = await kvGetJson(env, classifiedKey, {});
+  const classified = {};
+  for (const [id, raw] of Object.entries(rawClassified)) {
+    // Old cache entries were a plain boolean with no timestamp -- treat as
+    // "never checked under this scheme" so a still-recent one gets one
+    // fresh verification pass instead of being trusted blindly forever.
+    classified[id] = typeof raw === "boolean" ? { active: raw, checkedAt: 0 } : raw;
+  }
   if (forceRecheckGameId != null && forceRecheckGameId in classified) {
     delete classified[forceRecheckGameId];
   }
-  const unclassifiedGames = allGames.filter(g => !(g.id in classified));
+
+  const now = Date.now();
+  const needsClassification = g => {
+    const entry = classified[g.id];
+    if (!entry) return true;
+    const gameAgeMs = now - new Date(g.started_at).getTime();
+    if (gameAgeMs > RECLASSIFY_WINDOW_MS) return false; // old enough to trust permanently
+    return (now - entry.checkedAt) > RECLASSIFY_MIN_INTERVAL_MS;
+  };
+  const unclassifiedGames = allGames.filter(needsClassification);
 
   const uncoveredDeckIds = new Set();
   for (const g of unclassifiedGames) {
@@ -337,7 +366,7 @@ async function computePlaygroupGames(env, forceRecheckGameId) {
       const gameDeckIds = deckIdsInGame(g);
       const allDecksChecked = [...gameDeckIds].every(id => checkedDeckIdSet.has(id));
       if (!allDecksChecked) continue; // retry this game next run once its remaining decks are checked
-      classified[g.id] = confirmedIds.has(g.id);
+      classified[g.id] = { active: confirmedIds.has(g.id), checkedAt: now };
       changed = true;
     }
     if (changed) {
@@ -345,7 +374,7 @@ async function computePlaygroupGames(env, forceRecheckGameId) {
     }
   }
 
-  const activeGames = allGames.filter(g => classified[g.id] === true);
+  const activeGames = allGames.filter(g => classified[g.id] && classified[g.id].active === true);
 
   // ---- Commander names, cached with a soft expiry ----
   // Not present on the games/participations payload, only on the deck
