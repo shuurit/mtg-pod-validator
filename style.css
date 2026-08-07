@@ -72,6 +72,37 @@ body {
   padding: 40px 20px 90px;
 }
 
+/* Fixed so it's always reachable regardless of scroll position -- mainly
+   for a home-screen "Add to Home Screen" install, which can lack a
+   browser reload button or reliable pull-to-refresh. */
+#global-refresh-btn {
+  position: fixed;
+  top: max(14px, env(safe-area-inset-top));
+  right: max(14px, env(safe-area-inset-right));
+  z-index: 100;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 1.3rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--shadow-md);
+}
+
+#global-refresh-btn.spinning {
+  animation: global-refresh-spin 0.8s linear infinite;
+  pointer-events: none;
+  opacity: 0.7;
+}
+
+@keyframes global-refresh-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 header h1 {
   margin: 0 0 6px;
   font-size: 1.85rem;
