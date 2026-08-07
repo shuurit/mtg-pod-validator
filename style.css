@@ -161,6 +161,13 @@ header h1 {
   vertical-align: middle;
 }
 
+/* [hidden] and .tab-badge{display:inline-flex} are equal specificity, so
+   without this the later rule always won and the badge never actually
+   hid itself even when correctly marked hidden. */
+.tab-badge[hidden] {
+  display: none;
+}
+
 .winrates-table {
   width: 100%;
   border-collapse: collapse;
