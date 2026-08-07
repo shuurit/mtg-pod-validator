@@ -12,21 +12,37 @@ never sees either of them:
   manually-regenerated static file.
 
 It also uses a **KV namespace** (`DECK_CACHE`, no secret involved — just
-storage), for two things:
+storage), for:
 
 - Remembering which games have already been confirmed as part of the
   active league, so each `/playgroup-games` run only has to check decks
-  from *new* games instead of re-checking the whole season's history.
+  from games it hasn't classified yet. A game within 3 days of being
+  played gets periodically re-verified (at most once per 10 min) instead
+  of trusted forever right away, since a human can still reassign or
+  remove its league on playgroup.gg after the fact — confirmed both
+  directions the hard way. `?recheck=<game_id>` forces one specific game
+  to go through classification again immediately.
 - A short-lived dedupe key for `/apply-roster-update` submissions, so an
   accidental double-click or reload within a couple minutes doesn't fire
   the same GitHub Action run twice.
 
+Neither `/playgroup-games` nor `/roster-diff` cache their *response* at
+all (`Cache-Control: no-store`) — both exist specifically to answer "what's
+true on playgroup.gg right now," so a cached answer would defeat the
+point. The KV caching above is a different thing: it's caching the
+*expensive-to-derive* league classification, not the response itself.
+
 ## Endpoints
 
-- `GET /playgroup-games` — live active-league games, cached 5 minutes.
+- `GET /playgroup-games` — live active-league games. Always fresh.
 - `GET /roster-diff` — every playgroup member (tracked or not) and their
   full deck list, independent of games played. Powers the "Update the
-  App" tab's detection. Cached 15 minutes (roster changes are rare).
+  App" tab's detection. Always fresh.
+- `GET /debug/game?id=<game_id>[&events=true]` — raw pass-through of one
+  game exactly as playgroup.gg returns it (no filtering or
+  classification). Not used by the main data endpoints above, but *is*
+  used by the app's Games to Update tab to pre-fill Place/KOs/TOV from the
+  event log — otherwise purely a manual debugging aid.
 - `POST /` — add-game dispatch (from Games to Update).
 - `POST /apply-roster-update` — new-player/new-deck dispatch (from Update
   the App).
