@@ -923,6 +923,51 @@ function computePlayerAdjustedWinRate(existingRows, newRow) {
   return { B, wins: C, losses: D };
 }
 
+// Derives Place/KOs/TOV for every participant from playgroup.gg's raw
+// per-game event log (kill-kind events specifically) -- verified against
+// real already-logged games, not just the API docs: KOs is just a
+// kill-event count per killer; Place ranks the winner first, then
+// everyone else by elimination order (eliminated later = better place);
+// TOV is the turn a player was eliminated, or the game's total_rounds for
+// anyone never eliminated (the winner). Matches participants by
+// deck_name, which both /debug/game's raw participations and
+// /playgroup-games' transformed participants carry, and which is unique
+// within a single game.
+function deriveGameFieldsFromRawGame(rawGame) {
+  const killEvents = (rawGame.events || []).filter(e => e.kind === "kill");
+  const deckNameByUserId = {};
+  for (const p of rawGame.participations) deckNameByUserId[p.user_id] = p.deck_name;
+
+  const kosByDeckName = {};
+  for (const e of killEvents) {
+    const deckName = deckNameByUserId[e.user_id];
+    if (deckName) kosByDeckName[deckName] = (kosByDeckName[deckName] || 0) + 1;
+  }
+
+  const eliminationTurnByUserId = {};
+  for (const e of killEvents) {
+    eliminationTurnByUserId[e.receiver_user_id] = e.turn;
+  }
+
+  const ranked = [...rawGame.participations].sort((a, b) => {
+    if (a.winner !== b.winner) return a.winner ? -1 : 1;
+    const aTurn = eliminationTurnByUserId[a.user_id] ?? -1;
+    const bTurn = eliminationTurnByUserId[b.user_id] ?? -1;
+    return bTurn - aTurn;
+  });
+
+  const byDeckName = {};
+  ranked.forEach((p, i) => {
+    const tov = p.winner ? rawGame.total_rounds : eliminationTurnByUserId[p.user_id];
+    byDeckName[p.deck_name] = {
+      place: i + 1,
+      kos: kosByDeckName[p.deck_name] || 0,
+      tov: tov != null ? tov : null,
+    };
+  });
+  return byDeckName;
+}
+
 function openGameForm(pgGame) {
   const areaEl = document.getElementById("gtu-form-area");
   areaEl.innerHTML = "";
@@ -933,6 +978,13 @@ function openGameForm(pgGame) {
   const title = document.createElement("h3");
   title.textContent = `${pgGame.date} — ${pgGame.participants.map(p => p.player).join(", ")}`;
   box.appendChild(title);
+
+  const derivedHint = document.createElement("p");
+  derivedHint.className = "hint";
+  if (pgGame.playgroup_game_id && RELAY_BASE_URL) {
+    derivedHint.textContent = "Loading Place/KOs/TOV from playgroup.gg…";
+    box.appendChild(derivedHint);
+  }
 
   const table = document.createElement("table");
   table.className = "gtu-input-table";
@@ -968,6 +1020,36 @@ function openGameForm(pgGame) {
   });
   table.appendChild(tbody);
   box.appendChild(table);
+
+  // Fills in Place/KOs/TOV from playgroup.gg's raw per-game event log --
+  // still fully editable, same as the Cmdr Strength/Bracket prefills
+  // above. Fetched separately (not part of the regular /playgroup-games
+  // response) since it needs the full event history for just this one
+  // game, which is too expensive to pull for every pending game up front.
+  if (pgGame.playgroup_game_id && RELAY_BASE_URL) {
+    fetch(`${RELAY_BASE_URL}/debug/game?id=${pgGame.playgroup_game_id}&events=true`, { cache: "no-store" })
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then(rawGame => {
+        const derived = deriveGameFieldsFromRawGame(rawGame);
+        pgGame.participants.forEach((p, i) => {
+          const fields = derived[p.deck_name];
+          if (!fields) return;
+          const placeInput = table.querySelector(`.gtu-place[data-i="${i}"]`);
+          const kosInput = table.querySelector(`.gtu-knockouts[data-i="${i}"]`);
+          const tovInput = table.querySelector(`.gtu-tov[data-i="${i}"]`);
+          if (placeInput) placeInput.value = fields.place;
+          if (kosInput) kosInput.value = fields.kos;
+          if (tovInput && fields.tov != null) tovInput.value = fields.tov;
+        });
+        derivedHint.textContent = "Place/KOs/TOV pre-filled from playgroup.gg's game log — double check before submitting.";
+      })
+      .catch(err => {
+        derivedHint.textContent = `Couldn't load Place/KOs/TOV from playgroup.gg (${err.message}) — fill in manually.`;
+      });
+  }
 
   const calcBtn = document.createElement("button");
   calcBtn.className = "primary";
