@@ -85,6 +85,7 @@ const USERNAME_TO_PLAYER = {
   "Ecthelion": "Ryan",
   "MLMyBelle": "Michelle",
   "Red": "Red",
+  "Hiccup_The_Hero": "Hiccup_The_Hero",
 };
 
 function corsHeaders() {
