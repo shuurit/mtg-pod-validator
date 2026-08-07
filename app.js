@@ -1353,11 +1353,24 @@ async function loadRosterDiff() {
 // playgroup deck ID first; for rows the ID backfill hasn't reached yet,
 // falls back to the same name normalization findDefaultStrength uses, so
 // backfill completeness is never a hard requirement for correctness.
+// Usernames submitted as a brand-new player this session. computeRosterDiff
+// below has no way to know a submitted new player isn't "new" anymore
+// other than this: member.tracked (and mapped_player) come straight from
+// rosterDiffData, which only reflects reality once roster-update.yml's
+// Worker redeploy finishes -- well after the optimistic merge into
+// `players` already happened. Without this override, a submitted new
+// player keeps showing as pending for those few minutes even though
+// they're already fully added. Any of their decks left unsubmitted stay
+// hidden until the real backend catches up too -- an acceptable gap given
+// it's normally seconds to a few minutes, not an unbounded amount of time.
+const rosterUpdateOptimisticallyTrackedUsernames = new Set();
+
 function computeRosterDiff(data) {
   const newPlayers = [];
   const newDecksForExisting = [];
 
   for (const member of data.members) {
+    if (rosterUpdateOptimisticallyTrackedUsernames.has(member.username)) continue;
     const allDecks = (data.decks_by_username[member.username] || []).filter(d => !d.archived);
     if (allDecks.length === 0) continue;
 
@@ -1748,7 +1761,10 @@ function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
         }
         applyOptimisticRosterUpdate(payload);
         submittedDeckIds.forEach(id => rosterUpdateDeckState.delete(id));
-        submittedUsernames.forEach(u => rosterUpdateNameState.delete(u));
+        submittedUsernames.forEach(u => {
+          rosterUpdateNameState.delete(u);
+          rosterUpdateOptimisticallyTrackedUsernames.add(u);
+        });
 
         // Names the submit actually covered, so the banner stays specific
         // even after the group it came from disappears from the list below.
