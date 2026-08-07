@@ -381,7 +381,6 @@ async function computePlaygroupGames(env, forceRecheckGameId) {
   // itself. Cached (unlike league membership) because a deck's commander
   // can legitimately change over time.
   const commanderCache = await kvGetJson(env, "commander_names", {});
-  const now = Date.now();
   const activeDeckIds = new Set();
   for (const g of activeGames) {
     for (const id of deckIdsInGame(g)) activeDeckIds.add(id);
