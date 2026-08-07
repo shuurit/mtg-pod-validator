@@ -285,6 +285,17 @@ async function syncFromRepoWorkbook() {
     gameLogSeason3Rows = extractGameLogFromWorkbook(workbook, CURRENT_SEASON_SHEET);
     renderGamesToUpdate();
     renderWinRatesTable(playgroupGamesData);
+    // computeRosterDiff (inside renderUpdateAppTab) reads the `players`
+    // array just rebuilt above by applyDeckStrengthRows. refreshEverything()
+    // runs this and loadRosterDiff() in parallel, and XLSX parsing is
+    // slower than the /roster-diff JSON fetch, so loadRosterDiff() often
+    // resolves first and renders Update the App against the *previous*
+    // players array -- e.g. a just-submitted new player not showing up in
+    // `players` yet, so they still look untracked and their decks still
+    // look pending even though the submission fully landed. Nothing else
+    // re-renders that tab once `players` catches up, so it has to happen
+    // here too, not just in loadRosterDiff().
+    if (!isEditingRosterUpdateForm()) renderUpdateAppTab();
   } catch (err) {
     if (statusEl) {
       statusEl.textContent = `Using locally saved data — couldn't load ${REPO_WORKBOOK_FILE} (${err.message}).`;
