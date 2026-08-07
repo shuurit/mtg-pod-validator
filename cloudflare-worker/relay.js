@@ -68,10 +68,12 @@ const COMMANDER_NAME_MAX_AGE_MS = 21 * 24 * 60 * 60 * 1000; // 21 days
 
 // /roster-diff: one call for the member list, one more per member for their
 // deck list -- unlike league classification this isn't expensive to derive
-// (no per-game history needed), so no KV caching, just a generous cap and a
-// longer response TTL since roster changes are rare.
+// (no per-game history needed), just a generous cap. Deliberately
+// uncached (see handleRosterDiff) -- this endpoint exists specifically to
+// answer "is there anything new on playgroup.gg right now," so a cached
+// answer defeats its own purpose. A small playgroup (a handful of members)
+// makes this cheap enough to run fresh on every request.
 const MAX_MEMBER_DECK_LOOKUPS_PER_RUN = 40;
-const ROSTER_DIFF_CACHE_TTL_SECONDS = 900; // 15 minutes
 
 // Only these usernames map to a tracked spreadsheet player. Participants
 // outside this map (guests, other accounts) are dropped from the output,
@@ -491,12 +493,6 @@ async function computeRosterDiff(env) {
 }
 
 async function handleRosterDiff(env, ctx) {
-  const cache = caches.default;
-  const cacheKey = new Request(`https://cache.internal/roster-diff`);
-
-  const cached = await cache.match(cacheKey);
-  if (cached) return cached;
-
   let data;
   try {
     data = await computeRosterDiff(env);
@@ -504,9 +500,7 @@ async function handleRosterDiff(env, ctx) {
     return jsonResponse({ error: "Failed to read playgroup.gg roster", detail: err.message }, 502);
   }
 
-  const response = jsonResponse(data, 200, { "Cache-Control": `public, max-age=${ROSTER_DIFF_CACHE_TTL_SECONDS}` });
-  ctx.waitUntil(cache.put(cacheKey, response.clone()));
-  return response;
+  return jsonResponse(data, 200, { "Cache-Control": "no-store" });
 }
 
 // ---------- router ----------

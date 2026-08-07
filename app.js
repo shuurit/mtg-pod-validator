@@ -1183,6 +1183,45 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
 
 let rosterDiffData = null;
 
+// Persists user edits across every re-render of the Update the App tab --
+// renderUpdateAppTab() runs on every poll (a fresh /roster-diff fetch, an
+// optimistic re-render after a game/roster submission elsewhere) and used
+// to rebuild every row from scratch each time, silently reverting whatever
+// the user had already unchecked or typed. Keyed by playgroup deck ID
+// (globally unique across the whole roster, not just per player) for deck
+// rows, by playgroup.gg username for a new player's display name. These
+// are the actual source of truth for what gets submitted -- rendering just
+// reflects them, it never invents the checked/power values on its own.
+const rosterUpdateDeckState = new Map(); // deckId (string) -> { checked, power }
+const rosterUpdateNameState = new Map(); // username -> displayName
+let rosterUpdateSelectedGroupKey = null; // which player's group the dropdown is showing, preserved across renders too
+
+function ensureRosterUpdateDeckStateDefault(deck) {
+  const key = String(deck.id);
+  if (!rosterUpdateDeckState.has(key)) {
+    rosterUpdateDeckState.set(key, {
+      checked: true,
+      power: typeof deck.power_level === "number" ? deck.power_level.toFixed(1) : "",
+    });
+  }
+}
+
+function ensureRosterUpdateNameStateDefault(newPlayer) {
+  if (!rosterUpdateNameState.has(newPlayer.username)) {
+    rosterUpdateNameState.set(newPlayer.username, newPlayer.suggestedDisplayName);
+  }
+}
+
+// True while the user has focus somewhere inside the Update the App tab --
+// used to skip a background re-render mid-edit so a periodic refresh never
+// yanks focus out from under someone who's mid-keystroke. The state maps
+// above mean no value would actually be lost either way, but rebuilding the
+// DOM under an active cursor still feels broken, so this avoids it outright.
+function isEditingRosterUpdateForm() {
+  const panel = document.getElementById("tab-update-app");
+  return !!(panel && document.activeElement && panel.contains(document.activeElement));
+}
+
 async function loadRosterDiff() {
   const statusEl = document.getElementById("uta-status");
   if (!ROSTER_DIFF_RELAY_URL) {
@@ -1196,7 +1235,7 @@ async function loadRosterDiff() {
       throw new Error(body.detail || body.error || `HTTP ${res.status}`);
     }
     rosterDiffData = await res.json();
-    renderUpdateAppTab();
+    if (!isEditingRosterUpdateForm()) renderUpdateAppTab();
   } catch (err) {
     if (statusEl) statusEl.textContent = `Couldn't load live playgroup.gg data (${err.message}).`;
   }
@@ -1237,15 +1276,83 @@ function computeRosterDiff(data) {
   return { newPlayers, newDecksForExisting };
 }
 
-function deckRowHtml(deck, checkboxName, powerName) {
-  const powerValue = typeof deck.power_level === "number" ? deck.power_level.toFixed(1) : "";
+function deckRowHtml(deck) {
+  const state = rosterUpdateDeckState.get(String(deck.id));
   return `
     <tr>
-      <td><input type="checkbox" class="${checkboxName}" data-deck-id="${deck.id}" checked></td>
+      <td><input type="checkbox" class="uta-deck-check" data-deck-id="${deck.id}" ${state.checked ? "checked" : ""}></td>
       <td>${deck.commander_name}${deck.name !== deck.commander_name ? ` <span class="hint">(${deck.name})</span>` : ""}</td>
-      <td><input type="number" class="${powerName}" data-deck-id="${deck.id}" step="0.1" min="0" max="5" value="${powerValue}" placeholder="power"></td>
+      <td><input type="number" class="uta-deck-power" data-deck-id="${deck.id}" step="0.1" min="0" max="5" value="${state.power}" placeholder="power"></td>
     </tr>
   `;
+}
+
+// Wires up live state-capture on a just-rendered group's inputs, so every
+// keystroke/click is saved to rosterUpdateDeckState/rosterUpdateNameState
+// immediately -- by the time any re-render (or the final submit) happens,
+// the maps already hold whatever the user last set, whether or not that
+// group is even the one currently visible in the dropdown.
+function wireRosterUpdateGroupInputs(container) {
+  container.querySelectorAll(".uta-deck-check").forEach(el => {
+    el.addEventListener("change", () => {
+      rosterUpdateDeckState.set(el.dataset.deckId, { ...rosterUpdateDeckState.get(el.dataset.deckId), checked: el.checked });
+    });
+  });
+  container.querySelectorAll(".uta-deck-power").forEach(el => {
+    el.addEventListener("input", () => {
+      rosterUpdateDeckState.set(el.dataset.deckId, { ...rosterUpdateDeckState.get(el.dataset.deckId), power: el.value });
+    });
+  });
+  const nameInput = container.querySelector(".uta-display-name");
+  if (nameInput) {
+    nameInput.addEventListener("input", () => {
+      rosterUpdateNameState.set(nameInput.dataset.username, nameInput.value);
+    });
+  }
+}
+
+function renderRosterUpdateGroup(group) {
+  const box = document.createElement("div");
+  box.className = "uta-group";
+
+  if (group.kind === "new") {
+    const p = group.data;
+    box.innerHTML = `
+      <div class="uta-group-header">
+        <label>New player (playgroup.gg: <code>${p.username}</code>) — display name:
+          <input type="text" class="uta-display-name" data-username="${p.username}" value="${rosterUpdateNameState.get(p.username)}">
+        </label>
+      </div>
+      <table class="uta-deck-table">
+        <thead><tr><th></th><th>Deck</th><th>Starting power</th></tr></thead>
+        <tbody>${p.decks.map(d => deckRowHtml(d)).join("")}</tbody>
+      </table>
+    `;
+  } else {
+    const g = group.data;
+    box.innerHTML = `
+      <div class="uta-group-header"><strong>${g.player}</strong> — ${g.decks.length} new deck(s)</div>
+      <table class="uta-deck-table">
+        <thead><tr><th></th><th>Deck</th><th>Starting power</th></tr></thead>
+        <tbody>${g.decks.map(d => deckRowHtml(d)).join("")}</tbody>
+      </table>
+    `;
+  }
+
+  wireRosterUpdateGroupInputs(box);
+  return box;
+}
+
+// Checks/unchecks every pending deck across every group, not just the one
+// currently shown in the dropdown -- the submit button covers everything
+// pending regardless of which group is in view, so Select All should too.
+function setAllRosterUpdateChecked(groups, checked) {
+  groups.forEach(g => {
+    g.data.decks.forEach(d => {
+      rosterUpdateDeckState.set(String(d.id), { ...rosterUpdateDeckState.get(String(d.id)), checked });
+    });
+  });
+  renderUpdateAppTab();
 }
 
 function renderUpdateAppTab() {
@@ -1265,40 +1372,69 @@ function renderUpdateAppTab() {
 
   if (newPlayers.length === 0 && newDecksForExisting.length === 0) {
     listEl.innerHTML = '<p class="hint">Nothing new — everyone and everything tracked here matches playgroup.gg.</p>';
+    rosterUpdateSelectedGroupKey = null;
     return;
+  }
+
+  newPlayers.forEach(p => {
+    ensureRosterUpdateNameStateDefault(p);
+    p.decks.forEach(ensureRosterUpdateDeckStateDefault);
+  });
+  newDecksForExisting.forEach(g => g.decks.forEach(ensureRosterUpdateDeckStateDefault));
+
+  const groups = [
+    ...newPlayers.map(p => ({ key: `new:${p.username}`, kind: "new", label: `New player: ${p.username} (${p.decks.length})`, data: p })),
+    ...newDecksForExisting.map(g => ({ key: `existing:${g.player}`, kind: "existing", label: `${g.player} (${g.decks.length} new deck${g.decks.length === 1 ? "" : "s"})`, data: g })),
+  ];
+
+  // Keep whatever the dropdown was already showing if it's still pending;
+  // only fall back to the first group if that one got submitted/vanished.
+  if (!groups.some(g => g.key === rosterUpdateSelectedGroupKey)) {
+    rosterUpdateSelectedGroupKey = groups[0].key;
   }
 
   listEl.innerHTML = "";
 
-  newPlayers.forEach((p, pi) => {
-    const box = document.createElement("div");
-    box.className = "uta-group";
-    box.innerHTML = `
-      <div class="uta-group-header">
-        <label>New player (playgroup.gg: <code>${p.username}</code>) — display name:
-          <input type="text" class="uta-display-name" data-player-index="${pi}" value="${p.suggestedDisplayName}">
-        </label>
-      </div>
-      <table class="uta-deck-table">
-        <thead><tr><th></th><th>Deck</th><th>Starting power</th></tr></thead>
-        <tbody>${p.decks.map(d => deckRowHtml(d, `uta-new-player-deck-${pi}`, `uta-new-player-power-${pi}`)).join("")}</tbody>
-      </table>
-    `;
-    listEl.appendChild(box);
-  });
+  const controls = document.createElement("div");
+  controls.className = "uta-controls";
 
-  newDecksForExisting.forEach((g, gi) => {
-    const box = document.createElement("div");
-    box.className = "uta-group";
-    box.innerHTML = `
-      <div class="uta-group-header"><strong>${g.player}</strong> — ${g.decks.length} new deck(s)</div>
-      <table class="uta-deck-table">
-        <thead><tr><th></th><th>Deck</th><th>Starting power</th></tr></thead>
-        <tbody>${g.decks.map(d => deckRowHtml(d, `uta-existing-deck-${gi}`, `uta-existing-power-${gi}`)).join("")}</tbody>
-      </table>
-    `;
-    listEl.appendChild(box);
+  const selectWrap = document.createElement("label");
+  selectWrap.className = "uta-group-select-label";
+  selectWrap.textContent = "Show: ";
+  const select = document.createElement("select");
+  select.className = "uta-group-select";
+  groups.forEach(g => {
+    const opt = document.createElement("option");
+    opt.value = g.key;
+    opt.textContent = g.label;
+    if (g.key === rosterUpdateSelectedGroupKey) opt.selected = true;
+    select.appendChild(opt);
   });
+  select.addEventListener("change", () => {
+    rosterUpdateSelectedGroupKey = select.value;
+    renderUpdateAppTab();
+  });
+  selectWrap.appendChild(select);
+  controls.appendChild(selectWrap);
+
+  const selectAllBtn = document.createElement("button");
+  selectAllBtn.type = "button";
+  selectAllBtn.textContent = "Select All";
+  selectAllBtn.title = "Checks every pending deck, across every player -- not just the one shown below.";
+  selectAllBtn.addEventListener("click", () => setAllRosterUpdateChecked(groups, true));
+
+  const deselectAllBtn = document.createElement("button");
+  deselectAllBtn.type = "button";
+  deselectAllBtn.textContent = "Deselect All";
+  deselectAllBtn.title = "Unchecks every pending deck, across every player -- not just the one shown below.";
+  deselectAllBtn.addEventListener("click", () => setAllRosterUpdateChecked(groups, false));
+
+  controls.appendChild(selectAllBtn);
+  controls.appendChild(deselectAllBtn);
+  listEl.appendChild(controls);
+
+  const activeGroup = groups.find(g => g.key === rosterUpdateSelectedGroupKey);
+  listEl.appendChild(renderRosterUpdateGroup(activeGroup));
 
   renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting);
 }
@@ -1364,30 +1500,41 @@ function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
       submitBtn.textContent = "Submitting...";
       statusEl.textContent = "";
 
+      // Reads from rosterUpdateDeckState/rosterUpdateNameState, not the DOM
+      // -- the dropdown only renders one group at a time, so a checked deck
+      // in a group that isn't currently visible would never be found by a
+      // DOM query. The state maps are kept live via wireRosterUpdateGroupInputs
+      // regardless of which group is on screen, so they're the only
+      // complete source of "what's actually checked right now."
       const payload = { newPlayers: [], newDecksForExisting: [] };
+      const submittedDeckIds = [];
+      const submittedUsernames = [];
 
-      newPlayers.forEach((p, pi) => {
-        const displayName = document.querySelector(`.uta-display-name[data-player-index="${pi}"]`).value.trim();
+      newPlayers.forEach(p => {
+        const displayName = (rosterUpdateNameState.get(p.username) || "").trim();
         const decks = [];
         p.decks.forEach(d => {
-          const checked = document.querySelector(`.uta-new-player-deck-${pi}[data-deck-id="${d.id}"]`).checked;
-          if (!checked) return;
-          const power = parseFloat(document.querySelector(`.uta-new-player-power-${pi}[data-deck-id="${d.id}"]`).value);
+          const state = rosterUpdateDeckState.get(String(d.id));
+          if (!state || !state.checked) return;
+          const power = parseFloat(state.power);
           if (!Number.isFinite(power)) return;
           decks.push({ name: d.commander_name, power, playgroupDeckId: d.id });
+          submittedDeckIds.push(String(d.id));
         });
         if (displayName && decks.length > 0) {
           payload.newPlayers.push({ username: p.username, displayName, decks });
+          submittedUsernames.push(p.username);
         }
       });
 
-      newDecksForExisting.forEach((g, gi) => {
+      newDecksForExisting.forEach(g => {
         g.decks.forEach(d => {
-          const checked = document.querySelector(`.uta-existing-deck-${gi}[data-deck-id="${d.id}"]`).checked;
-          if (!checked) return;
-          const power = parseFloat(document.querySelector(`.uta-existing-power-${gi}[data-deck-id="${d.id}"]`).value);
+          const state = rosterUpdateDeckState.get(String(d.id));
+          if (!state || !state.checked) return;
+          const power = parseFloat(state.power);
           if (!Number.isFinite(power)) return;
           payload.newDecksForExisting.push({ player: g.player, name: d.commander_name, power, playgroupDeckId: d.id });
+          submittedDeckIds.push(String(d.id));
         });
       });
 
@@ -1410,6 +1557,15 @@ function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
         }
         submitBtn.textContent = "Submitted ✓";
         applyOptimisticRosterUpdate(payload);
+        // Bookkeeping only -- deliberately not re-rendering the tab here,
+        // since renderUpdateAppTab() would tear down and rebuild formAreaEl
+        // (this exact button/status line included), wiping the "Submitted
+        // ✓" confirmation the instant it appeared. The next natural
+        // refresh (periodic poll, or leaving and returning to this tab)
+        // already won't show these decks as pending anymore, since
+        // applyOptimisticRosterUpdate just added them to `players`.
+        submittedDeckIds.forEach(id => rosterUpdateDeckState.delete(id));
+        submittedUsernames.forEach(u => rosterUpdateNameState.delete(u));
         statusEl.textContent = "Added — already selectable in Pod Validator. GitHub Actions is syncing this to the spreadsheet in the background (usually 1-3 minutes) so it sticks around for everyone else.";
       } catch (err) {
         submitBtn.disabled = false;
