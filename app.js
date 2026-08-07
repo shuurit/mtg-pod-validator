@@ -1379,6 +1379,25 @@ function setAllRosterUpdateChecked(groups, checked) {
   renderUpdateAppTab();
 }
 
+// A count of pending decks (new players' decks + existing players' new
+// decks) on the "Update the App" tab button itself, so there's something
+// pending is visible without opening the tab or checking manually. Hidden
+// entirely at 0 -- absence of a badge means "nothing to review," not "not
+// loaded yet" (loadRosterDiff only calls renderUpdateAppTab, which is the
+// only caller of this, once rosterDiffData has actually loaded).
+function updateRosterUpdateTabBadge(newPlayers, newDecksForExisting) {
+  const badge = document.getElementById("uta-tab-badge");
+  if (!badge) return;
+  const count = newPlayers.reduce((n, p) => n + p.decks.length, 0) +
+    newDecksForExisting.reduce((n, g) => n + g.decks.length, 0);
+  if (count > 0) {
+    badge.textContent = String(count);
+    badge.hidden = false;
+  } else {
+    badge.hidden = true;
+  }
+}
+
 function renderUpdateAppTab() {
   const statusEl = document.getElementById("uta-status");
   const listEl = document.getElementById("uta-list");
@@ -1392,6 +1411,7 @@ function renderUpdateAppTab() {
   }
 
   const { newPlayers, newDecksForExisting } = computeRosterDiff(rosterDiffData);
+  updateRosterUpdateTabBadge(newPlayers, newDecksForExisting);
   statusEl.textContent = `Live as of ${new Date(rosterDiffData.generated_at).toLocaleTimeString()} — ${newPlayers.length} new player(s), ${newDecksForExisting.reduce((n, g) => n + g.decks.length, 0)} new deck(s) for existing players found on playgroup.gg.`;
 
   if (newPlayers.length === 0 && newDecksForExisting.length === 0) {
