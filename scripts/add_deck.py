@@ -89,7 +89,11 @@ def is_header_row(inner, row_num, is_cds):
     and deck rows use COUNTIFS(...,A{row}) shaped formulas ending the same
     way, so comma-counting isn't reliable -- deck rows always embed a
     quoted player-name literal ("Manny") and player rows never do, so that's
-    the real distinguishing signal."""
+    the real distinguishing signal. The literal shows up as raw `"` in a row
+    this script just wrote (not yet round-tripped through LibreOffice) or as
+    `&quot;` in a row that has -- a batch that inserts more than one deck in
+    the same run needs both checked, since it re-scans its own just-written
+    rows before any recalc happens."""
     if is_cds:
         return bool(re.search(r"<f[^>]*>AVERAGE\(", inner))
     if row_num == 1:
@@ -98,7 +102,8 @@ def is_header_row(inner, row_num, is_cds):
     if not b_m:
         return False
     b_formula = b_m.group(1)
-    return "COUNTIFS(" in b_formula and "&quot;" not in b_formula
+    has_quoted_literal = "&quot;" in b_formula or '"' in b_formula
+    return "COUNTIFS(" in b_formula and not has_quoted_literal
 
 
 def find_player_block(sheet_xml, player, is_cds, shared_strings):
