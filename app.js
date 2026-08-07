@@ -1245,6 +1245,51 @@ function renderUpdateAppTab() {
   renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting);
 }
 
+// The real round trip (GitHub Action recalculating deck-strength.xlsx, the
+// Pages rebuild that follows, then this page's next 60s poll) takes 1-3
+// minutes -- too slow for someone who just added their own deck and wants
+// to pick it for the pod they're building right now. This merges the
+// just-submitted player/decks into the in-memory players/podPlayers arrays
+// immediately so they're selectable right away. It's safe to be
+// optimistic here: the next real syncFromRepoWorkbook() (interval or
+// reload) rebuilds `players` from scratch from the spreadsheet, so this
+// never lingers or conflicts with the authoritative data.
+function applyOptimisticRosterUpdate(payload) {
+  const findOrCreatePlayer = (name) => {
+    let player = players.find(p => p.name === name);
+    if (!player) {
+      player = { id: slugify(name), name, decks: [] };
+      players.push(player);
+    }
+    return player;
+  };
+
+  const addDeck = (player, d) => {
+    const deckId = `${player.id}::${slugify(d.name)}`;
+    if (player.decks.some(existing => existing.id === deckId)) return;
+    player.decks.push({
+      id: deckId,
+      name: d.name,
+      power: d.power,
+      playgroupId: d.playgroupDeckId != null ? String(d.playgroupDeckId) : null,
+    });
+  };
+
+  payload.newPlayers.forEach(p => {
+    const player = findOrCreatePlayer(p.displayName);
+    knownPlaygroupPlayers.add(p.displayName);
+    p.decks.forEach(d => addDeck(player, d));
+  });
+
+  payload.newDecksForExisting.forEach(d => {
+    addDeck(findOrCreatePlayer(d.player), d);
+  });
+
+  podPlayers = players.filter(p => knownPlaygroupPlayers.has(p.name));
+  renderPlayersTable();
+  renderPodSlots();
+}
+
 function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
   const submitBtn = document.createElement("button");
   submitBtn.className = "primary uta-submit-btn";
@@ -1306,7 +1351,8 @@ function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
           throw new Error(body.error || `HTTP ${res.status}`);
         }
         submitBtn.textContent = "Submitted ✓";
-        statusEl.textContent = "GitHub Actions is updating the spreadsheet now — usually takes 1-3 minutes. This page checks for updates automatically, no need to refresh.";
+        applyOptimisticRosterUpdate(payload);
+        statusEl.textContent = "Added — already selectable in Pod Validator. GitHub Actions is syncing this to the spreadsheet in the background (usually 1-3 minutes) so it sticks around for everyone else.";
       } catch (err) {
         submitBtn.disabled = false;
         submitBtn.textContent = "Add to Spreadsheet";
