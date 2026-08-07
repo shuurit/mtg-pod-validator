@@ -49,6 +49,11 @@
  *   /playgroup-games: raw playgroup.gg data here, comparison against the
  *   synced workbook happens client-side in app.js.
  *
+ * - GET  /debug/game?id=<game_id>[&events=true] -> PLAYGROUP_API_KEY: raw
+ *   pass-through of one game exactly as playgroup.gg returns it, no
+ *   filtering or classification. Not used by the app -- a manual
+ *   debugging aid for inspecting a specific game.
+ *
  * Deploy with: wrangler deploy
  * Secrets:     wrangler secret put GITHUB_TOKEN
  *              wrangler secret put PLAYGROUP_API_KEY
@@ -472,6 +477,33 @@ async function handlePlaygroupGames(env, ctx, request) {
   return jsonResponse(data, 200, { "Cache-Control": "no-store" });
 }
 
+// ---------- GET /debug/game : raw single-game passthrough ----------
+
+// Straight pass-through of playgroup.gg's own GET
+// /playgroups/{playgroup_id}/games/{game_id} -- none of /playgroup-games'
+// filtering (tracked players only, reshaped fields) or league
+// classification logic in the way. Not used by the app itself; purely a
+// manual debugging aid for inspecting exactly what playgroup.gg returns
+// for one specific game.
+async function handleDebugGame(request, env) {
+  const url = new URL(request.url);
+  const gameId = url.searchParams.get("id");
+  if (!gameId || !/^\d+$/.test(gameId)) {
+    return jsonResponse({ error: "?id=<numeric game id> is required" }, 400);
+  }
+  const includeEvents = url.searchParams.get("events") === "true";
+
+  const res = await pgFetch(
+    `/playgroups/${PLAYGROUP_ID}/games/${gameId}${includeEvents ? "?include_events=true" : ""}`,
+    env
+  );
+  const body = await res.text();
+  return new Response(body, {
+    status: res.status,
+    headers: { ...corsHeaders(), "Content-Type": "application/json", "Cache-Control": "no-store" },
+  });
+}
+
 // ---------- GET /roster-diff : who/what is on playgroup.gg but not yet tracked ----------
 
 // Returns the raw "world according to playgroup.gg" -- every member (not
@@ -551,6 +583,10 @@ export default {
 
     if (request.method === "GET" && url.pathname === "/roster-diff") {
       return handleRosterDiff(env, ctx);
+    }
+
+    if (request.method === "GET" && url.pathname === "/debug/game") {
+      return handleDebugGame(request, env);
     }
 
     if (request.method === "POST" && url.pathname === "/") {
