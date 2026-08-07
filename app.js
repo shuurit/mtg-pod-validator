@@ -1289,6 +1289,7 @@ let rosterDiffData = null;
 const rosterUpdateDeckState = new Map(); // deckId (string) -> { checked, power }
 const rosterUpdateNameState = new Map(); // username -> displayName
 let rosterUpdateSelectedGroupKey = null; // which player's group the dropdown is showing, preserved across renders too
+let rosterUpdateSubmitConfirmation = null; // message to show once, right after a successful submit -- see renderRosterUpdateConfirmationBanner
 
 // Deliberately defaults to UNCHECKED. A deck often already has a valid
 // power_level from playgroup.gg pre-filled the moment it's detected, so a
@@ -1483,6 +1484,18 @@ function updateRosterUpdateTabBadge(newPlayers, newDecksForExisting) {
   }
 }
 
+// Shows rosterUpdateSubmitConfirmation once, then clears it -- a normal
+// re-render (the next poll, switching groups, Select All) must NOT keep
+// showing a stale success message from a submit that happened renders ago.
+function renderRosterUpdateConfirmationBanner(listEl) {
+  if (!rosterUpdateSubmitConfirmation) return;
+  const banner = document.createElement("p");
+  banner.className = "banner good";
+  banner.textContent = rosterUpdateSubmitConfirmation;
+  listEl.appendChild(banner);
+  rosterUpdateSubmitConfirmation = null;
+}
+
 function renderUpdateAppTab() {
   const statusEl = document.getElementById("uta-status");
   const listEl = document.getElementById("uta-list");
@@ -1499,8 +1512,14 @@ function renderUpdateAppTab() {
   updateRosterUpdateTabBadge(newPlayers, newDecksForExisting);
   statusEl.textContent = `Live as of ${new Date(rosterDiffData.generated_at).toLocaleTimeString()} — ${newPlayers.length} new player(s), ${newDecksForExisting.reduce((n, g) => n + g.decks.length, 0)} new deck(s) for existing players found on playgroup.gg.`;
 
+  listEl.innerHTML = "";
+  renderRosterUpdateConfirmationBanner(listEl);
+
   if (newPlayers.length === 0 && newDecksForExisting.length === 0) {
-    listEl.innerHTML = '<p class="hint">Nothing new — everyone and everything tracked here matches playgroup.gg.</p>';
+    const nothingNewEl = document.createElement("p");
+    nothingNewEl.className = "hint";
+    nothingNewEl.textContent = "Nothing new — everyone and everything tracked here matches playgroup.gg.";
+    listEl.appendChild(nothingNewEl);
     rosterUpdateSelectedGroupKey = null;
     return;
   }
@@ -1522,8 +1541,6 @@ function renderUpdateAppTab() {
     rosterUpdateSelectedGroupKey = groups[0].key;
   }
   const activeGroup = groups.find(g => g.key === rosterUpdateSelectedGroupKey);
-
-  listEl.innerHTML = "";
 
   const controls = document.createElement("div");
   controls.className = "uta-controls";
@@ -1729,18 +1746,33 @@ function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
           const body = await res.json().catch(() => ({}));
           throw new Error(body.error || `HTTP ${res.status}`);
         }
-        submitBtn.textContent = "Submitted ✓";
         applyOptimisticRosterUpdate(payload);
-        // Bookkeeping only -- deliberately not re-rendering the tab here,
-        // since renderUpdateAppTab() would tear down and rebuild formAreaEl
-        // (this exact button/status line included), wiping the "Submitted
-        // ✓" confirmation the instant it appeared. The next natural
-        // refresh (periodic poll, or leaving and returning to this tab)
-        // already won't show these decks as pending anymore, since
-        // applyOptimisticRosterUpdate just added them to `players`.
         submittedDeckIds.forEach(id => rosterUpdateDeckState.delete(id));
         submittedUsernames.forEach(u => rosterUpdateNameState.delete(u));
-        statusEl.textContent = "Added — already selectable in Deck Strength Validator. GitHub Actions is syncing this to the spreadsheet in the background (usually 1-3 minutes) so it sticks around for everyone else.";
+
+        // Names the submit actually covered, so the banner stays specific
+        // even after the group it came from disappears from the list below.
+        const deckCountsByExistingPlayer = payload.newDecksForExisting.reduce((acc, d) => {
+          acc[d.player] = (acc[d.player] || 0) + 1;
+          return acc;
+        }, {});
+        const submittedLabels = [
+          ...payload.newPlayers.map(p => `${p.displayName} (${p.decks.length} deck${p.decks.length === 1 ? "" : "s"})`),
+          ...Object.entries(deckCountsByExistingPlayer).map(([player, n]) => `${player} (${n} deck${n === 1 ? "" : "s"})`),
+        ];
+
+        // Setting this and re-rendering is what makes the just-submitted
+        // group disappear immediately instead of lingering until the next
+        // poll -- computeRosterDiff won't find it pending anymore since
+        // applyOptimisticRosterUpdate just added it to `players`. The
+        // banner survives the re-render because renderUpdateAppTab reads
+        // and displays it before clearing it, not because anything here is
+        // preserved in place.
+        rosterUpdateSubmitConfirmation =
+          `✓ Added ${submittedLabels.join(", ")} — already selectable in Deck Strength Validator. ` +
+          "GitHub Actions is syncing it to the spreadsheet now (usually 1-3 minutes) so it sticks around for good.";
+        renderUpdateAppTab();
+        return;
       } catch (err) {
         submitBtn.disabled = false;
         submitBtn.textContent = "Add to Spreadsheet";
