@@ -1655,10 +1655,16 @@ loadRosterDiff();
 // it), refreshPlaygroupGames re-fetches the live playgroup.gg games list
 // that both Games to Update and Player Win Rates depend on, loadRosterDiff
 // re-fetches the live roster/deck list that Update the App depends on.
-// Shared by the periodic interval below, the manual refresh button (for
-// installs with no reliable browser reload/pull-to-refresh -- an "Add to
-// Home Screen" shortcut can lack both), and the visibility-change listener
-// that catches an install back up the moment it's actually looked at again.
+// Nothing here is cached anywhere (client or Worker), so every call is
+// truly live -- the only question is how often it runs, not how fresh the
+// result is. Deliberately NOT on a timer: /playgroup-games touches Workers
+// KV on every single call, and a continuous 60s poll from every open tab
+// added up fast against the free tier's daily read/write budget for
+// basically no benefit, since nothing here needs sub-minute freshness the
+// way a user's own submit already gets via the optimistic-update paths
+// elsewhere in this file. Triggered by: the manual refresh button, the
+// visibility-change listener right below (so opening/returning to the app
+// never shows stale data), and once on initial page load.
 async function refreshEverything() {
   const btn = document.getElementById("global-refresh-btn");
   if (btn) btn.classList.add("spinning");
@@ -1674,16 +1680,9 @@ if (globalRefreshBtn) {
   globalRefreshBtn.addEventListener("click", refreshEverything);
 }
 
-// The periodic interval already skips work while document.hidden -- an
-// installed home-screen app can sit backgrounded well past one interval
-// tick, so this catches it up the instant it's foregrounded again instead
-// of leaving stale data on screen until the next scheduled tick.
+// Only fires on an actual open/return to the app, not a timer -- catches
+// up the instant it's looked at again instead of leaving stale data on
+// screen, without polling in the background the rest of the time.
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) refreshEverything();
 });
-
-const AUTO_REFRESH_INTERVAL_MS = 60000;
-setInterval(() => {
-  if (document.hidden) return;
-  refreshEverything();
-}, AUTO_REFRESH_INTERVAL_MS);
