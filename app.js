@@ -95,7 +95,7 @@ const DEFAULT_ROSTER = [
   ]},
 ];
 
-// Which tracked players show up in Pod Validator and Player Win Rates
+// Which tracked players show up in Deck Strength Validator and Player Win Rates
 // (players with no playgroup.gg account, like Kristy/Joseph, are filtered
 // out of both). Seeded from the hardcoded list as a fallback for the moment
 // before the Worker's first response arrives; updated live from
@@ -104,7 +104,7 @@ const DEFAULT_ROSTER = [
 let knownPlaygroupPlayers = new Set(PLAYERS_WITH_PLAYGROUP_ACCOUNT);
 
 let players = []; // everyone in Current Deck Strength, unfiltered
-let podPlayers = []; // players filtered to knownPlaygroupPlayers -- used by Pod Validator and Player Win Rates
+let podPlayers = []; // players filtered to knownPlaygroupPlayers -- used by Deck Strength Validator and Player Win Rates
 let podCount = 4;
 let podSelections = []; // { playerId, deckId } per slot
 let expandedPlayerIds = new Set(); // player blocks currently showing their deck table
@@ -149,7 +149,7 @@ function applyDeckStrengthRows(rows) {
 }
 
 // Picks up known_players from a /playgroup-games response, if it changed
-// the set of who's shown in Pod Validator (e.g. a new player was added to
+// the set of who's shown in Deck Strength Validator (e.g. a new player was added to
 // relay.js's USERNAME_TO_PLAYER since this page loaded).
 function applyKnownPlayers(data) {
   if (!Array.isArray(data.known_players) || data.known_players.length === 0) return;
@@ -279,7 +279,7 @@ async function syncFromRepoWorkbook() {
     applyDeckStrengthRows(rows);
     if (statusEl) {
       const deckCount = players.reduce((n, p) => n + p.decks.length, 0);
-      statusEl.textContent = `Synced from ${REPO_WORKBOOK_FILE} (${players.length} players, ${deckCount} decks; ${podPlayers.length} shown in Pod Validator).`;
+      statusEl.textContent = `Synced from ${REPO_WORKBOOK_FILE} (${players.length} players, ${deckCount} decks; ${podPlayers.length} shown in Deck Strength Validator).`;
     }
 
     gameLogSeason3Rows = extractGameLogFromWorkbook(workbook, CURRENT_SEASON_SHEET);
@@ -1178,7 +1178,7 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
         }
         submitBtn.textContent = "Submitted ✓";
         applyOptimisticGameSubmit(pgGame, podSize, rows, nextGameNum);
-        statusEl.textContent = "Added — already reflected in Games to Update, Player Win Rates, and Pod Validator's deck power. GitHub Actions is syncing this to the spreadsheet in the background (usually 1-3 minutes) so it sticks around for everyone else.";
+        statusEl.textContent = "Added — already reflected in Games to Update, Player Win Rates, and Deck Strength Validator's deck power. GitHub Actions is syncing this to the spreadsheet in the background (usually 1-3 minutes) so it sticks around for everyone else.";
       } catch (err) {
         submitBtn.disabled = false;
         submitBtn.textContent = "Submit to Spreadsheet";
@@ -1266,7 +1266,7 @@ async function loadRosterDiff() {
 
 // Compares the Worker's raw playgroup.gg roster/decks against what's
 // already parsed from Current Deck Strength (the `players` array -- same
-// data source Pod Validator and Player Win Rates already use). Matches by
+// data source Deck Strength Validator and Player Win Rates already use). Matches by
 // playgroup deck ID first; for rows the ID backfill hasn't reached yet,
 // falls back to the same name normalization findDefaultStrength uses, so
 // backfill completeness is never a hard requirement for correctness.
@@ -1635,7 +1635,7 @@ function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
         // applyOptimisticRosterUpdate just added them to `players`.
         submittedDeckIds.forEach(id => rosterUpdateDeckState.delete(id));
         submittedUsernames.forEach(u => rosterUpdateNameState.delete(u));
-        statusEl.textContent = "Added — already selectable in Pod Validator. GitHub Actions is syncing this to the spreadsheet in the background (usually 1-3 minutes) so it sticks around for everyone else.";
+        statusEl.textContent = "Added — already selectable in Deck Strength Validator. GitHub Actions is syncing this to the spreadsheet in the background (usually 1-3 minutes) so it sticks around for everyone else.";
       } catch (err) {
         submitBtn.disabled = false;
         submitBtn.textContent = "Add to Spreadsheet";
