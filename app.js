@@ -284,7 +284,7 @@ async function syncFromRepoWorkbook() {
 
     gameLogSeason3Rows = extractGameLogFromWorkbook(workbook, CURRENT_SEASON_SHEET);
     renderGamesToUpdate();
-    loadWinRates();
+    renderWinRatesTable(playgroupGamesData);
   } catch (err) {
     if (statusEl) {
       statusEl.textContent = `Using locally saved data — couldn't load ${REPO_WORKBOOK_FILE} (${err.message}).`;
@@ -649,97 +649,104 @@ function tallyPlaygroupWinRates(games) {
   return tally;
 }
 
-async function loadWinRates() {
+// Renders the Player Win Rates table from an already-fetched
+// /playgroup-games response -- see refreshPlaygroupGames below, which is
+// the only place that actually fetches it. Called both from there and from
+// syncFromRepoWorkbook (a fresh gameLogSeason3Rows changes the Adjusted
+// Win Rate column even when the playgroup.gg data itself hasn't changed),
+// and from applyOptimisticGameSubmit for an instant, zero-network re-render
+// right after a game is submitted. Safe to call with data === null (e.g.
+// before the first fetch resolves) -- just leaves the status text as-is.
+function renderWinRatesTable(data) {
   const statusEl = document.getElementById("winrates-sync-status");
   const noteEl = document.getElementById("winrates-note");
   const tableEl = document.getElementById("winrates-table");
+  if (!statusEl || !noteEl || !tableEl) return;
 
   if (!PLAYGROUP_GAMES_RELAY_URL) {
     statusEl.textContent = "Live playgroup.gg data not configured.";
     return;
   }
+  if (!data) return;
 
-  try {
-    const res = await fetch(PLAYGROUP_GAMES_RELAY_URL, { cache: "no-store" });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.detail || body.error || `HTTP ${res.status}`);
-    }
-    const data = await res.json();
-    applyKnownPlayers(data);
-    const tally = tallyPlaygroupWinRates(data.games || []);
+  const tally = tallyPlaygroupWinRates(data.games || []);
 
-    const table = document.createElement("table");
-    table.className = "winrates-table";
-    table.innerHTML = `
-      <thead>
-        <tr>
-          <th>Player</th>
-          <th>Win Rate (playgroup.gg)</th>
-          <th>Player Adjusted Win Rate</th>
-        </tr>
-      </thead>
-    `;
-    const tbody = document.createElement("tbody");
+  const table = document.createElement("table");
+  table.className = "winrates-table";
+  table.innerHTML = `
+    <thead>
+      <tr>
+        <th>Player</th>
+        <th>Win Rate (playgroup.gg)</th>
+        <th>Player Adjusted Win Rate</th>
+      </tr>
+    </thead>
+  `;
+  const tbody = document.createElement("tbody");
 
-    for (const player of podPlayers) {
-      const name = player.name;
-      const tr = document.createElement("tr");
+  for (const player of podPlayers) {
+    const name = player.name;
+    const tr = document.createElement("tr");
 
-      const nameTd = document.createElement("td");
-      nameTd.textContent = name;
+    const nameTd = document.createElement("td");
+    nameTd.textContent = name;
 
-      const pgTd = document.createElement("td");
-      pgTd.className = "num";
-      const t = tally[name];
-      if (t && (t.wins + t.losses) > 0) {
-        const pct = (t.wins / (t.wins + t.losses)) * 100;
-        pgTd.textContent = `${pct.toFixed(3)}% (${t.wins}-${t.losses})`;
-      } else {
-        pgTd.className += " muted";
-        pgTd.innerHTML = `<span class="na">No games in the active league yet</span>`;
-      }
-
-      const adjTd = document.createElement("td");
-      adjTd.className = "num";
-      const rows = gameLogSeason3Rows.filter(r => r.player === name && typeof r.J === "number");
-      if (rows.length > 0) {
-        const adj = computePlayerAdjustedWinRate(rows);
-        adjTd.textContent = `${(adj.B * 100).toFixed(3)}% (${adj.wins}-${adj.losses})`;
-      } else {
-        adjTd.className += " muted";
-        adjTd.innerHTML = `<span class="na">No games logged in ${CURRENT_SEASON_SHEET}</span>`;
-      }
-
-      tr.appendChild(nameTd);
-      tr.appendChild(pgTd);
-      tr.appendChild(adjTd);
-      tbody.appendChild(tr);
+    const pgTd = document.createElement("td");
+    pgTd.className = "num";
+    const t = tally[name];
+    if (t && (t.wins + t.losses) > 0) {
+      const pct = (t.wins / (t.wins + t.losses)) * 100;
+      pgTd.textContent = `${pct.toFixed(3)}% (${t.wins}-${t.losses})`;
+    } else {
+      pgTd.className += " muted";
+      pgTd.innerHTML = `<span class="na">No games in the active league yet</span>`;
     }
 
-    table.appendChild(tbody);
-    tableEl.innerHTML = "";
-    tableEl.appendChild(table);
+    const adjTd = document.createElement("td");
+    adjTd.className = "num";
+    const rows = gameLogSeason3Rows.filter(r => r.player === name && typeof r.J === "number");
+    if (rows.length > 0) {
+      const adj = computePlayerAdjustedWinRate(rows);
+      adjTd.textContent = `${(adj.B * 100).toFixed(3)}% (${adj.wins}-${adj.losses})`;
+    } else {
+      adjTd.className += " muted";
+      adjTd.innerHTML = `<span class="na">No games logged in ${CURRENT_SEASON_SHEET}</span>`;
+    }
 
-    statusEl.textContent = `Live as of ${new Date(data.generated_at).toLocaleTimeString()} (playgroup.gg data may be cached up to 5 min).`;
-    noteEl.innerHTML = "";
-    const note = document.createElement("span");
-    note.className = "note-line";
-    note.textContent = `Scoped to the active league (${data.league || "unknown"}). Player Adjusted Win Rate is computed live from the spreadsheet's ${CURRENT_SEASON_SHEET}.`;
-    noteEl.appendChild(note);
-  } catch (err) {
-    statusEl.textContent = `Couldn't load live win rates (${err.message}).`;
+    tr.appendChild(nameTd);
+    tr.appendChild(pgTd);
+    tr.appendChild(adjTd);
+    tbody.appendChild(tr);
   }
+
+  table.appendChild(tbody);
+  tableEl.innerHTML = "";
+  tableEl.appendChild(table);
+
+  statusEl.textContent = `Live as of ${new Date(data.generated_at).toLocaleTimeString()} (playgroup.gg data may be cached up to 5 min).`;
+  noteEl.innerHTML = "";
+  const note = document.createElement("span");
+  note.className = "note-line";
+  note.textContent = `Scoped to the active league (${data.league || "unknown"}). Player Adjusted Win Rate is computed live from the spreadsheet's ${CURRENT_SEASON_SHEET}.`;
+  noteEl.appendChild(note);
 }
 
 // ---------- games to update ----------
 
 let playgroupGamesData = null;
 
-async function loadPlaygroupGames() {
-  const statusEl = document.getElementById("gtu-status");
+// The one place /playgroup-games actually gets fetched. Games to Update and
+// Player Win Rates used to each fetch it independently -- up to 3 calls to
+// the same endpoint on a single page load (direct loadWinRates() call,
+// loadWinRates() again via syncFromRepoWorkbook, and loadPlaygroupGames())
+// for data that's identical every time. Both now render from this single
+// fetch instead.
+async function refreshPlaygroupGames() {
+  const gtuStatusEl = document.getElementById("gtu-status");
+  const wrStatusEl = document.getElementById("winrates-sync-status");
   if (!PLAYGROUP_GAMES_RELAY_URL) {
-    if (statusEl) statusEl.textContent = "Live playgroup.gg data not configured.";
+    if (gtuStatusEl) gtuStatusEl.textContent = "Live playgroup.gg data not configured.";
+    if (wrStatusEl) wrStatusEl.textContent = "Live playgroup.gg data not configured.";
     return;
   }
   try {
@@ -751,8 +758,10 @@ async function loadPlaygroupGames() {
     playgroupGamesData = await res.json();
     applyKnownPlayers(playgroupGamesData);
     renderGamesToUpdate();
+    renderWinRatesTable(playgroupGamesData);
   } catch (err) {
-    if (statusEl) statusEl.textContent = `Couldn't load live playgroup.gg data (${err.message}).`;
+    if (gtuStatusEl) gtuStatusEl.textContent = `Couldn't load live playgroup.gg data (${err.message}).`;
+    if (wrStatusEl) wrStatusEl.textContent = `Couldn't load live win rates (${err.message}).`;
   }
 }
 
@@ -969,6 +978,54 @@ function openGameForm(pgGame) {
   areaEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
+// Same reasoning as applyOptimisticRosterUpdate: the real round trip
+// (GitHub Action recalculating deck-strength.xlsx, the Pages rebuild, then
+// this page's next 60s poll) takes 1-3 minutes. This merges the
+// just-submitted game into gameLogSeason3Rows -- so Games to Update drops
+// it from the missing list and Player Win Rates' Adjusted Win Rate column
+// picks it up immediately, both computed client-side from this same array
+// already -- and updates each played deck's power in players/podPlayers to
+// its freshly computed Game Calculated Deck Strength (row.X), mirroring
+// what Current Deck Strength's own LOOKUP formula will settle on once it
+// recalcs (it always resolves to the newest logged game for that
+// player+commander, which this always is). Safe to be optimistic: the next
+// real syncFromRepoWorkbook() rebuilds both arrays from scratch, so nothing
+// here lingers or conflicts with the authoritative data.
+function applyOptimisticGameSubmit(pgGame, podSize, rows, gameNum) {
+  const gameDate = new Date(pgGame.date);
+
+  for (const row of rows) {
+    gameLogSeason3Rows.push({
+      gameNum,
+      date: gameDate,
+      player: row.player,
+      commander: row.commander,
+      commanderStrength: row.strength,
+      result: row.result === "win" ? 1 : 0,
+      podSize,
+      bracket: row.bracket,
+      J: row.J,
+      K: row.K,
+      M: row.M,
+    });
+
+    const player = players.find(p => p.name === row.player);
+    if (!player) continue;
+    const target = normalizeCommanderName(row.commander);
+    const deck = player.decks.find(d => normalizeCommanderName(d.name) === target) ||
+      player.decks.find(d =>
+        normalizeCommanderName(d.name).startsWith(target) || target.startsWith(normalizeCommanderName(d.name))
+      );
+    if (deck) deck.power = row.X;
+  }
+
+  podPlayers = players.filter(p => knownPlaygroupPlayers.has(p.name));
+  renderPlayersTable();
+  renderPodSlots();
+  renderGamesToUpdate();
+  renderWinRatesTable(playgroupGamesData);
+}
+
 function calculateGameToUpdate(pgGame, box, resultsEl) {
   const podSize = pgGame.pod_size;
   const readInputs = (i) => ({
@@ -1108,7 +1165,8 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
           throw new Error(body.error || `HTTP ${res.status}`);
         }
         submitBtn.textContent = "Submitted ✓";
-        statusEl.textContent = "GitHub Actions is updating the spreadsheet now — usually takes 1-3 minutes. This page checks for updates automatically, no need to refresh.";
+        applyOptimisticGameSubmit(pgGame, podSize, rows, nextGameNum);
+        statusEl.textContent = "Added — already reflected in Games to Update, Player Win Rates, and Pod Validator's deck power. GitHub Actions is syncing this to the spreadsheet in the background (usually 1-3 minutes) so it sticks around for everyone else.";
       } catch (err) {
         submitBtn.disabled = false;
         submitBtn.textContent = "Submit to Spreadsheet";
@@ -1375,21 +1433,20 @@ if (gtuIntroEl) {
 initPlayerCountSelect();
 syncFromRepoWorkbook();
 initTabs();
-loadWinRates();
-loadPlaygroupGames();
+refreshPlaygroupGames();
 loadRosterDiff();
 
 // Keeps everything derived from either data source fresh without a manual
 // reload: syncFromRepoWorkbook re-fetches deck-strength.xlsx (also re-runs
-// loadWinRates as part of it), loadPlaygroupGames re-fetches the live
-// playgroup.gg games list that Games to Update depends on to notice new
-// games, loadRosterDiff re-fetches the live roster/deck list that Update
-// the App depends on. Paused while the tab isn't visible so it doesn't do
-// pointless work in the background.
+// renderWinRatesTable as part of it), refreshPlaygroupGames re-fetches the
+// live playgroup.gg games list that both Games to Update and Player Win
+// Rates depend on, loadRosterDiff re-fetches the live roster/deck list that
+// Update the App depends on. Paused while the tab isn't visible so it
+// doesn't do pointless work in the background.
 const AUTO_REFRESH_INTERVAL_MS = 60000;
 setInterval(() => {
   if (document.hidden) return;
   syncFromRepoWorkbook();
-  loadPlaygroupGames();
+  refreshPlaygroupGames();
   loadRosterDiff();
 }, AUTO_REFRESH_INTERVAL_MS);
