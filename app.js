@@ -834,7 +834,8 @@ function renderGamesToUpdate() {
   }
 
   const missing = playgroupGamesData.games.filter(g => !findLoggedMatch(g));
-  statusEl.textContent = `${missing.length} of ${playgroupGamesData.games.length} ${playgroupGamesData.league || ""} games aren't in the Game Log yet.`;
+  const liveAsOf = playgroupGamesData.generated_at ? new Date(playgroupGamesData.generated_at).toLocaleTimeString() : null;
+  statusEl.textContent = `${liveAsOf ? `Live as of ${liveAsOf} — ` : ""}${missing.length} of ${playgroupGamesData.games.length} ${playgroupGamesData.league || ""} games aren't in the Game Log yet.`;
 
   listEl.innerHTML = "";
   if (missing.length === 0) {
@@ -1196,11 +1197,22 @@ const rosterUpdateDeckState = new Map(); // deckId (string) -> { checked, power 
 const rosterUpdateNameState = new Map(); // username -> displayName
 let rosterUpdateSelectedGroupKey = null; // which player's group the dropdown is showing, preserved across renders too
 
+// Deliberately defaults to UNCHECKED. A deck often already has a valid
+// power_level from playgroup.gg pre-filled the moment it's detected, so a
+// checked-by-default box needs zero user action to become submit-ready --
+// and with only one group visible at a time (the dropdown), a user
+// reviewing one player's pending decks has no visual sign that every other
+// pending group is also sitting there fully checked. That combination is
+// exactly how a "select Becca's one deck" submission ended up including
+// everyone else's pending decks too. Select All exists for the case where
+// someone genuinely wants to submit everything at once -- that should be
+// an explicit action, never an accident of what happened to be true by
+// default in a group nobody looked at.
 function ensureRosterUpdateDeckStateDefault(deck) {
   const key = String(deck.id);
   if (!rosterUpdateDeckState.has(key)) {
     rosterUpdateDeckState.set(key, {
-      checked: true,
+      checked: false,
       power: typeof deck.power_level === "number" ? deck.power_level.toFixed(1) : "",
     });
   }
@@ -1296,6 +1308,7 @@ function wireRosterUpdateGroupInputs(container) {
   container.querySelectorAll(".uta-deck-check").forEach(el => {
     el.addEventListener("change", () => {
       rosterUpdateDeckState.set(el.dataset.deckId, { ...rosterUpdateDeckState.get(el.dataset.deckId), checked: el.checked });
+      refreshRosterUpdateSubmitSummary();
     });
   });
   container.querySelectorAll(".uta-deck-power").forEach(el => {
@@ -1484,7 +1497,52 @@ function applyOptimisticRosterUpdate(payload) {
   renderPodSlots();
 }
 
+// A count of what's actually about to be submitted, across every pending
+// group -- not just the one currently visible in the dropdown. Exists
+// because the dropdown hides other groups' checkbox state from view, so
+// without an explicit running total there's no way to notice a
+// stray-checked deck from a group you never looked at before hitting
+// submit. Kept live via the checkbox change listener in
+// wireRosterUpdateGroupInputs, not just re-render.
+function describeRosterUpdateSelection(newPlayers, newDecksForExisting) {
+  let deckCount = 0;
+  const playerLabels = new Set();
+  newPlayers.forEach(p => {
+    p.decks.forEach(d => {
+      const s = rosterUpdateDeckState.get(String(d.id));
+      if (s && s.checked) {
+        deckCount++;
+        playerLabels.add(`${p.username} (new)`);
+      }
+    });
+  });
+  newDecksForExisting.forEach(g => {
+    g.decks.forEach(d => {
+      const s = rosterUpdateDeckState.get(String(d.id));
+      if (s && s.checked) {
+        deckCount++;
+        playerLabels.add(g.player);
+      }
+    });
+  });
+  if (deckCount === 0) return "Nothing selected yet — check the box next to each deck you want to add.";
+  return `Ready to submit: ${deckCount} deck${deckCount === 1 ? "" : "s"} for ${[...playerLabels].join(", ")}.`;
+}
+
+function refreshRosterUpdateSubmitSummary() {
+  const summaryEl = document.getElementById("uta-submit-summary");
+  if (!summaryEl || !rosterDiffData) return;
+  const { newPlayers, newDecksForExisting } = computeRosterDiff(rosterDiffData);
+  summaryEl.textContent = describeRosterUpdateSelection(newPlayers, newDecksForExisting);
+}
+
 function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
+  const summaryEl = document.createElement("p");
+  summaryEl.id = "uta-submit-summary";
+  summaryEl.className = "hint";
+  summaryEl.textContent = describeRosterUpdateSelection(newPlayers, newDecksForExisting);
+  formAreaEl.appendChild(summaryEl);
+
   const submitBtn = document.createElement("button");
   submitBtn.className = "primary uta-submit-btn";
   const statusEl = document.createElement("span");

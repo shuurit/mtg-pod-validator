@@ -57,8 +57,6 @@ const ALLOWED_ORIGIN = "https://shuurit.github.io";
 
 const PLAYGROUP_ID = 51996;
 const PLAYGROUP_API_BASE = "https://playgroup.gg/api/public/v1";
-const CACHE_TTL_SECONDS = 300; // 5 minutes
-
 // Hard per-run caps so a cold cache (or a big backlog) can never exceed
 // Workers' 50-subrequest limit. Fixed overhead is 3 calls (/me, playgroups,
 // games list), so these two caps must sum to well under 47.
@@ -423,12 +421,6 @@ async function computePlaygroupGames(env) {
 }
 
 async function handlePlaygroupGames(env, ctx) {
-  const cache = caches.default;
-  const cacheKey = new Request(`https://cache.internal/playgroup-games`);
-
-  const cached = await cache.match(cacheKey);
-  if (cached) return cached;
-
   let data;
   try {
     data = await computePlaygroupGames(env);
@@ -436,9 +428,7 @@ async function handlePlaygroupGames(env, ctx) {
     return jsonResponse({ error: "Failed to read playgroup.gg", detail: err.message }, 502);
   }
 
-  const response = jsonResponse(data, 200, { "Cache-Control": `public, max-age=${CACHE_TTL_SECONDS}` });
-  ctx.waitUntil(cache.put(cacheKey, response.clone()));
-  return response;
+  return jsonResponse(data, 200, { "Cache-Control": "no-store" });
 }
 
 // ---------- GET /roster-diff : who/what is on playgroup.gg but not yet tracked ----------
