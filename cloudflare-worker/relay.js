@@ -83,7 +83,6 @@ const USERNAME_TO_PLAYER = {
   "Ecthelion": "Ryan",
   "MLMyBelle": "Michelle",
   "Red": "Red",
-  "ZZTestAutoDeployUser3": "ZZTestAutoDeploy3",
 };
 
 function corsHeaders() {
