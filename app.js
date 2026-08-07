@@ -1449,14 +1449,17 @@ function renderRosterUpdateGroup(group) {
   return box;
 }
 
-// Checks/unchecks every pending deck across every group, not just the one
-// currently shown in the dropdown -- the submit button covers everything
-// pending regardless of which group is in view, so Select All should too.
-function setAllRosterUpdateChecked(groups, checked) {
-  groups.forEach(g => {
-    g.data.decks.forEach(d => {
-      rosterUpdateDeckState.set(String(d.id), { ...rosterUpdateDeckState.get(String(d.id)), checked });
-    });
+// Checks/unchecks every deck for the ONE group currently shown in the
+// dropdown -- deliberately not every pending group. It used to be global,
+// but that meant clicking Select All to grab one new player's decks
+// silently swept up every other pending player's decks too, invisible
+// since only one group is ever on screen at a time. That's the exact
+// mechanism that turned "select Becca's one deck" into "submit everyone's
+// pending decks" earlier -- scoping this to the visible group avoids
+// reintroducing it via the opposite button.
+function setAllRosterUpdateChecked(group, checked) {
+  group.data.decks.forEach(d => {
+    rosterUpdateDeckState.set(String(d.id), { ...rosterUpdateDeckState.get(String(d.id)), checked });
   });
   renderUpdateAppTab();
 }
@@ -1518,6 +1521,7 @@ function renderUpdateAppTab() {
   if (!groups.some(g => g.key === rosterUpdateSelectedGroupKey)) {
     rosterUpdateSelectedGroupKey = groups[0].key;
   }
+  const activeGroup = groups.find(g => g.key === rosterUpdateSelectedGroupKey);
 
   listEl.innerHTML = "";
 
@@ -1546,20 +1550,19 @@ function renderUpdateAppTab() {
   const selectAllBtn = document.createElement("button");
   selectAllBtn.type = "button";
   selectAllBtn.textContent = "Select All";
-  selectAllBtn.title = "Checks every pending deck, across every player -- not just the one shown below.";
-  selectAllBtn.addEventListener("click", () => setAllRosterUpdateChecked(groups, true));
+  selectAllBtn.title = "Checks every deck for the player shown below -- not every pending player.";
+  selectAllBtn.addEventListener("click", () => setAllRosterUpdateChecked(activeGroup, true));
 
   const deselectAllBtn = document.createElement("button");
   deselectAllBtn.type = "button";
   deselectAllBtn.textContent = "Deselect All";
-  deselectAllBtn.title = "Unchecks every pending deck, across every player -- not just the one shown below.";
-  deselectAllBtn.addEventListener("click", () => setAllRosterUpdateChecked(groups, false));
+  deselectAllBtn.title = "Unchecks every deck for the player shown below -- not every pending player.";
+  deselectAllBtn.addEventListener("click", () => setAllRosterUpdateChecked(activeGroup, false));
 
   controls.appendChild(selectAllBtn);
   controls.appendChild(deselectAllBtn);
   listEl.appendChild(controls);
 
-  const activeGroup = groups.find(g => g.key === rosterUpdateSelectedGroupKey);
   listEl.appendChild(renderRosterUpdateGroup(activeGroup));
 
   renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting);
