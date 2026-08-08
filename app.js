@@ -672,6 +672,19 @@ function tallyPlaygroupWinRates(games) {
   return tally;
 }
 
+// Which column the Player Win Rates table is sorted by, and which
+// direction -- persisted here (not local to renderWinRatesTable) so a
+// re-render triggered by a data refresh doesn't reset a sort the user
+// picked. Defaults to Player Adjusted Win Rate, highest first, since
+// that's the group's own metric rather than playgroup.gg's raw rate.
+let winRatesSortColumn = "adjusted"; // "adjusted" | "playgroup"
+let winRatesSortDirection = "desc"; // "desc" | "asc"
+
+const WINRATES_COLUMNS = [
+  { key: "playgroup", label: "Win Rate (playgroup.gg)" },
+  { key: "adjusted", label: "Player Adjusted Win Rate" },
+];
+
 // Renders the Player Win Rates table from an already-fetched
 // /playgroup-games response -- see refreshPlaygroupGames below, which is
 // the only place that actually fetches it. Called both from there and from
@@ -694,32 +707,77 @@ function renderWinRatesTable(data) {
 
   const tally = tallyPlaygroupWinRates(data.games || []);
 
+  // Compute both columns' values up front, per player, so they can be
+  // sorted before any DOM gets built. `pct`/`adjPct` are null (rather than
+  // 0) when there's no data -- those rows always sort to the bottom
+  // regardless of direction, instead of looking like a 0% win rate.
+  const rowData = podPlayers.map(player => {
+    const name = player.name;
+    const t = tally[name];
+    const hasPlaygroup = !!t && (t.wins + t.losses) > 0;
+    const pgPct = hasPlaygroup ? (t.wins / (t.wins + t.losses)) * 100 : null;
+
+    const adjRows = gameLogSeason3Rows.filter(r => r.player === name && typeof r.J === "number");
+    const hasAdjusted = adjRows.length > 0;
+    const adj = hasAdjusted ? computePlayerAdjustedWinRate(adjRows) : null;
+
+    return {
+      name,
+      pgPct, pgWins: t ? t.wins : 0, pgLosses: t ? t.losses : 0,
+      adjPct: hasAdjusted ? adj.B * 100 : null, adjWins: hasAdjusted ? adj.wins : 0, adjLosses: hasAdjusted ? adj.losses : 0,
+    };
+  });
+
+  const sortKey = winRatesSortColumn === "playgroup" ? "pgPct" : "adjPct";
+  const dir = winRatesSortDirection === "asc" ? 1 : -1;
+  rowData.sort((a, b) => {
+    if (a[sortKey] === null && b[sortKey] === null) return 0;
+    if (a[sortKey] === null) return 1;
+    if (b[sortKey] === null) return -1;
+    return (a[sortKey] - b[sortKey]) * dir;
+  });
+
   const table = document.createElement("table");
   table.className = "winrates-table";
-  table.innerHTML = `
-    <thead>
-      <tr>
-        <th>Player</th>
-        <th>Win Rate (playgroup.gg)</th>
-        <th>Player Adjusted Win Rate</th>
-      </tr>
-    </thead>
-  `;
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+
+  const nameTh = document.createElement("th");
+  nameTh.textContent = "Player";
+  headRow.appendChild(nameTh);
+
+  for (const col of WINRATES_COLUMNS) {
+    const th = document.createElement("th");
+    th.className = "sortable";
+    const isActive = winRatesSortColumn === col.key;
+    th.textContent = col.label + (isActive ? (winRatesSortDirection === "desc" ? " ▾" : " ▴") : "");
+    if (isActive) th.classList.add("sorted");
+    th.addEventListener("click", () => {
+      if (winRatesSortColumn === col.key) {
+        winRatesSortDirection = winRatesSortDirection === "desc" ? "asc" : "desc";
+      } else {
+        winRatesSortColumn = col.key;
+        winRatesSortDirection = "desc";
+      }
+      renderWinRatesTable(playgroupGamesData);
+    });
+    headRow.appendChild(th);
+  }
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
   const tbody = document.createElement("tbody");
 
-  for (const player of podPlayers) {
-    const name = player.name;
+  for (const row of rowData) {
     const tr = document.createElement("tr");
 
     const nameTd = document.createElement("td");
-    nameTd.textContent = name;
+    nameTd.textContent = row.name;
 
     const pgTd = document.createElement("td");
     pgTd.className = "num";
-    const t = tally[name];
-    if (t && (t.wins + t.losses) > 0) {
-      const pct = (t.wins / (t.wins + t.losses)) * 100;
-      pgTd.textContent = `${pct.toFixed(3)}% (${t.wins}-${t.losses})`;
+    if (row.pgPct !== null) {
+      pgTd.textContent = `${row.pgPct.toFixed(3)}% (${row.pgWins}-${row.pgLosses})`;
     } else {
       pgTd.className += " muted";
       pgTd.innerHTML = `<span class="na">No games in the active league yet</span>`;
@@ -727,10 +785,8 @@ function renderWinRatesTable(data) {
 
     const adjTd = document.createElement("td");
     adjTd.className = "num";
-    const rows = gameLogSeason3Rows.filter(r => r.player === name && typeof r.J === "number");
-    if (rows.length > 0) {
-      const adj = computePlayerAdjustedWinRate(rows);
-      adjTd.textContent = `${(adj.B * 100).toFixed(3)}% (${adj.wins}-${adj.losses})`;
+    if (row.adjPct !== null) {
+      adjTd.textContent = `${row.adjPct.toFixed(3)}% (${row.adjWins}-${row.adjLosses})`;
     } else {
       adjTd.className += " muted";
       adjTd.innerHTML = `<span class="na">No games logged in ${CURRENT_SEASON_SHEET}</span>`;
