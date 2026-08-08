@@ -446,8 +446,21 @@ function renderPodSlots() {
     }
 
     const deckSelect = document.createElement("select");
-    const powerSpan = document.createElement("div");
-    powerSpan.className = "slot-power";
+
+    // Once a deck is picked, the select is swapped out for this masked
+    // stand-in so nobody reading the screen over a player's shoulder can
+    // see the deck's name or power -- not even the player, once they've
+    // moved on. Tapping it re-reveals the select to change the pick.
+    const maskedBtn = document.createElement("button");
+    maskedBtn.type = "button";
+    maskedBtn.className = "slot-deck-masked";
+    maskedBtn.textContent = "🔒 Deck selected — tap to change";
+
+    function syncDeckVisibility() {
+      const masked = !!slot.deckId;
+      deckSelect.hidden = masked;
+      maskedBtn.hidden = !masked;
+    }
 
     function refreshDeckOptions() {
       deckSelect.innerHTML = "";
@@ -466,16 +479,7 @@ function renderPodSlots() {
           deckSelect.appendChild(opt);
         }
       }
-      updatePowerDisplay();
-    }
-
-    // Power is never shown here -- only that a deck has been picked. The
-    // actual value is only revealed as a "how far off" delta after Check
-    // Deck Power Spread runs, never as a raw number in the pod setup UI.
-    function updatePowerDisplay() {
-      const player = podPlayers.find(p => p.id === slot.playerId);
-      const deck = player ? player.decks.find(d => d.id === slot.deckId) : null;
-      powerSpan.textContent = deck ? "✓ Selected" : "";
+      syncDeckVisibility();
     }
 
     function markStaleIfChecked() {
@@ -494,8 +498,14 @@ function renderPodSlots() {
 
     deckSelect.addEventListener("change", () => {
       slot.deckId = deckSelect.value;
-      updatePowerDisplay();
+      syncDeckVisibility();
       markStaleIfChecked();
+    });
+
+    maskedBtn.addEventListener("click", () => {
+      deckSelect.hidden = false;
+      maskedBtn.hidden = true;
+      deckSelect.focus();
     });
 
     refreshDeckOptions();
@@ -503,7 +513,7 @@ function renderPodSlots() {
     row.appendChild(label);
     row.appendChild(playerSelect);
     row.appendChild(deckSelect);
-    row.appendChild(powerSpan);
+    row.appendChild(maskedBtn);
     container.appendChild(row);
   }
 }
@@ -511,7 +521,7 @@ function renderPodSlots() {
 // ---------- validation ----------
 
 function evaluatePod(entries) {
-  // entries: [{ playerId, playerName, deckId, deckName, power }]
+  // entries: [{ playerId, playerName, deckId, power }]
   // The weakest deck in the pod sets the floor; anything more than
   // RANGE_TOLERANCE above it needs to come down. The weakest deck itself
   // is always compatible — it's never asked to get even weaker.
@@ -548,7 +558,6 @@ function runValidation() {
       playerId: player.id,
       playerName: player.name,
       deckId: deck.id,
-      deckName: deck.name,
       power: deck.power,
     };
   });
@@ -573,9 +582,11 @@ function runValidation() {
     row.className = "result-row " + (entry.compatible ? "ok" : "out");
     row.dataset.playerId = entry.playerId;
 
+    // Deck identity is never shown here either -- only who it belongs to
+    // and whether their (unnamed) pick is in range.
     const name = document.createElement("span");
     name.className = "name";
-    name.textContent = `${entry.playerName} — ${entry.deckName}`;
+    name.textContent = entry.playerName;
 
     // Power itself stays masked here too -- only the amount a deck is
     // over the pod's range is ever shown, never the raw power value.

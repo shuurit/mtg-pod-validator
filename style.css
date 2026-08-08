@@ -294,7 +294,7 @@ button.primary.glow {
   animation: recheck-glow 1.4s ease-in-out infinite;
 }
 
-select, input[type="number"], input[type="text"] {
+select, input[type="number"], input[type="text"], .slot-deck-masked {
   font-size: 0.9rem;
   padding: 7px 9px;
   border-radius: var(--radius-sm);
@@ -403,7 +403,7 @@ td.num {
 
 .slot {
   display: grid;
-  grid-template-columns: 90px 1fr 1fr 90px;
+  grid-template-columns: 90px 1fr 1fr;
   gap: 10px;
   align-items: center;
   padding: 12px 4px;
@@ -431,11 +431,15 @@ td.num {
   font-weight: 600;
 }
 
-.slot-power {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
-  color: var(--muted);
+.slot-deck-masked {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  cursor: pointer;
+}
+.slot-deck-masked:hover {
+  border-color: var(--accent);
 }
 
 .banner {
@@ -672,13 +676,9 @@ td.num {
     letter-spacing: 0.03em;
   }
 
-  .slot select {
+  .slot select, .slot-deck-masked {
     width: 100%;
     min-width: 0;
-  }
-
-  .slot-power {
-    text-align: left;
   }
 
   /* Same shrink issue on the player row header — let it wrap instead
