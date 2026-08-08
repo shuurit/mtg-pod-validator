@@ -93,6 +93,76 @@
   </div>
 </div>
 
+<!-- Decorative mascot strip, fixed to the bottom of every tab. Bakes the
+     "presenting a tray" pose into a CSS keyframe animation rather than a
+     bitmap sprite sheet, so it's one crisp SVG at any zoom/DPI. -->
+<footer id="sprite-strip" aria-hidden="true">
+  <div id="bumbleflower" class="sprite-walker">
+    <svg class="sprite-svg" viewBox="0 0 100 130" xmlns="http://www.w3.org/2000/svg">
+      <ellipse class="leg leg-back" cx="42" cy="112" rx="9" ry="7" fill="#ede2cf" stroke="#c9b995" stroke-width="1.5"/>
+      <ellipse class="leg leg-front" cx="60" cy="112" rx="9" ry="7" fill="#f4ead9" stroke="#c9b995" stroke-width="1.5"/>
+
+      <ellipse class="arm-back" cx="72" cy="80" rx="7" ry="12" fill="#f6ecdb" stroke="#c9b995" stroke-width="1.2" transform="rotate(15 72 80)"/>
+
+      <path class="body" d="M50 55 C30 55,24 78,28 100 C30 112,70 112,72 100 C76 78,70 55,50 55 Z" fill="#f6ecdb" stroke="#c9b995" stroke-width="1.5"/>
+      <path class="apron" d="M34 72 C34 95,66 95,66 72 C66 68,60 66,50 66 C40 66,34 68,34 72 Z" fill="var(--accent)" stroke="var(--accent-strong)" stroke-width="1.2"/>
+      <rect class="apron-pocket" x="43" y="82" width="14" height="9" rx="2" fill="var(--accent-strong)"/>
+
+      <!-- Paw lives inside .tray so it appears/disappears in sync with it
+           instead of floating on its own during the walk phase. -->
+      <g class="tray">
+        <ellipse class="paw" cx="-6" cy="15" rx="6" ry="5" fill="#f9f1e3" stroke="#c9b995" stroke-width="1.2"/>
+        <rect class="tray-plank" x="-4" y="12" width="50" height="6" rx="2" fill="#a8703f" stroke="#7a4f28" stroke-width="1"/>
+        <g class="teapot" transform="translate(3,-4) scale(0.8)">
+          <path d="M0 10 C0 4 6 0 12 0 C18 0 24 4 24 10 C24 15 18 18 12 18 C6 18 0 15 0 10 Z" fill="#fff" stroke="var(--accent-strong)" stroke-width="1.2"/>
+          <path d="M0 8 C-6 6 -6 12 0 12" fill="none" stroke="var(--accent-strong)" stroke-width="1.5"/>
+          <path d="M24 8 L30 6" stroke="var(--accent-strong)" stroke-width="1.8" stroke-linecap="round"/>
+          <circle cx="12" cy="-2" r="2.4" fill="var(--accent)"/>
+          <circle cx="7" cy="9" r="1.3" fill="var(--accent)"/>
+          <circle cx="17" cy="9" r="1.3" fill="var(--accent)"/>
+        </g>
+        <g class="treat" transform="translate(27,7.5)">
+          <circle r="4.5" fill="#d9a066" stroke="#a8703f" stroke-width="1"/>
+          <circle cx="-1.5" cy="-1" r="0.8" fill="#5a3a1e"/>
+          <circle cx="1.5" cy="0.5" r="0.8" fill="#5a3a1e"/>
+          <circle cx="0" cy="2" r="0.8" fill="#5a3a1e"/>
+        </g>
+        <g class="teacup" transform="translate(35,2)">
+          <path d="M0 6 C0 10 8 10 8 6 L7 2 L1 2 Z" fill="#fff" stroke="var(--accent-strong)" stroke-width="1"/>
+          <path d="M8 5 L11 5" fill="none" stroke="var(--accent-strong)" stroke-width="1.2"/>
+          <path class="steam steam-1" d="M2 0 C1 -3 4 -3 3 -6" fill="none" stroke="#c9b995" stroke-width="0.9" stroke-linecap="round"/>
+          <path class="steam steam-2" d="M6 0 C5 -3 8 -3 7 -6" fill="none" stroke="#c9b995" stroke-width="0.9" stroke-linecap="round"/>
+        </g>
+      </g>
+
+      <g transform="rotate(-12 40 10)">
+        <g class="ear-sway ear-sway-back">
+          <ellipse cx="40" cy="10" rx="7" ry="22" fill="#f6ecdb" stroke="#c9b995" stroke-width="1.5"/>
+          <ellipse cx="40" cy="10" rx="3.2" ry="16" fill="#f3b6c9"/>
+        </g>
+      </g>
+      <g transform="rotate(10 58 8)">
+        <g class="ear-sway ear-sway-front">
+          <ellipse cx="58" cy="8" rx="7" ry="23" fill="#faf3e6" stroke="#c9b995" stroke-width="1.5"/>
+          <ellipse cx="58" cy="8" rx="3.2" ry="17" fill="#f6c4d4"/>
+        </g>
+      </g>
+
+      <circle class="face" cx="50" cy="42" r="24" fill="#faf3e6" stroke="#c9b995" stroke-width="1.5"/>
+      <circle class="cheek" cx="34" cy="46" r="4.5" fill="#f6c4d4" opacity="0.7"/>
+      <circle class="cheek" cx="66" cy="46" r="4.5" fill="#f6c4d4" opacity="0.7"/>
+      <circle class="eye" cx="41" cy="40" r="2.6" fill="#3a3226"/>
+      <circle class="eye" cx="59" cy="40" r="2.6" fill="#3a3226"/>
+      <path class="nose" d="M47 48 L53 48 L50 52 Z" fill="#e8879d"/>
+      <path class="mouth" d="M50 52 Q50 56 46 55 M50 52 Q50 56 54 55" fill="none" stroke="#c9865a" stroke-width="1.3" stroke-linecap="round"/>
+      <path class="whisker" d="M26 44 L14 41" stroke="#c9b995" stroke-width="1" stroke-linecap="round"/>
+      <path class="whisker" d="M26 49 L14 50" stroke="#c9b995" stroke-width="1" stroke-linecap="round"/>
+      <path class="whisker" d="M74 44 L86 41" stroke="#c9b995" stroke-width="1" stroke-linecap="round"/>
+      <path class="whisker" d="M74 49 L86 50" stroke="#c9b995" stroke-width="1" stroke-linecap="round"/>
+    </svg>
+  </div>
+</footer>
+
 <script src="xlsx.full.min.js"></script>
 <script src="app.js"></script>
 </body>
