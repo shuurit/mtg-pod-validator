@@ -263,6 +263,7 @@ function extractGameLogFromWorkbook(workbook, sheetName) {
       date: get(r, "Game Date"),
       player,
       commander: get(r, "Commander"),
+      playgroupGameId: get(r, "Playgroup Game ID"),
       commanderStrength: get(r, "Commander Strength"),
       result: get(r, "Game Result"),
       podSize: get(r, "Pod Size"),
@@ -871,10 +872,14 @@ async function refreshPlaygroupGames() {
 }
 
 // Matches every currently-tracked playgroup.gg game against the Game Log's
-// logged games, one-to-one. A logged game and a playgroup.gg game are the
-// same real game if the same set of tracked players appears under a Game
-// Log game number, within a day and a half of the playgroup.gg timestamp
-// (playgroup.gg logs in UTC+2; the sheet's date can land a day off).
+// logged games, one-to-one. A row already carrying a Playgroup Game ID
+// (column Y -- written automatically by add_game.py, or backfilled onto
+// older rows by backfill_game_ids.py) matches by exact ID, no inference
+// needed. For everything else, a logged game and a playgroup.gg game are
+// treated as the same real game if the same set of tracked players appears
+// under a Game Log game number, within a day and a half of the
+// playgroup.gg timestamp (playgroup.gg logs in UTC+2; the sheet's date can
+// land a day off).
 //
 // This has to run as a single batch over every game, not per playgroup.gg
 // game in isolation: the same pod commonly plays more than one real game
@@ -900,11 +905,30 @@ function computeLoggedMatches(pgGames) {
     players: new Set(rows.map(r => r.player)),
     commandersByPlayer: new Map(rows.map(r => [r.player, normalizeCommanderName(r.commander)])),
     date: rows[0].date instanceof Date ? rows[0].date : null,
+    playgroupGameId: rows[0].playgroupGameId ? String(rows[0].playgroupGameId) : null,
     claimed: false,
   }));
 
   const matches = new Map();
-  const sortedPgGames = [...pgGames].sort((a, b) => new Date(a.date) - new Date(b.date));
+
+  // A row backfill_game_ids.py or add_game.py already stamped with the real
+  // playgroup.gg game ID needs no inference at all -- exact id equality,
+  // no heuristics, no ambiguity. Handled first and removed from the pool so
+  // the heuristic loop below only ever sees games that still need it (a
+  // manually-entered game, or one predating the ID column).
+  const remainingPgGames = [];
+  for (const pgGame of pgGames) {
+    const idStr = String(pgGame.playgroup_game_id);
+    const logged = loggedGames.find(lg => !lg.claimed && lg.playgroupGameId === idStr);
+    if (logged) {
+      logged.claimed = true;
+      matches.set(pgGame.playgroup_game_id, logged.gameNum);
+    } else {
+      remainingPgGames.push(pgGame);
+    }
+  }
+
+  const sortedPgGames = [...remainingPgGames].sort((a, b) => new Date(a.date) - new Date(b.date));
   for (const pgGame of sortedPgGames) {
     const pgPlayers = new Set(pgGame.participants.map(p => p.player));
     const pgDate = new Date(pgGame.date);
@@ -1401,6 +1425,7 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
       const payload = {
         date: pgGame.date,
         podSize,
+        playgroupGameId: pgGame.playgroup_game_id,
         participants: rows.map(row => ({
           player: row.player,
           commander: row.commander,
