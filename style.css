@@ -69,7 +69,7 @@ body {
 .wrap {
   max-width: 880px;
   margin: 0 auto;
-  padding: 40px 20px 130px;
+  padding: 40px 20px 90px;
 }
 
 /* Fixed so it's always reachable regardless of scroll position -- mainly
@@ -670,6 +670,9 @@ td.num {
 
   header h1 {
     font-size: 1.5rem;
+    /* Leaves room for the fixed refresh button + moogle mascot pinned to
+       the top-right corner, so wrapped title text doesn't run under them. */
+    padding-right: 90px;
   }
 
   .card {
@@ -730,113 +733,34 @@ td.num {
     padding: 13px 14px;
   }
 
-  #sprite-strip { height: 78px; }
-  .sprite-walker { width: 62px; height: 78px; }
+  #moogle-mascot { right: max(56px, calc(env(safe-area-inset-right) + 56px)); }
 }
 
-/* ---------- bottom mascot: a rabbit baker who wanders the footer and
-   pauses partway across each pass to present a tray of tea and treats ---------- */
-#sprite-strip {
+/* ---------- moogle mascot: 38-frame sprite sheet stepped next to the
+   refresh button, classic background-position sprite animation ---------- */
+#moogle-mascot {
   position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 96px;
-  padding-bottom: env(safe-area-inset-bottom);
-  /* visible, not hidden: the ears render a few px outside the character's
-     own SVG viewBox, and horizontal movement never leaves the viewport. */
-  overflow: visible;
+  top: max(11px, env(safe-area-inset-top));
+  right: max(62px, calc(env(safe-area-inset-right) + 62px));
+  z-index: 100;
+  width: 36px;
+  height: 50px;
+  background-image: url('moogle-sprite.png');
+  background-repeat: no-repeat;
+  background-size: 1368px 50px; /* 38 frames x 36px */
+  image-rendering: pixelated;
   pointer-events: none;
-  z-index: 50;
-  background: linear-gradient(to top, var(--bg-accent), transparent);
+  animation: moogle-flip 4s steps(38) infinite;
 }
 
-.sprite-walker {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  width: 78px;
-  height: 96px;
-  transform-origin: 50% 100%;
-  animation: sprite-cycle 20s linear infinite;
-}
-
-.sprite-svg {
-  width: 100%;
-  height: 100%;
-  overflow: visible;
-}
-
-/* Walks to the right, pauses to serve tea, turns, walks back, pauses again. */
-@keyframes sprite-cycle {
-  0%   { transform: translateX(4vw) scaleX(1); }
-  38%  { transform: translateX(calc(100vw - 82px)) scaleX(1); }
-  58%  { transform: translateX(calc(100vw - 82px)) scaleX(1); }
-  60%  { transform: translateX(calc(100vw - 82px)) scaleX(-1); }
-  98%  { transform: translateX(4vw) scaleX(-1); }
-  100% { transform: translateX(4vw) scaleX(1); }
-}
-
-.leg {
-  transform-box: fill-box;
-  transform-origin: 50% 0%;
-  animation: sprite-leg-bounce 0.9s ease-in-out infinite;
-}
-.leg-back { animation-delay: 0.45s; }
-
-@keyframes sprite-leg-bounce {
-  0%, 100% { transform: translateY(0) scaleY(1); }
-  50% { transform: translateY(-2px) scaleY(0.92); }
-}
-
-/* Base tilt lives on the outer (unanimated) <g> so this sway adds to it
-   instead of replacing it -- CSS transform animations overwrite an SVG
-   element's own transform attribute rather than composing with it. */
-.ear-sway {
-  transform-box: fill-box;
-  transform-origin: 50% 100%;
-  animation: sprite-ear-sway 1.8s ease-in-out infinite;
-}
-.ear-sway-back { animation-delay: 0.2s; }
-
-@keyframes sprite-ear-sway {
-  0%, 100% { transform: rotate(-4deg); }
-  50% { transform: rotate(4deg); }
-}
-
-/* Tucked away behind the hip most of the cycle; slides out to the front
-   hand and back on the same timeline as the walk pause above. */
-.tray {
-  transform-box: fill-box;
-  transform-origin: 0% 0%;
-  animation: sprite-tray-cycle 20s linear infinite;
-}
-
-@keyframes sprite-tray-cycle {
-  0%, 36%  { transform: translate(-10px, 92px) scale(0.55); opacity: 0; }
-  40%      { transform: translate(14px, 74px) scale(1); opacity: 1; }
-  54%      { transform: translate(14px, 74px) scale(1); opacity: 1; }
-  58%, 100% { transform: translate(-10px, 92px) scale(0.55); opacity: 0; }
-}
-
-.steam {
-  transform-box: fill-box;
-  transform-origin: 50% 100%;
-  animation: sprite-steam-wiggle 1.1s ease-in-out infinite;
-}
-.steam-2 { animation-delay: 0.3s; }
-
-@keyframes sprite-steam-wiggle {
-  0%, 100% { transform: translateX(0) scaleY(1); opacity: 0.7; }
-  50% { transform: translateX(1px) scaleY(1.15); opacity: 1; }
+@keyframes moogle-flip {
+  from { background-position: 0 0; }
+  to { background-position: -1368px 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .sprite-walker, .leg, .ear-sway, .tray, .steam {
-    animation: none !important;
-  }
-  .tray {
-    transform: translate(14px, 74px) scale(1);
-    opacity: 1;
+  #moogle-mascot {
+    animation: none;
+    background-position: 0 0;
   }
 }
