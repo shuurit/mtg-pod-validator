@@ -446,8 +446,21 @@ function renderPodSlots() {
     }
 
     const deckSelect = document.createElement("select");
-    const powerSpan = document.createElement("div");
-    powerSpan.className = "slot-power";
+
+    // Once a deck is picked, the select is swapped out for this masked
+    // stand-in so nobody reading the screen over a player's shoulder can
+    // see the deck's name or power -- not even the player, once they've
+    // moved on. Tapping it re-reveals the select to change the pick.
+    const maskedBtn = document.createElement("button");
+    maskedBtn.type = "button";
+    maskedBtn.className = "slot-deck-masked";
+    maskedBtn.textContent = "🔒 Deck selected — tap to change";
+
+    function syncDeckVisibility() {
+      const masked = !!slot.deckId;
+      deckSelect.hidden = masked;
+      maskedBtn.hidden = !masked;
+    }
 
     function refreshDeckOptions() {
       deckSelect.innerHTML = "";
@@ -461,18 +474,20 @@ function renderPodSlots() {
         for (const d of player.decks) {
           const opt = document.createElement("option");
           opt.value = d.id;
-          opt.textContent = `${d.name} (${formatPower(d.power)})`;
+          opt.textContent = d.name;
           if (d.id === slot.deckId) opt.selected = true;
           deckSelect.appendChild(opt);
         }
       }
-      updatePowerDisplay();
+      syncDeckVisibility();
     }
 
-    function updatePowerDisplay() {
-      const player = podPlayers.find(p => p.id === slot.playerId);
-      const deck = player ? player.decks.find(d => d.id === slot.deckId) : null;
-      powerSpan.textContent = deck ? formatPower(deck.power) : "";
+    function markStaleIfChecked() {
+      const resultsSection = document.getElementById("results-section");
+      if (!resultsSection || resultsSection.hidden) return;
+      document.getElementById("validate-btn").classList.add("glow");
+      const staleRow = document.querySelector(`.result-row[data-player-id="${slot.playerId}"]`);
+      if (staleRow) staleRow.classList.add("pending-recheck");
     }
 
     playerSelect.addEventListener("change", () => {
@@ -483,7 +498,14 @@ function renderPodSlots() {
 
     deckSelect.addEventListener("change", () => {
       slot.deckId = deckSelect.value;
-      updatePowerDisplay();
+      syncDeckVisibility();
+      markStaleIfChecked();
+    });
+
+    maskedBtn.addEventListener("click", () => {
+      deckSelect.hidden = false;
+      maskedBtn.hidden = true;
+      deckSelect.focus();
     });
 
     refreshDeckOptions();
@@ -491,7 +513,7 @@ function renderPodSlots() {
     row.appendChild(label);
     row.appendChild(playerSelect);
     row.appendChild(deckSelect);
-    row.appendChild(powerSpan);
+    row.appendChild(maskedBtn);
     container.appendChild(row);
   }
 }
@@ -499,35 +521,18 @@ function renderPodSlots() {
 // ---------- validation ----------
 
 function evaluatePod(entries) {
-  // entries: [{ playerId, playerName, deckId, deckName, power }]
+  // entries: [{ playerId, playerName, deckId, power }]
   // The weakest deck in the pod sets the floor; anything more than
   // RANGE_TOLERANCE above it needs to come down. The weakest deck itself
   // is always compatible — it's never asked to get even weaker.
   const powers = entries.map(e => e.power);
   const floor = Math.min(...powers);
   const ceiling = floor + RANGE_TOLERANCE;
-  return entries.map(entry => ({ ...entry, compatible: entry.power <= ceiling }));
-}
-
-function suggestAlternates(entry, evaluatedEntries) {
-  const player = podPlayers.find(p => p.id === entry.playerId);
-  if (!player) return [];
-  // Only constrain against players who are already compatible. An
-  // independently out-of-range player's current pick isn't a fixed target —
-  // they're getting their own suggestions too — so it shouldn't narrow (or
-  // block entirely) the valid window for this player's replacement deck.
-  const others = evaluatedEntries.filter(
-    e => (e.playerId !== entry.playerId || e.deckId !== entry.deckId) && e.compatible
-  );
-  const otherPowers = others.map(o => o.power);
-  const otherMax = otherPowers.length ? Math.max(...otherPowers) : -Infinity;
-  const otherMin = otherPowers.length ? Math.min(...otherPowers) : Infinity;
-  const lowBound = otherMax - RANGE_TOLERANCE;
-  const highBound = otherMin + RANGE_TOLERANCE;
-  return player.decks
-    .filter(d => d.id !== entry.deckId)
-    .filter(d => d.power >= lowBound && d.power <= highBound)
-    .sort((a, b) => a.power - b.power);
+  return entries.map(entry => ({
+    ...entry,
+    compatible: entry.power <= ceiling,
+    overBy: +Math.max(0, entry.power - ceiling).toFixed(2),
+  }));
 }
 
 function runValidation() {
@@ -553,7 +558,6 @@ function runValidation() {
       playerId: player.id,
       playerName: player.name,
       deckId: deck.id,
-      deckName: deck.name,
       power: deck.power,
     };
   });
@@ -567,7 +571,7 @@ function runValidation() {
   const banner = document.createElement("div");
   banner.className = "banner " + (allInRange ? "good" : "bad");
   banner.textContent = allInRange
-    ? `All decks are within range (spread: ${formatPower(spread)}, ${formatPower(min)}–${formatPower(max)}).`
+    ? `All decks are within range (spread: ${formatPower(spread)}).`
     : `Spread is ${formatPower(spread)} — outside the ±${RANGE_TOLERANCE} target. Some decks need to change.`;
   resultsDiv.appendChild(banner);
 
@@ -578,45 +582,26 @@ function runValidation() {
     row.className = "result-row " + (entry.compatible ? "ok" : "out");
     row.dataset.playerId = entry.playerId;
 
+    // Deck identity is never shown here either -- only who it belongs to
+    // and whether their (unnamed) pick is in range.
     const name = document.createElement("span");
     name.className = "name";
-    name.textContent = `${entry.playerName} — ${entry.deckName}`;
+    name.textContent = entry.playerName;
 
+    // Power itself stays masked here too -- only the amount a deck is
+    // over the pod's range is ever shown, never the raw power value.
     const power = document.createElement("span");
     power.className = "power";
-    power.textContent = formatPower(entry.power) + (entry.compatible ? " ✓" : " ⚠");
+    power.textContent = entry.compatible ? "✓ In range" : `⚠ Over by ${formatPower(entry.overBy)}`;
 
     row.appendChild(name);
     row.appendChild(power);
     resultsDiv.appendChild(row);
 
     if (!entry.compatible) {
-      const alts = suggestAlternates(entry, evaluated);
       const box = document.createElement("div");
       box.className = "suggestions";
-      if (alts.length === 0) {
-        box.innerHTML = `<span class="none">No other saved deck for ${entry.playerName} fits this pod's range.</span>`;
-      } else {
-        const label = document.createElement("div");
-        label.textContent = `Decks that would bring ${entry.playerName} into range — click to swap in:`;
-        box.appendChild(label);
-        for (const alt of alts) {
-          const chip = document.createElement("button");
-          chip.type = "button";
-          chip.className = "suggestion-chip";
-          chip.textContent = `${alt.name} (${formatPower(alt.power)})`;
-          chip.addEventListener("click", () => {
-            const slot = podSelections.find(s => s.playerId === entry.playerId);
-            if (!slot) return;
-            slot.deckId = alt.id;
-            renderPodSlots();
-            const staleRow = resultsDiv.querySelector(`.result-row[data-player-id="${entry.playerId}"]`);
-            if (staleRow) staleRow.classList.add("pending-recheck");
-            document.getElementById("validate-btn").classList.add("glow");
-          });
-          box.appendChild(chip);
-        }
-      }
+      box.textContent = `Select a new deck for ${entry.playerName} above, then check the spread again.`;
       resultsDiv.appendChild(box);
     }
   }
