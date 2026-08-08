@@ -37,9 +37,16 @@ CHUNK_BUDGET = 1850
 
 
 def post_message(webhook_url, content):
+    # Discord's API sits behind Cloudflare, which 403s urllib's default
+    # User-Agent -- same issue this project already hit and fixed for the
+    # roster-diff fetches (see backfill_playgroup_ids.py). Anything
+    # normal-looking works.
     body = json.dumps({"content": content}).encode("utf-8")
     req = urllib.request.Request(
-        webhook_url, data=body, headers={"Content-Type": "application/json"}, method="POST"
+        webhook_url,
+        data=body,
+        headers={"Content-Type": "application/json", "User-Agent": "mtg-pod-validator-discord-bot"},
+        method="POST",
     )
     with urllib.request.urlopen(req, timeout=15) as resp:
         resp.read()
