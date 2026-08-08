@@ -844,30 +844,66 @@ async function refreshPlaygroupGames() {
   }
 }
 
-// Same game if the same set of tracked players appears under a game number
-// in the current season's Game Log tab, within a day of the playgroup.gg
-// timestamp (playgroup.gg logs in UTC+2; the sheet's date can land a day off).
-function findLoggedMatch(pgGame) {
-  const pgPlayers = new Set(pgGame.participants.map(p => p.player));
+// Matches every currently-tracked playgroup.gg game against the Game Log's
+// logged games, one-to-one. A logged game and a playgroup.gg game are the
+// same real game if the same set of tracked players appears under a Game
+// Log game number, within a day and a half of the playgroup.gg timestamp
+// (playgroup.gg logs in UTC+2; the sheet's date can land a day off).
+//
+// This has to run as a single batch over every game, not per playgroup.gg
+// game in isolation: the same pod commonly plays more than one real game
+// in a sitting, so two distinct playgroup.gg games can share the exact
+// same player set and land within the date tolerance of each other. Each
+// logged game number can only satisfy one playgroup.gg game -- once
+// claimed here it's removed from the pool -- otherwise a second, still-
+// unlogged game with the same four players as an already-logged one reads
+// as "already logged" too and silently never shows up as missing. Games
+// are matched in chronological order and each picks the closest-dated
+// still-unclaimed candidate, so pairing lines up with playgroup.gg's own
+// game order rather than whichever candidate happens to be found first.
+//
+// Returns a Map from playgroup_game_id to the matched Game Log gameNum,
+// for games that already have a match.
+function computeLoggedMatches(pgGames) {
   const byGameNum = {};
   for (const row of gameLogSeason3Rows) {
     (byGameNum[row.gameNum] ||= []).push(row);
   }
-  const pgDate = new Date(pgGame.date);
-  for (const gameNum in byGameNum) {
-    const rows = byGameNum[gameNum];
-    const loggedPlayers = new Set(rows.map(r => r.player));
-    // Subset, not exact-size match: a logged game can include a player
-    // with no mapped playgroup.gg account (e.g. Kristy), so playgroup.gg's
-    // tracked participant set can legitimately be smaller than what's
-    // logged for the same real game.
-    if (![...pgPlayers].every(p => loggedPlayers.has(p))) continue;
-    const loggedDate = rows[0].date instanceof Date ? rows[0].date : null;
-    if (!loggedDate) return gameNum;
-    const diffDays = Math.abs((loggedDate - pgDate) / 86400000);
-    if (diffDays <= 1.5) return gameNum;
+  const loggedGames = Object.entries(byGameNum).map(([gameNum, rows]) => ({
+    gameNum,
+    players: new Set(rows.map(r => r.player)),
+    date: rows[0].date instanceof Date ? rows[0].date : null,
+    claimed: false,
+  }));
+
+  const matches = new Map();
+  const sortedPgGames = [...pgGames].sort((a, b) => new Date(a.date) - new Date(b.date));
+  for (const pgGame of sortedPgGames) {
+    const pgPlayers = new Set(pgGame.participants.map(p => p.player));
+    const pgDate = new Date(pgGame.date);
+
+    let best = null; // { logged, diffDays } -- diffDays is Infinity for a date-less logged row, used only as a last resort
+    for (const logged of loggedGames) {
+      if (logged.claimed) continue;
+      // Subset, not exact-size match: a logged game can include a player
+      // with no mapped playgroup.gg account (e.g. Kristy), so playgroup.gg's
+      // tracked participant set can legitimately be smaller than what's
+      // logged for the same real game.
+      if (![...pgPlayers].every(p => logged.players.has(p))) continue;
+
+      let diffDays = Infinity;
+      if (logged.date) {
+        diffDays = Math.abs((logged.date - pgDate) / 86400000);
+        if (diffDays > 1.5) continue;
+      }
+      if (best === null || diffDays < best.diffDays) best = { logged, diffDays };
+    }
+    if (best) {
+      best.logged.claimed = true;
+      matches.set(pgGame.playgroup_game_id, best.logged.gameNum);
+    }
   }
-  return null;
+  return matches;
 }
 
 // Shared by findDefaultStrength below and computeRosterDiff -- a deck name
@@ -912,7 +948,8 @@ function renderGamesToUpdate() {
     return;
   }
 
-  const missing = playgroupGamesData.games.filter(g => !findLoggedMatch(g));
+  const loggedMatches = computeLoggedMatches(playgroupGamesData.games);
+  const missing = playgroupGamesData.games.filter(g => !loggedMatches.has(g.playgroup_game_id));
   const liveAsOf = playgroupGamesData.generated_at ? new Date(playgroupGamesData.generated_at).toLocaleTimeString() : null;
   statusEl.textContent = `${liveAsOf ? `Live as of ${liveAsOf} — ` : ""}${missing.length} of ${playgroupGamesData.games.length} ${playgroupGamesData.league || ""} games aren't in the Game Log yet.`;
 
