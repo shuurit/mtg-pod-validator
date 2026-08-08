@@ -872,6 +872,7 @@ function computeLoggedMatches(pgGames) {
   const loggedGames = Object.entries(byGameNum).map(([gameNum, rows]) => ({
     gameNum,
     players: new Set(rows.map(r => r.player)),
+    commandersByPlayer: new Map(rows.map(r => [r.player, normalizeCommanderName(r.commander)])),
     date: rows[0].date instanceof Date ? rows[0].date : null,
     claimed: false,
   }));
@@ -882,7 +883,9 @@ function computeLoggedMatches(pgGames) {
     const pgPlayers = new Set(pgGame.participants.map(p => p.player));
     const pgDate = new Date(pgGame.date);
 
-    let best = null; // { logged, diffDays } -- diffDays is Infinity for a date-less logged row, used only as a last resort
+    // best: { logged, diffDays, commanderMatch }. diffDays is Infinity for
+    // a date-less logged row, used only as a last resort.
+    let best = null;
     for (const logged of loggedGames) {
       if (logged.claimed) continue;
       // Subset, not exact-size match: a logged game can include a player
@@ -896,7 +899,24 @@ function computeLoggedMatches(pgGames) {
         diffDays = Math.abs((logged.date - pgDate) / 86400000);
         if (diffDays > 1.5) continue;
       }
-      if (best === null || diffDays < best.diffDays) best = { logged, diffDays };
+      // Whether every participant's commander lines up with what's logged
+      // for that player -- decisive when the same pod plays several games
+      // in a row under one batch-logged date, where date proximity alone
+      // can't tell those games apart. Confirmed the hard way: four
+      // Ryan/Manny/Mateo games logged 07-24/07-25 all fell within date
+      // tolerance of three same-day playgroup.gg games, so the closest-date
+      // tiebreak alone cascaded a wrong claim down the whole list and left
+      // the real match for one of them with no candidate left at all.
+      const commanderMatch = [...pgGame.participants].every(
+        p => logged.commandersByPlayer.get(p.player) === normalizeCommanderName(p.commander)
+      );
+      if (
+        best === null ||
+        (commanderMatch && !best.commanderMatch) ||
+        (commanderMatch === best.commanderMatch && diffDays < best.diffDays)
+      ) {
+        best = { logged, diffDays, commanderMatch };
+      }
     }
     if (best) {
       best.logged.claimed = true;
