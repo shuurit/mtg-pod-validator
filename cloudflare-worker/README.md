@@ -114,9 +114,12 @@ Edit Channel → Integrations → Webhooks → New Webhook → Copy Webhook URL)
 Without it, the game still gets added and committed either way — only
 that last step fails.
 
-Each post's message IDs are saved to `discord_last_post.json` and
-committed alongside the spreadsheet. To undo the last game's Discord post
-(e.g. it was a test, or the game needs correcting), run the
+The channel is meant to always show only the latest game: before posting,
+`post_to_discord.py` deletes whatever it posted last time (using the
+message IDs saved to `discord_last_post.json`, committed alongside the
+spreadsheet), then posts the new set and saves their IDs the same way.
+To clear the channel entirely without posting a replacement (e.g. to
+remove a bad/test post, or tidy up at the end of a season), run the
 "Delete Last Discord Post" workflow by hand (Actions tab → select it →
 Run workflow, or `gh workflow run delete-last-discord-post.yml`) — it
 deletes those four messages and clears the tracking file. A webhook can't

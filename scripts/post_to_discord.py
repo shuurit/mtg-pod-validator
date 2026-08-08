@@ -13,6 +13,11 @@ spreadsheet recalculated:
 Both Current Deck Strength and Deck Win Rates are grouped by player,
 matching how the sheet itself is laid out (see find_cds_header_rows).
 
+Before posting, deletes whatever this script posted for the *previous*
+game (via discord_last_post.json, same mechanism delete_last_discord_post.py
+uses) -- the channel is meant to show only the latest game's numbers, not
+accumulate one full set of 4 messages per game forever.
+
 Reads DISCORD_WEBHOOK_URL from the environment -- a GitHub repo secret,
 set the same way as GITHUB_TOKEN/PLAYGROUP_API_KEY (repo Settings ->
 Secrets and variables -> Actions), not something this script or any
@@ -37,6 +42,7 @@ import matplotlib.pyplot as plt
 import openpyxl
 import requests
 
+from discord_common import DISCORD_HEADERS, delete_messages
 from season_config import CURRENT_SEASON_SHEET
 
 XLSX_PATH = Path(__file__).parent.parent / "deck-strength.xlsx"
@@ -116,12 +122,6 @@ def render_table_png(title, col_labels, rows, section_indices, fontsize=10, char
     plt.close(fig)
     buf.seek(0)
     return buf
-
-
-# Discord's API sits behind Cloudflare, which 403s the default User-Agent
-# -- same issue this project already hit and fixed for the roster-diff
-# fetches (see backfill_playgroup_ids.py). Anything normal-looking works.
-DISCORD_HEADERS = {"User-Agent": "mtg-pod-validator-discord-bot"}
 
 
 def post_message(webhook_url, content):
@@ -226,6 +226,15 @@ def build_deck_win_rates_table(wb_values, header_rows, subtitle):
 
 def main():
     webhook_url = os.environ["DISCORD_WEBHOOK_URL"]
+
+    # The channel shows only the latest game's numbers -- delete whatever
+    # this script posted last time before posting the new set. Silent
+    # no-op the first time this runs (no tracking file yet).
+    if LAST_POST_PATH.exists():
+        previous = json.loads(LAST_POST_PATH.read_text(encoding="utf-8"))
+        print(f"Deleting {len(previous['message_ids'])} message(s) from Season {previous['season']} Game {previous['game']}...")
+        delete_messages(webhook_url, previous["message_ids"])
+        LAST_POST_PATH.unlink()
 
     wb_formulas = openpyxl.load_workbook(XLSX_PATH, data_only=False)
     wb_values = openpyxl.load_workbook(XLSX_PATH, data_only=True)
