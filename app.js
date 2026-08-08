@@ -108,6 +108,7 @@ let podPlayers = []; // players filtered to knownPlaygroupPlayers -- used by Dec
 let podCount = 4;
 let podSelections = []; // { playerId, deckId } per slot
 let expandedPlayerIds = new Set(); // player blocks currently showing their deck table
+let rosterDiffData = null; // raw playgroup.gg roster/decks from loadRosterDiff, used for the Playgroup Power comparison column too
 
 // ---------- deriving players/decks from source data ----------
 // Current Deck Strength (deck-strength.xlsx) is the only source for this --
@@ -311,6 +312,26 @@ function formatPower(power) {
   return power.toFixed(1);
 }
 
+// Looks up a deck's power_level as playgroup.gg itself has it rated, for
+// comparison against our own tracked Power column. Matches by playgroup
+// deck ID first (backfilled onto most rows via deck-strength.xlsx column
+// E), falling back to normalized commander name the same way
+// computeRosterDiff does for decks the ID backfill hasn't reached yet.
+// Returns null if roster-diff data hasn't loaded, the player has no
+// linked playgroup.gg account, or no matching deck is found there.
+function findPlaygroupPowerLevel(playerName, deck) {
+  if (!rosterDiffData) return null;
+  const member = rosterDiffData.members.find(m => m.mapped_player === playerName);
+  if (!member) return null;
+  const pgDecks = (rosterDiffData.decks_by_username[member.username] || []).filter(d => !d.archived);
+  let match = deck.playgroupId ? pgDecks.find(d => String(d.id) === deck.playgroupId) : null;
+  if (!match) {
+    const target = normalizeCommanderName(deck.name);
+    match = pgDecks.find(d => normalizeCommanderName(d.commander_name) === target);
+  }
+  return match && typeof match.power_level === "number" ? match.power_level : null;
+}
+
 function renderPlayersTable() {
   const container = document.getElementById("players-table");
   container.innerHTML = "";
@@ -371,7 +392,7 @@ function renderPlayersTable() {
 
     const table = document.createElement("table");
     const thead = document.createElement("thead");
-    thead.innerHTML = "<tr><th>Deck</th><th>Power</th></tr>";
+    thead.innerHTML = "<tr><th>Deck</th><th>Power</th><th>Playgroup Power</th></tr>";
     table.appendChild(thead);
 
     const tbody = document.createElement("tbody");
@@ -385,8 +406,14 @@ function renderPlayersTable() {
       powerTd.className = "num";
       powerTd.textContent = formatPower(deck.power);
 
+      const pgPower = findPlaygroupPowerLevel(player.name, deck);
+      const pgPowerTd = document.createElement("td");
+      pgPowerTd.className = "num";
+      pgPowerTd.textContent = pgPower === null ? "—" : formatPower(pgPower);
+
       tr.appendChild(nameTd);
       tr.appendChild(powerTd);
+      tr.appendChild(pgPowerTd);
       tbody.appendChild(tr);
     }
     table.appendChild(tbody);
@@ -1260,8 +1287,6 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
 
 // ---------- update the app (new playgroup members / decks) ----------
 
-let rosterDiffData = null;
-
 // Persists user edits across every re-render of the Update the App tab --
 // renderUpdateAppTab() runs on every poll (a fresh /roster-diff fetch, an
 // optimistic re-render after a game/roster submission elsewhere) and used
@@ -1326,6 +1351,7 @@ async function loadRosterDiff() {
       throw new Error(body.detail || body.error || `HTTP ${res.status}`);
     }
     rosterDiffData = await res.json();
+    renderPlayersTable();
     if (!isEditingRosterUpdateForm()) renderUpdateAppTab();
   } catch (err) {
     if (statusEl) statusEl.textContent = `Couldn't load live playgroup.gg data (${err.message}).`;
