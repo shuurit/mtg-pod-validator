@@ -101,6 +101,16 @@ recognize their playgroup.gg account. Two ways to handle that:
      token) to confirm it doesn't touch the two existing secrets and that
      the KV binding survives — then CI deploys are safe to trust.
 
+## Optional: Discord posting after a game is added
+
+`.github/workflows/add-game.yml` posts three messages to Discord right
+after a game is added and the spreadsheet recalculates: the player
+rankings, the full Current Deck Strength tab, and the full Deck Win Rates
+tab (see `scripts/post_to_discord.py`). Needs one GitHub repo secret:
+`DISCORD_WEBHOOK_URL` (Discord: channel → Edit Channel → Integrations →
+Webhooks → New Webhook → Copy Webhook URL). Without it, the game still
+gets added and committed either way — only that last step fails.
+
 ## Notes on scope
 
 - GitHub doesn't offer a narrower permission than "Contents: write" for

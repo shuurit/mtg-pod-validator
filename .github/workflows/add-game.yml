@@ -36,3 +36,8 @@ jobs:
           git diff --staged --quiet && echo "No changes to commit" && exit 0
           git commit -m "Add game via Games to Update tab (automated)"
           git push
+
+      - name: Post to Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python scripts/post_to_discord.py
