@@ -91,7 +91,7 @@ def build_new_game_log_sheet(old_sheet_xml):
         if int(m.group(1)) <= 2
     )
     new_xml = re.sub(r"<sheetData>.*</sheetData>", f"<sheetData>{rows_xml}</sheetData>", old_sheet_xml, flags=re.DOTALL)
-    new_xml = re.sub(r'<dimension ref="[^"]*"/>', '<dimension ref="A1:X2"/>', new_xml)
+    new_xml = re.sub(r'<dimension ref="[^"]*"/>', '<dimension ref="A1:Y2"/>', new_xml)
     return new_xml
 
 

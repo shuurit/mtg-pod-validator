@@ -21,6 +21,14 @@ Expects the payload as JSON in the GAME_PAYLOAD environment variable:
 
 Participants should already be sorted winner-first / place-ascending
 (matches the sheet's existing convention) -- this script does not resort.
+
+An optional top-level "playgroupGameId" writes to column Y for every row of
+this game -- computeLoggedMatches in app.js prefers an exact ID match over
+its player+date+commander heuristic once one is present. Every submission
+through the Games to Update tab already has this (it's sourced from a real
+playgroup.gg game), so it's populated automatically going forward; omit it
+for a manually-entered game and matching just falls back to the heuristic,
+same as before this column existed.
 """
 import copy
 import json
@@ -35,7 +43,7 @@ from season_config import CURRENT_SEASON_SHEET
 XLSX_PATH = os.path.join(os.path.dirname(__file__), "..", "deck-strength.xlsx")
 SHEET_NAME = CURRENT_SEASON_SHEET
 HEADER_ROW = 2
-COLUMNS = "ABCDEFGHIJKLMNOPQRSTUVWX"
+COLUMNS = "ABCDEFGHIJKLMNOPQRSTUVWXY"
 
 
 def find_col_map(ws):
@@ -66,6 +74,7 @@ def main():
     date_str = payload["date"]
     pod_size = payload["podSize"]
     participants = payload["participants"]
+    playgroup_game_id = payload.get("playgroupGameId")
     if len(participants) != pod_size:
         raise ValueError(f"podSize={pod_size} but got {len(participants)} participants")
 
@@ -110,6 +119,8 @@ def main():
             "W": p["bracket"],
             "X": f"=((O{row}*0.3)+(Q{row}*0.175)+(R{row}*0.175)+(U{row}*0.175)+((1-V{row})*0.175))+W{row}",
         }
+        if playgroup_game_id is not None:
+            values["Y"] = playgroup_game_id
         for col_letter, val in values.items():
             col = openpyxl.utils.column_index_from_string(col_letter)
             cell = ws.cell(row=row, column=col)
