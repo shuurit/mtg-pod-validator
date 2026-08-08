@@ -48,3 +48,8 @@ jobs:
           git diff --staged --quiet && echo "No changes to commit" && exit 0
           git commit -m "Track latest Discord post for this game (automated)"
           git push
+
+      - name: Archive to Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.SEASON_ARCHIVE_WEBHOOK }}
+        run: python scripts/post_to_discord_archive.py

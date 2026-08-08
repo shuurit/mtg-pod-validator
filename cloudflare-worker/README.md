@@ -132,6 +132,16 @@ manual spreadsheet edit, or just to refresh the channel), run the
 post-discord-update.yml`) — it runs `post_to_discord.py` directly, which
 still deletes whatever was posted last time first.
 
+The same step also posts a second, permanent copy to a separate archive
+channel — a "Season N · Game M is now archived" banner and the same three
+screenshots, via `scripts/post_to_discord_archive.py`. Nothing here is
+ever deleted, so the channel builds up one full record per game over
+time. Needs its own secret, `SEASON_ARCHIVE_WEBHOOK`, set up the same way
+as `SEASON_STAT_WEBHOOK` but pointed at whichever channel should hold the
+archive. Both scripts share their table-building/posting logic in
+`scripts/discord_report.py` — they only differ in webhook, banner text,
+and whether anything gets deleted first.
+
 ## Notes on scope
 
 - GitHub doesn't offer a narrower permission than "Contents: write" for
