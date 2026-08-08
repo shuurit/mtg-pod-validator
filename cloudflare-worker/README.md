@@ -126,6 +126,12 @@ deletes those four messages and clears the tracking file. A webhook can't
 list channel history, so this only works for a post made after this
 tracking existed; anything older has to be deleted by hand in Discord.
 
+To (re-)post the current numbers without adding a game (e.g. after a
+manual spreadsheet edit, or just to refresh the channel), run the
+"Post Discord Update" workflow by hand the same way (`gh workflow run
+post-discord-update.yml`) — it runs `post_to_discord.py` directly, which
+still deletes whatever was posted last time first.
+
 ## Notes on scope
 
 - GitHub doesn't offer a narrower permission than "Contents: write" for

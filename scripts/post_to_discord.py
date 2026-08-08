@@ -57,6 +57,7 @@ SECTION_BG = "#e7e9ee"
 ROW_BG_ALT = "#f6f7f9"
 ROW_BG = "white"
 BORDER = "#d3d6db"
+GOLD_BG = "#ffe083"  # #1 place highlight in the rankings table
 
 
 def format_power(v):
@@ -67,10 +68,14 @@ def format_pct(v):
     return f"{v * 100:.2f}%" if isinstance(v, (int, float)) else "--"
 
 
-def render_table_png(title, col_labels, rows, section_indices, fontsize=10, char_w=0.105):
+def render_table_png(title, col_labels, rows, section_indices, fontsize=10, char_w=0.105, highlight_indices=frozenset()):
     """Renders a styled table to PNG bytes. section_indices are row indices
     (0-based into `rows`) that are player-header/divider rows -- shown as a
     shaded, bold, full-width row instead of normal data cells.
+    highlight_indices are row indices given a gold background instead of
+    the normal alternating one (used for the rankings table's #1 spot) --
+    takes priority over the alternating stripe, but a row can't be both a
+    section row and a highlighted row.
 
     Column widths are sized off the longest actual string in each column
     (header included), not a fixed guessed ratio -- a fixed ratio clipped
@@ -106,11 +111,15 @@ def render_table_png(title, col_labels, rows, section_indices, fontsize=10, char
     data_row_counter = 0
     for i in range(len(rows)):
         is_section = i in section_indices
+        is_highlight = i in highlight_indices and not is_section
         for j in range(n_cols):
             cell = table[i + 1, j]
             cell.set_edgecolor(BORDER)
             if is_section:
                 cell.set_facecolor(SECTION_BG)
+                cell.set_text_props(fontweight="bold")
+            elif is_highlight:
+                cell.set_facecolor(GOLD_BG)
                 cell.set_text_props(fontweight="bold")
             else:
                 cell.set_facecolor(ROW_BG_ALT if data_row_counter % 2 else ROW_BG)
@@ -176,6 +185,7 @@ def build_player_rankings_table(wb_values, subtitle):
     return render_table_png(
         f"Player Rankings — Player Adjusted Win Rate  |  {subtitle}",
         ["#", "Player", "Win Rate"], rows, set(),
+        highlight_indices={0} if rows else set(),
     )
 
 
