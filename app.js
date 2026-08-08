@@ -106,7 +106,15 @@ let knownPlaygroupPlayers = new Set(PLAYERS_WITH_PLAYGROUP_ACCOUNT);
 let players = []; // everyone in Current Deck Strength, unfiltered
 let podPlayers = []; // players filtered to knownPlaygroupPlayers -- used by Deck Strength Validator and Player Win Rates
 let podCount = 4;
-let podSelections = []; // { playerId, deckId } per slot
+let podSelections = []; // { playerId, deckId, outOfRange } per slot
+// The ceiling (floor + RANGE_TOLERANCE) from the last completed power-spread
+// check, used to filter an out-of-range slot's deck options down to ones
+// that would actually fix it -- see runValidation and refreshDeckOptions in
+// renderPodSlots. Deliberately not reset when renderPodSlots re-renders --
+// that also happens on every background data refresh, not just when the
+// player count changes, and a slot's outOfRange flag (carried over the same
+// way playerId/deckId already are) would be meaningless without it.
+let lastCeiling = null;
 let expandedPlayerIds = new Set(); // player blocks currently showing their deck table
 let rosterDiffData = null; // raw playgroup.gg roster/decks from loadRosterDiff, used for the Playgroup Power comparison column too
 
@@ -449,7 +457,7 @@ function renderPodSlots() {
 
   for (let i = 0; i < podCount; i++) {
     const prev = prevSelections[i] || {};
-    const slot = { playerId: prev.playerId || "", deckId: prev.deckId || "" };
+    const slot = { playerId: prev.playerId || "", deckId: prev.deckId || "", outOfRange: !!prev.outOfRange };
     podSelections.push(slot);
 
     const row = document.createElement("div");
@@ -498,7 +506,16 @@ function renderPodSlots() {
       deckSelect.appendChild(blank);
       deckSelect.disabled = !player;
       if (player) {
-        for (const d of player.decks) {
+        // A slot the last check flagged as over the pod's range only offers
+        // decks that would actually bring it back in range, so re-picking
+        // can't just land on another incompatible deck. Falls back to the
+        // full list if nothing qualifies (e.g. this player has no deck that
+        // low) rather than leaving the select with nothing pickable at all.
+        const restricted = slot.outOfRange && lastCeiling !== null
+          ? player.decks.filter(d => d.power <= lastCeiling)
+          : null;
+        const decks = restricted && restricted.length > 0 ? restricted : player.decks;
+        for (const d of decks) {
           const opt = document.createElement("option");
           opt.value = d.id;
           opt.textContent = d.name;
@@ -530,6 +547,10 @@ function renderPodSlots() {
     });
 
     maskedBtn.addEventListener("click", () => {
+      // Rebuilt fresh (not just unhidden) so a slot flagged out-of-range by
+      // the last check shows its filtered, range-restricted options rather
+      // than whatever was already rendered before that check ran.
+      refreshDeckOptions();
       deckSelect.hidden = false;
       maskedBtn.hidden = true;
       deckSelect.focus();
@@ -603,6 +624,11 @@ function runValidation() {
   resultsDiv.appendChild(banner);
 
   const evaluated = evaluatePod(entries);
+
+  // Feeds refreshDeckOptions in renderPodSlots: a slot flagged here only
+  // offers decks at or under this ceiling the next time its picker reopens.
+  lastCeiling = min + RANGE_TOLERANCE;
+  evaluated.forEach((entry, i) => { podSelections[i].outOfRange = !entry.compatible; });
 
   for (const entry of evaluated) {
     const row = document.createElement("div");
@@ -959,12 +985,28 @@ function findDefaultBracket(playerName, commanderName) {
   return matches[0].bracket;
 }
 
+// Mirrors updateRosterUpdateTabBadge's "Update the App" badge -- a count of
+// games missing from the Game Log on the "Games to Update" tab button
+// itself, hidden entirely at 0 so absence means "nothing to log," not "not
+// loaded yet."
+function updateGamesToUpdateTabBadge(count) {
+  const badge = document.getElementById("gtu-tab-badge");
+  if (!badge) return;
+  if (count > 0) {
+    badge.textContent = String(count);
+    badge.hidden = false;
+  } else {
+    badge.hidden = true;
+  }
+}
+
 function renderGamesToUpdate() {
   const statusEl = document.getElementById("gtu-status");
   const listEl = document.getElementById("gtu-game-list");
   if (!playgroupGamesData || !statusEl || !listEl) return;
   if (gameLogSeason3Rows.length === 0) {
     statusEl.textContent = "Waiting on deck-strength.xlsx to load...";
+    updateGamesToUpdateTabBadge(0);
     return;
   }
 
@@ -972,6 +1014,7 @@ function renderGamesToUpdate() {
   const missing = playgroupGamesData.games.filter(g => !loggedMatches.has(g.playgroup_game_id));
   const liveAsOf = playgroupGamesData.generated_at ? new Date(playgroupGamesData.generated_at).toLocaleTimeString() : null;
   statusEl.textContent = `${liveAsOf ? `Live as of ${liveAsOf} — ` : ""}${missing.length} of ${playgroupGamesData.games.length} ${playgroupGamesData.league || ""} games aren't in the Game Log yet.`;
+  updateGamesToUpdateTabBadge(missing.length);
 
   listEl.innerHTML = "";
   if (missing.length === 0) {
