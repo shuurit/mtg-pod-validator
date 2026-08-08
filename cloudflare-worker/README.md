@@ -103,13 +103,25 @@ recognize their playgroup.gg account. Two ways to handle that:
 
 ## Optional: Discord posting after a game is added
 
-`.github/workflows/add-game.yml` posts three messages to Discord right
-after a game is added and the spreadsheet recalculates: the player
-rankings, the full Current Deck Strength tab, and the full Deck Win Rates
-tab (see `scripts/post_to_discord.py`). Needs one GitHub repo secret:
-`SEASON_STAT_WEBHOOK` (Discord: channel → Edit Channel → Integrations →
-Webhooks → New Webhook → Copy Webhook URL). Without it, the game still
-gets added and committed either way — only that last step fails.
+`.github/workflows/add-game.yml` posts four messages to Discord right
+after a game is added and the spreadsheet recalculates: a "Season N · Game
+M" announcement, then a screenshot each of the player rankings, the full
+Current Deck Strength tab, and the full Deck Win Rates tab (see
+`scripts/post_to_discord.py` — rendered as images with matplotlib, not
+plain text, since a ~74-row wall of text was unreadable in practice).
+Needs one GitHub repo secret: `SEASON_STAT_WEBHOOK` (Discord: channel →
+Edit Channel → Integrations → Webhooks → New Webhook → Copy Webhook URL).
+Without it, the game still gets added and committed either way — only
+that last step fails.
+
+Each post's message IDs are saved to `discord_last_post.json` and
+committed alongside the spreadsheet. To undo the last game's Discord post
+(e.g. it was a test, or the game needs correcting), run the
+"Delete Last Discord Post" workflow by hand (Actions tab → select it →
+Run workflow, or `gh workflow run delete-last-discord-post.yml`) — it
+deletes those four messages and clears the tracking file. A webhook can't
+list channel history, so this only works for a post made after this
+tracking existed; anything older has to be deleted by hand in Discord.
 
 ## Notes on scope
 

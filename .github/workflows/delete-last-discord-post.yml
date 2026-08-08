@@ -1,0 +1,34 @@
+name: Delete Last Discord Post
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  delete-last-discord-post:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Delete last Discord post
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.SEASON_STAT_WEBHOOK }}
+        run: python scripts/delete_last_discord_post.py
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add discord_last_post.json
+          git diff --staged --quiet && echo "No changes to commit" && exit 0
+          git commit -m "Clear Discord post tracking after deletion (automated)"
+          git push

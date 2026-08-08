@@ -21,7 +21,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libreoffice-calc
-          pip install openpyxl
+          pip install openpyxl matplotlib requests
 
       - name: Add game and recalculate
         env:
@@ -41,3 +41,10 @@ jobs:
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.SEASON_STAT_WEBHOOK }}
         run: python scripts/post_to_discord.py
+
+      - name: Commit Discord post tracking
+        run: |
+          git add discord_last_post.json
+          git diff --staged --quiet && echo "No changes to commit" && exit 0
+          git commit -m "Track latest Discord post for this game (automated)"
+          git push
