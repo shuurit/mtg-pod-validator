@@ -737,25 +737,28 @@ td.num {
 }
 
 /* ---------- moogle mascot: 38-frame sprite sheet stepped next to the
-   refresh button, classic background-position sprite animation ---------- */
+   refresh button, classic background-position sprite animation.
+   Frames are baked into moogle-sprite.png at exactly 46x63 (their real
+   on-screen size) so the browser displays them 1:1 with no live scaling --
+   scaling a detailed small face live (any algorithm, any browser) tended
+   to alias the dark eye/nose linework into a solid smudge. ---------- */
 #moogle-mascot {
   position: fixed;
   top: max(11px, env(safe-area-inset-top));
   right: max(62px, calc(env(safe-area-inset-right) + 62px));
   z-index: 100;
-  width: 36px;
-  height: 50px;
+  width: 46px;
+  height: 63px;
   background-image: url('moogle-sprite.png');
   background-repeat: no-repeat;
-  background-size: 1368px 50px; /* 38 frames x 36px */
-  image-rendering: pixelated;
+  background-size: 1748px 63px; /* 38 frames x 46px, native size */
   pointer-events: none;
   animation: moogle-flip 4s steps(38) infinite;
 }
 
 @keyframes moogle-flip {
   from { background-position: 0 0; }
-  to { background-position: -1368px 0; }
+  to { background-position: -1748px 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
