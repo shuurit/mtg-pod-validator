@@ -39,5 +39,5 @@ jobs:
 
       - name: Post to Discord
         env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.SEASON_STAT_WEBHOOK }}
         run: python scripts/post_to_discord.py

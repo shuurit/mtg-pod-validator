@@ -107,7 +107,7 @@ recognize their playgroup.gg account. Two ways to handle that:
 after a game is added and the spreadsheet recalculates: the player
 rankings, the full Current Deck Strength tab, and the full Deck Win Rates
 tab (see `scripts/post_to_discord.py`). Needs one GitHub repo secret:
-`DISCORD_WEBHOOK_URL` (Discord: channel → Edit Channel → Integrations →
+`SEASON_STAT_WEBHOOK` (Discord: channel → Edit Channel → Integrations →
 Webhooks → New Webhook → Copy Webhook URL). Without it, the game still
 gets added and committed either way — only that last step fails.
 
