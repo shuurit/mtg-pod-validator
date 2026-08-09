@@ -147,7 +147,7 @@ def main():
     ws = wb[CURRENT_SEASON_SHEET]
     col_map = find_col_map(ws)
     if "Playgroup Game ID" not in col_map:
-        raise RuntimeError('Column "Playgroup Game ID" not found -- run add_game_id_column.py first.')
+        raise RuntimeError(f'Column "Playgroup Game ID" not found in {CURRENT_SEASON_SHEET} -- has the sheet layout changed?')
 
     log_rows = read_game_log_rows(ws, col_map)
     already_id_d = {r["gameNum"] for r in log_rows if r["existingId"]}

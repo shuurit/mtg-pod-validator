@@ -57,7 +57,17 @@ playgroup.gg  <--->  Cloudflare Worker relay  <--->  app.js (this site)
   player/deck, `recalculate.yml` to force a fresh LibreOffice pass. Each one
   runs the matching script in `scripts/` against the `.xlsx` directly (zip +
   XML surgery, not a library resave, since that would strip every cached
-  formula value workbook-wide).
+  formula value workbook-wide). `post-discord-update.yml` and
+  `delete-last-discord-post.yml` are two more, manually-triggered workflows
+  for the Discord posting integration below.
+- **Discord posting** — `add-game.yml` posts a rankings/deck-strength/
+  win-rates summary to Discord (as images, via `scripts/post_to_discord.py`
+  and `scripts/discord_report.py`) after every logged game, plus a permanent
+  copy to a separate archive channel (`scripts/post_to_discord_archive.py`).
+  `discord_last_post.json` tracks the live channel's most recent post so the
+  next one can delete-then-repost instead of piling up. See the docstrings
+  in `scripts/post_to_discord.py` and `scripts/post_to_discord_archive.py`
+  for the two channels' exact behavior.
 
 ## Repo layout
 
@@ -65,15 +75,20 @@ playgroup.gg  <--->  Cloudflare Worker relay  <--->  app.js (this site)
 - `deck-strength.xlsx` — the tracked spreadsheet (Game Log, Current Deck
   Strength, Deck Win Rates, Player Adjusted Ranks).
 - `cloudflare-worker/` — the relay Worker + its own README.
-- `scripts/` — Python scripts that edit `deck-strength.xlsx` directly:
-  adding/removing a player or deck, applying a roster-update batch,
-  rolling over to a new season, and a couple of one-off migration tools.
-- `.github/workflows/` — the three workflows GitHub Actions runs on a
-  `repository_dispatch` (or manually via `workflow_dispatch` for
-  `recalculate.yml`).
+- `scripts/` — Python scripts that edit `deck-strength.xlsx` directly
+  (adding/removing a player or deck, applying a roster-update batch,
+  rolling over to a new season, backfilling ID columns on older rows) plus
+  the Discord-posting scripts (`discord_report.py`, `discord_common.py`,
+  `post_to_discord*.py`, `delete_last_discord_post.py`).
+- `.github/workflows/` — `add-game.yml`/`roster-update.yml` run on a
+  `repository_dispatch`; `recalculate.yml`, `post-discord-update.yml`, and
+  `delete-last-discord-post.yml` are triggered manually
+  (`workflow_dispatch`).
 - `manifest.json`, `icon-*.png`, `apple-touch-icon.png`,
   `scripts/generate_icons.py` — home-screen icon for "Add to Home Screen"
   on iOS/Android. Rerun the script after swapping `icon-source.png`.
+- `bg-*.webp` — one background image per tab, cross-faded on tab switch
+  (see the `.tab-bg` rules in `style.css` and `initTabs()` in `app.js`).
 
 ## Making changes to the spreadsheet directly
 
