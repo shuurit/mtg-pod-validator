@@ -241,11 +241,19 @@ header h1 {
   color: var(--accent);
 }
 
+.winrates-table th.trend, .winrates-table td.trend {
+  text-align: center;
+}
+
 .winrates-table td.muted, .winrates-table span.na {
   color: var(--muted);
   font-weight: 400;
   font-style: italic;
 }
+
+.trend-up { color: var(--good); }
+.trend-down { color: var(--bad); }
+.trend-steady { color: var(--muted); }
 
 .note-line {
   display: block;

@@ -713,10 +713,68 @@ function tallyPlaygroupWinRates(games) {
 let winRatesSortColumn = "adjusted"; // "adjusted" | "playgroup"
 let winRatesSortDirection = "desc"; // "desc" | "asc"
 
+// Column order left-to-right: the group's own metric (and its Trend)
+// right next to Player, then playgroup.gg's raw rate further out.
 const WINRATES_COLUMNS = [
-  { key: "playgroup", label: "Win Rate (playgroup.gg)" },
   { key: "adjusted", label: "Player Adjusted Win Rate" },
+  { key: "playgroup", label: "Win Rate (playgroup.gg)" },
 ];
+
+// {name, rate} sorted descending -> {name: rank}, tied rates sharing a
+// rank (competition-style: 1,1,3) so players tied at 0 don't show
+// spurious movement purely from sort tie-breaking order. Mirrors
+// assign_ranks in scripts/discord_report.py.
+function assignRanks(rankedList) {
+  const ranks = {};
+  rankedList.forEach((item, i) => {
+    if (i > 0 && Math.abs(item.rate - rankedList[i - 1].rate) < 1e-9) {
+      ranks[item.name] = ranks[rankedList[i - 1].name];
+    } else {
+      ranks[item.name] = i + 1;
+    }
+  });
+  return ranks;
+}
+
+// {player: 'up'/'down'/'steady'} -- whether each player's rank *position*
+// in the Player Adjusted Win Rate standings moved compared to what the
+// standings would be without the most recent logged game (someone passed
+// them, or they passed someone). Rank-based rather than raw-score-based
+// for the same reason as the Discord report: a raw rate can shift without
+// reading as "better/worse" the way a leaderboard position does. Computed
+// fresh from gameLogSeason3Rows every render -- no snapshot, so re-running
+// never falsely shows everyone as steady. Mirrors compute_rank_trend in
+// scripts/discord_report.py.
+function computeWinRatesRankTrend() {
+  const validRows = gameLogSeason3Rows.filter(r => typeof r.J === "number");
+  if (!validRows.length) return {};
+  const gameNums = validRows.map(r => r.gameNum).filter(g => typeof g === "number");
+  if (!gameNums.length) return {};
+  const maxGame = Math.max(...gameNums);
+
+  const playerNames = [...new Set(validRows.map(r => r.player))];
+
+  const rank = rowsForPlayer => {
+    const ranked = playerNames
+      .map(name => ({ name, rate: computePlayerAdjustedWinRate(rowsForPlayer(name)).B }))
+      .sort((a, b) => b.rate - a.rate);
+    return assignRanks(ranked);
+  };
+
+  const currentRanks = rank(name => validRows.filter(r => r.player === name));
+  const previousRanks = rank(name => validRows.filter(r => r.player === name && r.gameNum !== maxGame));
+
+  const trend = {};
+  for (const name of playerNames) {
+    if (currentRanks[name] < previousRanks[name]) trend[name] = "up";
+    else if (currentRanks[name] > previousRanks[name]) trend[name] = "down";
+    else trend[name] = "steady";
+  }
+  return trend;
+}
+
+const TREND_SYMBOL = { up: "▲", down: "▼", steady: "–" };
+const TREND_CLASS = { up: "trend-up", down: "trend-down", steady: "trend-steady" };
 
 // Renders the Player Win Rates table from an already-fetched
 // /playgroup-games response -- see refreshPlaygroupGames below, which is
@@ -770,6 +828,8 @@ function renderWinRatesTable(data) {
     return (a[sortKey] - b[sortKey]) * dir;
   });
 
+  const trendByPlayer = computeWinRatesRankTrend();
+
   const table = document.createElement("table");
   table.className = "winrates-table";
   const thead = document.createElement("thead");
@@ -795,6 +855,15 @@ function renderWinRatesTable(data) {
       renderWinRatesTable(playgroupGamesData);
     });
     headRow.appendChild(th);
+    // Trend rides right alongside the Adjusted Win Rate column it's
+    // derived from -- not sortable itself (it's a change, not a value).
+    if (col.key === "adjusted") {
+      const trendTh = document.createElement("th");
+      trendTh.className = "trend";
+      trendTh.textContent = "Trend";
+      trendTh.title = "Whether this player's rank in the Player Adjusted Win Rate standings moved compared to before their most recent logged game";
+      headRow.appendChild(trendTh);
+    }
   }
   thead.appendChild(headRow);
   table.appendChild(thead);
@@ -806,15 +875,7 @@ function renderWinRatesTable(data) {
 
     const nameTd = document.createElement("td");
     nameTd.textContent = row.name;
-
-    const pgTd = document.createElement("td");
-    pgTd.className = "num";
-    if (row.pgPct !== null) {
-      pgTd.textContent = `${row.pgPct.toFixed(3)}% (${row.pgWins}-${row.pgLosses})`;
-    } else {
-      pgTd.className += " muted";
-      pgTd.innerHTML = `<span class="na">No games in the active league yet</span>`;
-    }
+    tr.appendChild(nameTd);
 
     const adjTd = document.createElement("td");
     adjTd.className = "num";
@@ -824,10 +885,29 @@ function renderWinRatesTable(data) {
       adjTd.className += " muted";
       adjTd.innerHTML = `<span class="na">No games logged in ${CURRENT_SEASON_SHEET}</span>`;
     }
-
-    tr.appendChild(nameTd);
-    tr.appendChild(pgTd);
     tr.appendChild(adjTd);
+
+    const trendTd = document.createElement("td");
+    trendTd.className = "trend";
+    const direction = trendByPlayer[row.name];
+    if (row.adjPct !== null && direction) {
+      trendTd.innerHTML = `<span class="${TREND_CLASS[direction]}">${TREND_SYMBOL[direction]}</span>`;
+    } else {
+      trendTd.className += " muted";
+      trendTd.textContent = "—";
+    }
+    tr.appendChild(trendTd);
+
+    const pgTd = document.createElement("td");
+    pgTd.className = "num";
+    if (row.pgPct !== null) {
+      pgTd.textContent = `${row.pgPct.toFixed(3)}% (${row.pgWins}-${row.pgLosses})`;
+    } else {
+      pgTd.className += " muted";
+      pgTd.innerHTML = `<span class="na">No games in the active league yet</span>`;
+    }
+    tr.appendChild(pgTd);
+
     tbody.appendChild(tr);
   }
 
