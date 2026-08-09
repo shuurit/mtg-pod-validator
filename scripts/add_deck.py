@@ -5,7 +5,9 @@ Rates (kept in sync, same layout). Unlike add_player.py, this can't just
 append at the end -- the new row has to land inside the player's existing
 block, which means every row below it shifts down by one.
 
-Usage:
+Usage (manual/local testing only -- the automated "Update the App" pipeline
+calls process_cds/process_dwr directly from apply_roster_update.py, never
+this CLI entry point):
     python scripts/add_deck.py '{"player": "Manny", "deck": "Krenko, Mob Boss", "power": 3.2, "playgroupDeckId": 744135}'
 
 "power" is a starting baseline -- Current Deck Strength switches to the

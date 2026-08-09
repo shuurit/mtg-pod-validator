@@ -4,7 +4,9 @@ Strength and Deck Win Rates (both share the same row-per-player-then-decks
 layout, so they're extended together). Appends at the end of each sheet --
 safe, since nothing else needs to shift.
 
-Usage:
+Usage (manual/local testing only -- the automated "Update the App" pipeline
+calls append_to_sheet/cds_rows_xml/dwr_rows_xml directly from
+apply_roster_update.py, never this CLI entry point):
     python scripts/add_player.py '{"player": "Alex", "decks": [["Krenko, Mob Boss", 3.2, 744135], ["Meren of Clan Nel Toth", 2.8, null]]}'
 
 Each deck is `[name, power, playgroup_deck_id]` -- the ID is optional (use
