@@ -64,6 +64,18 @@ const GITHUB_OWNER = "shuurit";
 const GITHUB_REPO = "mtg-pod-validator";
 const ALLOWED_ORIGIN = "https://shuurit.github.io";
 
+// A single misbehaving client (confirmed via Cloudflare's request log: one
+// IP firing /playgroup-games and /roster-diff repeatedly within the same
+// second) can blow the KV daily write budget in minutes even though those
+// endpoints are cheap individually -- see computePlaygroupGames. This is a
+// per-IP budget, not a "one request at a time" lock, so a few players
+// refreshing at once from the same home network never trips it; it only
+// stops the kind of many-requests-per-second burst a script produces.
+// Cache API (not KV) on purpose -- it doesn't count against the same daily
+// operation budget this exists to protect.
+const RATE_LIMIT_MAX_REQUESTS = 20;
+const RATE_LIMIT_WINDOW_SECONDS = 15;
+
 const PLAYGROUP_ID = 51996;
 const PLAYGROUP_API_BASE = "https://playgroup.gg/api/public/v1";
 // Hard per-run caps so a cold cache (or a big backlog) can never exceed
@@ -122,6 +134,33 @@ function pgFetch(path, env) {
       "User-Agent": "mtg-pod-validator-relay",
     },
   });
+}
+
+// Fixed-window counter per client IP, stored in the edge Cache API (keyed
+// by a synthetic same-colo URL, never a real route) instead of KV. Not
+// perfectly precise -- read-then-write has a small race under concurrent
+// requests, and the cache is per-colo rather than globally consistent --
+// but neither matters for what this defends against: it only needs to
+// notice "way more requests than any real usage pattern, from one IP,
+// fast" and start returning 429s, not enforce an exact global count.
+async function isRateLimited(request, ctx) {
+  const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+  const cache = caches.default;
+  const cacheKey = new Request(`https://rate-limit.internal/${ip}`);
+
+  const cached = await cache.match(cacheKey);
+  const count = cached ? (await cached.json()).count : 0;
+
+  ctx.waitUntil(
+    cache.put(
+      cacheKey,
+      new Response(JSON.stringify({ count: count + 1 }), {
+        headers: { "Cache-Control": `max-age=${RATE_LIMIT_WINDOW_SECONDS}` },
+      })
+    )
+  );
+
+  return count + 1 > RATE_LIMIT_MAX_REQUESTS;
 }
 
 async function kvGetJson(env, key, fallback) {
@@ -572,6 +611,14 @@ export default {
   async fetch(request, env, ctx) {
     if (request.method === "OPTIONS") {
       return new Response(null, { headers: corsHeaders() });
+    }
+
+    if (await isRateLimited(request, ctx)) {
+      return jsonResponse(
+        { error: "Too many requests, slow down." },
+        429,
+        { "Retry-After": String(RATE_LIMIT_WINDOW_SECONDS) }
+      );
     }
 
     const url = new URL(request.url);

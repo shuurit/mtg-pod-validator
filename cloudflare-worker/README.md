@@ -32,6 +32,21 @@ true on playgroup.gg right now," so a cached answer would defeat the
 point. The KV caching above is a different thing: it's caching the
 *expensive-to-derive* league classification, not the response itself.
 
+## Rate limiting
+
+Every request (any method, any path, before routing) is checked against a
+per-IP budget — 20 requests per 15 seconds, tracked via the Cache API
+(`caches.default`), not KV, so the limiter itself never eats into the KV
+budget it exists to protect. Past the budget, the Worker returns `429` with
+a `Retry-After` header instead of doing any work.
+
+This exists because a single client hitting `/playgroup-games` and
+`/roster-diff` many times per second — confirmed via Cloudflare's request
+log, one IP, sub-second bursts — is enough to blow the KV daily write cap
+in minutes even though each individual call is cheap. It's a budget, not a
+one-at-a-time lock, so a few players refreshing at once from the same home
+network never trips it.
+
 ## Endpoints
 
 - `GET /playgroup-games` — live active-league games. Always fresh.
