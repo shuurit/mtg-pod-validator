@@ -315,6 +315,52 @@ async function syncFromRepoWorkbook() {
   }
 }
 
+// ---------- shared table building ----------
+
+// Builds a <table class="${className}"> purely via createElement/
+// textContent/appendChild -- never innerHTML -- so untrusted text (player
+// names, commander names, playgroup.gg usernames, all of which a playgroup
+// member ultimately controls) can never break out of markup the way
+// interpolating it into a template-literal-built <tr> could. Each cell in
+// `rows` is either a plain string/number (rendered as escaped text) or an
+// already-built DOM node (for interactive cells: inputs, checkboxes,
+// buttons) -- callers needing a per-cell class (e.g. "num") pass
+// {node, className} or {text, className} instead of the bare value.
+// Returns {table, tbody} since most callers still need to reach into
+// individual rows/cells afterward (pre-filling inputs, wiring listeners).
+function buildTable(className, headers, rows) {
+  const table = document.createElement("table");
+  if (className) table.className = className;
+
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  for (const h of headers) {
+    const th = document.createElement("th");
+    th.textContent = h;
+    headRow.appendChild(th);
+  }
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  for (const cells of rows) {
+    const tr = document.createElement("tr");
+    for (const cell of cells) {
+      const td = document.createElement("td");
+      const isDescriptor = cell !== null && typeof cell === "object" && !(cell instanceof Node);
+      const className = isDescriptor ? cell.className : undefined;
+      const value = isDescriptor ? (cell.node !== undefined ? cell.node : cell.text) : cell;
+      if (className) td.className = className;
+      if (value instanceof Node) td.appendChild(value);
+      else td.textContent = value ?? "";
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  return { table, tbody };
+}
+
 // ---------- players/decks display (read-only) ----------
 
 function formatPower(power) {
@@ -399,33 +445,15 @@ function renderPlayersTable() {
       continue;
     }
 
-    const table = document.createElement("table");
-    const thead = document.createElement("thead");
-    thead.innerHTML = "<tr><th>Deck</th><th>Power</th><th>Playgroup Power</th></tr>";
-    table.appendChild(thead);
-
-    const tbody = document.createElement("tbody");
-    for (const deck of player.decks) {
-      const tr = document.createElement("tr");
-
-      const nameTd = document.createElement("td");
-      nameTd.textContent = deck.name;
-
-      const powerTd = document.createElement("td");
-      powerTd.className = "num";
-      powerTd.textContent = formatPower(deck.power);
-
+    const rows = player.decks.map(deck => {
       const pgPower = findPlaygroupPowerLevel(player.name, deck);
-      const pgPowerTd = document.createElement("td");
-      pgPowerTd.className = "num";
-      pgPowerTd.textContent = pgPower === null ? "—" : formatPower(pgPower);
-
-      tr.appendChild(nameTd);
-      tr.appendChild(powerTd);
-      tr.appendChild(pgPowerTd);
-      tbody.appendChild(tr);
-    }
-    table.appendChild(tbody);
+      return [
+        deck.name,
+        { text: formatPower(deck.power), className: "num" },
+        { text: pgPower === null ? "—" : formatPower(pgPower), className: "num" },
+      ];
+    });
+    const { table } = buildTable(null, ["Deck", "Power", "Playgroup Power"], rows);
     block.appendChild(table);
     container.appendChild(block);
   }
@@ -1151,10 +1179,19 @@ function renderGamesToUpdate() {
     const card = document.createElement("div");
     card.className = "gtu-game-card";
 
-    const summary = g.participants.map(p => `${p.player} (${p.commander}${p.result === "win" ? " — won" : ""})`).join(", ");
+    // Built via createElement/textContent, not innerHTML -- player and
+    // commander names come from playgroup.gg (ultimately editable by any
+    // playgroup member), so interpolating them into a template-literal
+    // innerHTML string would let one break out of markup. The date strong
+    // tag is the only actual markup here, so it's the only thing built as
+    // a real element; everything else is plain text nodes.
     const header = document.createElement("div");
     header.className = "gtu-game-summary";
-    header.innerHTML = `<strong>${g.date}</strong> — ${summary}`;
+    const dateStrong = document.createElement("strong");
+    dateStrong.textContent = g.date;
+    header.appendChild(dateStrong);
+    const summary = g.participants.map(p => `${p.player} (${p.commander}${p.result === "win" ? " — won" : ""})`).join(", ");
+    header.appendChild(document.createTextNode(` — ${summary}`));
 
     const fillBtn = document.createElement("button");
     fillBtn.textContent = "Fill in";
@@ -1284,6 +1321,21 @@ function deriveGameFieldsFromRawGame(rawGame) {
   return byDeckName;
 }
 
+// One <input class="gtu-in gtu-${suffix}" data-i="${i}"> per Games to
+// Update input cell -- readInputs (in calculateGameToUpdate) and the
+// playgroup.gg pre-fill below both look these up later by exactly that
+// class+data-i combination, so the two need to stay in lockstep.
+function makeGtuInput(type, suffix, i, attrs) {
+  const el = document.createElement("input");
+  el.type = type;
+  el.className = `gtu-in ${suffix}`;
+  el.dataset.i = i;
+  for (const [key, value] of Object.entries(attrs || {})) {
+    if (value !== undefined && value !== null) el[key] = value;
+  }
+  return el;
+}
+
 function openGameForm(pgGame) {
   const areaEl = document.getElementById("gtu-form-area");
   areaEl.innerHTML = "";
@@ -1302,39 +1354,30 @@ function openGameForm(pgGame) {
     box.appendChild(derivedHint);
   }
 
-  const table = document.createElement("table");
-  table.className = "gtu-input-table";
-  table.innerHTML = `
-    <thead><tr>
-      <th>Player</th><th>Commander</th><th>Result</th>
-      <th>Cmdr Strength</th><th>Place</th><th>KOs</th><th>TOV</th>
-      <th>Pop-Off</th><th>Disruptions</th><th>Recoveries</th><th>Behind</th><th>Bracket</th>
-    </tr></thead>
-  `;
-  const tbody = document.createElement("tbody");
-
-  pgGame.participants.forEach((p, i) => {
-    const tr = document.createElement("tr");
+  const rows = pgGame.participants.map((p, i) => {
     const defaultStrength = findDefaultStrength(p.player, p.commander);
     const defaultPlace = p.result === "win" ? 1 : "";
     const defaultBracket = findDefaultBracket(p.player, p.commander);
-    tr.innerHTML = `
-      <td>${p.player}</td>
-      <td>${p.commander}</td>
-      <td>${p.result === "win" ? "Win ✓" : "Loss"}</td>
-      <td><input type="number" step="0.1" min="0" max="5" class="gtu-in gtu-strength" value="${defaultStrength ?? ""}" data-i="${i}"></td>
-      <td><input type="number" min="1" max="${pgGame.pod_size}" class="gtu-in gtu-place" value="${defaultPlace}" data-i="${i}"></td>
-      <td><input type="number" min="0" class="gtu-in gtu-knockouts" value="0" data-i="${i}"></td>
-      <td><input type="number" min="1" class="gtu-in gtu-tov" value="" data-i="${i}"></td>
-      <td><input type="checkbox" class="gtu-in gtu-popoff" data-i="${i}"></td>
-      <td><input type="number" min="0" class="gtu-in gtu-disruptions" value="0" data-i="${i}"></td>
-      <td><input type="number" min="0" class="gtu-in gtu-recoveries" value="0" data-i="${i}"></td>
-      <td><input type="checkbox" class="gtu-in gtu-behind" data-i="${i}"></td>
-      <td><input type="number" min="1" max="5" class="gtu-in gtu-bracket" value="${defaultBracket}" data-i="${i}"></td>
-    `;
-    tbody.appendChild(tr);
+    return [
+      p.player,
+      p.commander,
+      p.result === "win" ? "Win ✓" : "Loss",
+      { node: makeGtuInput("number", "gtu-strength", i, { step: "0.1", min: "0", max: "5", value: defaultStrength ?? "" }) },
+      { node: makeGtuInput("number", "gtu-place", i, { min: "1", max: pgGame.pod_size, value: defaultPlace }) },
+      { node: makeGtuInput("number", "gtu-knockouts", i, { min: "0", value: 0 }) },
+      { node: makeGtuInput("number", "gtu-tov", i, { min: "1", value: "" }) },
+      { node: makeGtuInput("checkbox", "gtu-popoff", i) },
+      { node: makeGtuInput("number", "gtu-disruptions", i, { min: "0", value: 0 }) },
+      { node: makeGtuInput("number", "gtu-recoveries", i, { min: "0", value: 0 }) },
+      { node: makeGtuInput("checkbox", "gtu-behind", i) },
+      { node: makeGtuInput("number", "gtu-bracket", i, { min: "1", max: "5", value: defaultBracket }) },
+    ];
   });
-  table.appendChild(tbody);
+  const { table } = buildTable(
+    "gtu-input-table",
+    ["Player", "Commander", "Result", "Cmdr Strength", "Place", "KOs", "TOV", "Pop-Off", "Disruptions", "Recoveries", "Behind", "Bracket"],
+    rows
+  );
   // 12 columns of real content don't fit a phone (or even a narrower
   // desktop card) at once -- confirmed the hard way, the table was
   // overflowing its own wrapper with no way to reach the clipped columns.
@@ -1466,7 +1509,11 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
     Number.isNaN(inp.strength) || Number.isNaN(inp.place) || Number.isNaN(inp.tov) || Number.isNaN(inp.bracket)
   );
   if (missingField) {
-    resultsEl.innerHTML = `<p class="hint">Fill in Commander Strength, Place, TOV, and Bracket for every player first (missing for ${missingField.player}).</p>`;
+    resultsEl.innerHTML = "";
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.textContent = `Fill in Commander Strength, Place, TOV, and Bracket for every player first (missing for ${missingField.player}).`;
+    resultsEl.appendChild(p);
     return;
   }
 
@@ -1493,17 +1540,11 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
   const nextGameNum = Math.max(0, ...gameLogSeason3Rows.map(r => Number(r.gameNum) || 0)) + 1;
 
   resultsEl.innerHTML = "";
-  const table = document.createElement("table");
-  table.className = "gtu-results-table";
-  table.innerHTML = `<thead><tr><th>Player</th><th>Commander</th><th>Result</th><th>Current PAWR</th><th>PAWR w/ this game</th><th></th></tr></thead>`;
-  const tbody = document.createElement("tbody");
 
-  for (const row of rows) {
+  const tableRows = rows.map(row => {
     const existing = gameLogSeason3Rows.filter(r => r.player === row.player && typeof r.J === "number");
     const before = computePlayerAdjustedWinRate(existing);
     const after = computePlayerAdjustedWinRate(existing, { result: row.result === "win" ? 1 : 0, J: row.J, K: row.K, M: row.M });
-
-    const tr = document.createElement("tr");
     const delta = after.B - before.B;
     const deltaStr = `${delta >= 0 ? "+" : ""}${(delta * 100).toFixed(2)}pt`;
 
@@ -1523,18 +1564,21 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
       setTimeout(() => { copyBtn.textContent = "Copy row"; }, 1500);
     });
 
-    tr.innerHTML = `
-      <td>${row.player}</td>
-      <td>${row.commander}</td>
-      <td>${row.result === "win" ? "Win" : "Loss"}</td>
-      <td>${(before.B * 100).toFixed(2)}% (${before.wins}-${before.losses})</td>
-      <td>${(after.B * 100).toFixed(2)}% (${after.wins}-${after.losses}) — ${deltaStr}</td>
-      <td></td>
-    `;
-    tr.lastElementChild.appendChild(copyBtn);
-    tbody.appendChild(tr);
-  }
-  table.appendChild(tbody);
+    return [
+      row.player,
+      row.commander,
+      row.result === "win" ? "Win" : "Loss",
+      `${(before.B * 100).toFixed(2)}% (${before.wins}-${before.losses})`,
+      `${(after.B * 100).toFixed(2)}% (${after.wins}-${after.losses}) — ${deltaStr}`,
+      { node: copyBtn },
+    ];
+  });
+
+  const { table } = buildTable(
+    "gtu-results-table",
+    ["Player", "Commander", "Result", "Current PAWR", "PAWR w/ this game", ""],
+    tableRows
+  );
   resultsEl.appendChild(table);
 
   const hint = document.createElement("p");
@@ -1733,15 +1777,41 @@ function computeRosterDiff(data) {
   return { newPlayers, newDecksForExisting };
 }
 
-function deckRowHtml(deck) {
+// A deck row's three cells for the buildTable-based uta-deck-table below --
+// built as real elements (not an innerHTML template) since deck.name/
+// deck.commander_name are playgroup.gg data a playgroup member ultimately
+// controls, and the name cell can hold two text pieces (commander name +
+// an optional muted "(actual deck name)" aside).
+function deckTableRow(deck) {
   const state = rosterUpdateDeckState.get(String(deck.id));
-  return `
-    <tr>
-      <td><input type="checkbox" class="uta-deck-check" data-deck-id="${deck.id}" ${state.checked ? "checked" : ""}></td>
-      <td>${deck.commander_name}${deck.name !== deck.commander_name ? ` <span class="hint">(${deck.name})</span>` : ""}</td>
-      <td><input type="number" class="uta-deck-power" data-deck-id="${deck.id}" step="0.1" min="0" max="5" value="${state.power}" placeholder="power"></td>
-    </tr>
-  `;
+
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.className = "uta-deck-check";
+  checkbox.dataset.deckId = deck.id;
+  checkbox.checked = !!state.checked;
+
+  const nameCell = document.createDocumentFragment();
+  nameCell.appendChild(document.createTextNode(deck.commander_name));
+  if (deck.name !== deck.commander_name) {
+    nameCell.appendChild(document.createTextNode(" "));
+    const aside = document.createElement("span");
+    aside.className = "hint";
+    aside.textContent = `(${deck.name})`;
+    nameCell.appendChild(aside);
+  }
+
+  const powerInput = document.createElement("input");
+  powerInput.type = "number";
+  powerInput.className = "uta-deck-power";
+  powerInput.dataset.deckId = deck.id;
+  powerInput.step = "0.1";
+  powerInput.min = "0";
+  powerInput.max = "5";
+  powerInput.value = state.power;
+  powerInput.placeholder = "power";
+
+  return [{ node: checkbox }, { node: nameCell }, { node: powerInput }];
 }
 
 // Wires up live state-capture on a just-rendered group's inputs, so every
@@ -1773,28 +1843,42 @@ function renderRosterUpdateGroup(group) {
   const box = document.createElement("div");
   box.className = "uta-group";
 
+  const header = document.createElement("div");
+  header.className = "uta-group-header";
+
   if (group.kind === "new") {
+    // Built via createElement, not an innerHTML template with p.username
+    // interpolated into a value="..." attribute -- a username containing a
+    // `"` would otherwise break out of that attribute entirely, not just
+    // read oddly as text.
     const p = group.data;
-    box.innerHTML = `
-      <div class="uta-group-header">
-        <label>New player (playgroup.gg: <code>${p.username}</code>) — display name:
-          <input type="text" class="uta-display-name" data-username="${p.username}" value="${rosterUpdateNameState.get(p.username)}">
-        </label>
-      </div>
-      <table class="uta-deck-table">
-        <thead><tr><th></th><th>Deck</th><th>Starting power</th></tr></thead>
-        <tbody>${p.decks.map(d => deckRowHtml(d)).join("")}</tbody>
-      </table>
-    `;
+    const label = document.createElement("label");
+    label.appendChild(document.createTextNode("New player (playgroup.gg: "));
+    const code = document.createElement("code");
+    code.textContent = p.username;
+    label.appendChild(code);
+    label.appendChild(document.createTextNode(") — display name: "));
+    const nameInput = document.createElement("input");
+    nameInput.type = "text";
+    nameInput.className = "uta-display-name";
+    nameInput.dataset.username = p.username;
+    nameInput.value = rosterUpdateNameState.get(p.username);
+    label.appendChild(nameInput);
+    header.appendChild(label);
+    box.appendChild(header);
+
+    const { table } = buildTable("uta-deck-table", ["", "Deck", "Starting power"], p.decks.map(deckTableRow));
+    box.appendChild(table);
   } else {
     const g = group.data;
-    box.innerHTML = `
-      <div class="uta-group-header"><strong>${g.player}</strong> — ${g.decks.length} new deck(s)</div>
-      <table class="uta-deck-table">
-        <thead><tr><th></th><th>Deck</th><th>Starting power</th></tr></thead>
-        <tbody>${g.decks.map(d => deckRowHtml(d)).join("")}</tbody>
-      </table>
-    `;
+    const strong = document.createElement("strong");
+    strong.textContent = g.player;
+    header.appendChild(strong);
+    header.appendChild(document.createTextNode(` — ${g.decks.length} new deck(s)`));
+    box.appendChild(header);
+
+    const { table } = buildTable("uta-deck-table", ["", "Deck", "Starting power"], g.decks.map(deckTableRow));
+    box.appendChild(table);
   }
 
   wireRosterUpdateGroupInputs(box);
