@@ -142,6 +142,14 @@ archive. Both scripts share their table-building/posting logic in
 `scripts/discord_report.py` — they only differ in webhook, banner text,
 and whether anything gets deleted first.
 
+The rankings screenshot in the live channel also shows a ▲/▼/– trend
+column, comparing each player's Player Adjusted Win Rate against
+`discord_rankings_snapshot.json` (the numbers as of the last live post,
+also committed alongside the spreadsheet). Only `post_to_discord.py`
+reads/writes it — the archive channel is a permanent per-game record, so
+a "since last post" trend isn't a meaningful thing to show there, and its
+rankings table has no Trend column.
+
 ## Notes on scope
 
 - GitHub doesn't offer a narrower permission than "Contents: write" for

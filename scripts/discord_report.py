@@ -17,6 +17,7 @@ Both Current Deck Strength and Deck Win Rates are grouped by player,
 matching how the sheet itself is laid out (see find_cds_header_rows).
 """
 import io
+import json
 import re
 import time
 from pathlib import Path
@@ -30,6 +31,25 @@ from discord_common import DISCORD_HEADERS
 from season_config import CURRENT_SEASON_SHEET
 
 XLSX_PATH = Path(__file__).parent.parent / "deck-strength.xlsx"
+# {player: win_rate} as of the last live post -- lets the rankings table
+# show a trend arrow for each player. Only post_to_discord.py (the live,
+# "current standings" channel) reads/writes this; post_to_discord_archive.py
+# is a permanent per-game record where "trend since last post" isn't a
+# meaningful thing to show, so it never touches this file.
+RANKINGS_SNAPSHOT_PATH = Path(__file__).parent.parent / "discord_rankings_snapshot.json"
+
+
+def load_rankings_snapshot():
+    if not RANKINGS_SNAPSHOT_PATH.exists():
+        return None
+    return json.loads(RANKINGS_SNAPSHOT_PATH.read_text(encoding="utf-8"))
+
+
+def save_rankings_snapshot(ranks):
+    """ranks: [(player, win_rate), ...], as returned by compute_player_rankings."""
+    RANKINGS_SNAPSHOT_PATH.write_text(
+        json.dumps(dict(ranks), indent=2) + "\n", encoding="utf-8",
+    )
 
 HEADER_BG = "#2b2d31"  # Discord's own dark blurple-gray, so the header reads native
 HEADER_FG = "white"
@@ -61,7 +81,7 @@ def get_season_and_game_info(wb_values):
     return season_num, game_num, f"Season {season_num} · Game {game_num}"
 
 
-def render_table_png(title, col_labels, rows, section_indices, fontsize=10, char_w=0.105, highlight_indices=frozenset()):
+def render_table_png(title, col_labels, rows, section_indices, fontsize=10, char_w=0.105, highlight_indices=frozenset(), cell_text_colors=None):
     """Renders a styled table to PNG bytes. section_indices are row indices
     (0-based into `rows`) that are player-header/divider rows -- shown as a
     shaded, bold, full-width row instead of normal data cells.
@@ -69,6 +89,10 @@ def render_table_png(title, col_labels, rows, section_indices, fontsize=10, char
     the normal alternating one (used for the rankings table's #1 spot) --
     takes priority over the alternating stripe, but a row can't be both a
     section row and a highlighted row.
+    cell_text_colors, if given, maps (row_index, col_index) -- both
+    0-based into `rows`/`col_labels` -- to a text color for just that
+    cell, layered on top of whatever background/weight the row already
+    got (used for the rankings table's up/down trend arrows).
 
     Column widths are sized off the longest actual string in each column
     (header included), not a fixed guessed ratio -- a fixed ratio clipped
@@ -116,6 +140,8 @@ def render_table_png(title, col_labels, rows, section_indices, fontsize=10, char
                 cell.set_text_props(fontweight="bold")
             else:
                 cell.set_facecolor(ROW_BG_ALT if data_row_counter % 2 else ROW_BG)
+            if cell_text_colors and (i, j) in cell_text_colors:
+                cell.set_text_props(color=cell_text_colors[(i, j)], fontweight="bold")
         if not is_section:
             data_row_counter += 1
 
@@ -163,7 +189,17 @@ def find_cds_header_rows(wb_formulas):
     return headers
 
 
-def build_player_rankings_table(wb_values, subtitle):
+TREND_EPSILON = 0.0005  # win-rate deltas smaller than this read as "steady," not float noise
+TREND_UP = "▲"
+TREND_DOWN = "▼"
+TREND_STEADY = "–"
+TREND_UP_COLOR = "#1a7f37"
+TREND_DOWN_COLOR = "#d1242f"
+TREND_STEADY_COLOR = "#6e7781"
+
+
+def compute_player_rankings(wb_values):
+    """[(player, win_rate), ...], sorted by win_rate descending."""
     ws = wb_values["Player Adjusted Ranks"]
     ranks = []
     for r in range(2, ws.max_row + 1):
@@ -173,12 +209,47 @@ def build_player_rankings_table(wb_values, subtitle):
         rate = ws.cell(row=r, column=2).value
         ranks.append((player, rate if isinstance(rate, (int, float)) else 0))
     ranks.sort(key=lambda x: x[1], reverse=True)
+    return ranks
 
-    rows = [[str(i + 1), player, format_pct(rate)] for i, (player, rate) in enumerate(ranks)]
+
+def build_player_rankings_table(wb_values, subtitle, previous_ranks=None):
+    """previous_ranks, if given, is a {player: win_rate} snapshot from the
+    last time this was posted -- adds a Trend column (▲/▼/–, colored)
+    comparing each player's current win rate against it. A player with no
+    entry in previous_ranks (new to tracking, or there's no snapshot at
+    all yet) gets a blank trend cell rather than a guess."""
+    ranks = compute_player_rankings(wb_values)
+
+    if previous_ranks is None:
+        rows = [[str(i + 1), player, format_pct(rate)] for i, (player, rate) in enumerate(ranks)]
+        return render_table_png(
+            f"Player Rankings — Player Adjusted Win Rate  |  {subtitle}",
+            ["#", "Player", "Win Rate"], rows, set(),
+            highlight_indices={0} if rows else set(),
+        )
+
+    rows = []
+    cell_text_colors = {}
+    for i, (player, rate) in enumerate(ranks):
+        prev = previous_ranks.get(player)
+        if prev is None:
+            trend = ""
+        elif rate > prev + TREND_EPSILON:
+            trend, color = TREND_UP, TREND_UP_COLOR
+            cell_text_colors[(i, 3)] = color
+        elif rate < prev - TREND_EPSILON:
+            trend, color = TREND_DOWN, TREND_DOWN_COLOR
+            cell_text_colors[(i, 3)] = color
+        else:
+            trend, color = TREND_STEADY, TREND_STEADY_COLOR
+            cell_text_colors[(i, 3)] = color
+        rows.append([str(i + 1), player, format_pct(rate), trend])
+
     return render_table_png(
         f"Player Rankings — Player Adjusted Win Rate  |  {subtitle}",
-        ["#", "Player", "Win Rate"], rows, set(),
+        ["#", "Player", "Win Rate", "Trend"], rows, set(),
         highlight_indices={0} if rows else set(),
+        cell_text_colors=cell_text_colors,
     )
 
 
@@ -227,14 +298,15 @@ def build_deck_win_rates_table(wb_values, header_rows, subtitle):
     )
 
 
-def post_report(webhook_url, wb_formulas, wb_values, banner, subtitle):
+def post_report(webhook_url, wb_formulas, wb_values, banner, subtitle, previous_ranks=None):
     """Posts the standalone banner, then the three table screenshots, in
-    order. Returns the four message IDs, in post order."""
+    order. Returns the four message IDs, in post order. previous_ranks is
+    forwarded to build_player_rankings_table -- see there for what it does."""
     message_ids = [post_message(webhook_url, banner)]
 
     header_rows = find_cds_header_rows(wb_formulas)
 
-    rankings_png = build_player_rankings_table(wb_values, subtitle)
+    rankings_png = build_player_rankings_table(wb_values, subtitle, previous_ranks)
     message_ids.append(post_image(webhook_url, "", rankings_png, "player_rankings.png"))
 
     cds_png = build_current_deck_strength_table(wb_values, header_rows, subtitle)

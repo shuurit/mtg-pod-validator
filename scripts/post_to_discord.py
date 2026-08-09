@@ -30,7 +30,14 @@ from pathlib import Path
 import openpyxl
 
 from discord_common import delete_messages
-from discord_report import XLSX_PATH, get_season_and_game_info, post_report
+from discord_report import (
+    XLSX_PATH,
+    compute_player_rankings,
+    get_season_and_game_info,
+    load_rankings_snapshot,
+    post_report,
+    save_rankings_snapshot,
+)
 
 # Message IDs from the most recent post, so delete_last_discord_post.py can
 # find and remove them later. Committed alongside deck-strength.xlsx --
@@ -59,12 +66,14 @@ def main():
         f"\U0001F4CA Rankings, deck strength, and win rates below \U0001F447"
     )
 
-    message_ids = post_report(webhook_url, wb_formulas, wb_values, banner, subtitle)
+    previous_ranks = load_rankings_snapshot()
+    message_ids = post_report(webhook_url, wb_formulas, wb_values, banner, subtitle, previous_ranks)
 
     LAST_POST_PATH.write_text(
         json.dumps({"season": season_num, "game": game_num, "message_ids": message_ids}, indent=2) + "\n",
         encoding="utf-8",
     )
+    save_rankings_snapshot(compute_player_rankings(wb_values))
 
     print(f"Posted Season {season_num} Game {game_num} rankings, Current Deck Strength, and Deck Win Rates to Discord.")
 
