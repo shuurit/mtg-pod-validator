@@ -1503,6 +1503,17 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
         submitBtn.textContent = "Submitted ✓";
         applyOptimisticGameSubmit(pgGame, podSize, rows, nextGameNum);
         statusEl.textContent = "Added — already reflected in Games to Update, Player Win Rates, and Deck Strength Validator's deck power. GitHub Actions is syncing this to the spreadsheet in the background (usually 1-3 minutes) so it sticks around for everyone else.";
+        // The submitted game is already gone from the missing-games list
+        // above (applyOptimisticGameSubmit just re-rendered it), but this
+        // filled-in form otherwise just sits here forever -- confirmed the
+        // hard way, it was still showing a "submitted" game's form as if
+        // still pending after switching tabs and back. Leaves the
+        // confirmation message up briefly so it's actually seen, then
+        // clears the form area so the tab returns to a clean state.
+        setTimeout(() => {
+          const areaEl = box.parentElement;
+          if (areaEl) areaEl.innerHTML = "";
+        }, 2500);
       } catch (err) {
         submitBtn.disabled = false;
         submitBtn.textContent = "Submit to Spreadsheet";
