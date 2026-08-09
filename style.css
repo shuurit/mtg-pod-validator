@@ -549,6 +549,16 @@ td.num {
   font-size: 1rem;
 }
 
+.gtu-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  margin-bottom: 14px;
+}
+
+.gtu-table-scroll .gtu-input-table {
+  margin-bottom: 0;
+}
+
 .gtu-input-table, .gtu-results-table {
   width: 100%;
   border-collapse: collapse;

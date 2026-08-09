@@ -1132,13 +1132,18 @@ function computePlayerAdjustedWinRate(existingRows, newRow) {
 // real already-logged games, not just the API docs: KOs is just a
 // kill-event count per killer; Place ranks the winner first, then
 // everyone else by elimination order (eliminated later = better place);
-// TOV is the turn a player was eliminated, or the game's total_rounds for
-// anyone never eliminated (the winner). Matches participants by
-// deck_name, which both /debug/game's raw participations and
-// /playgroup-games' transformed participants carry, and which is unique
-// within a single game.
+// TOV is the turn a player was eliminated, or the last turn seen in the
+// event log for anyone never eliminated (the winner). Matches
+// participants by deck_name, which both /debug/game's raw participations
+// and /playgroup-games' transformed participants carry, and which is
+// unique within a single game.
 function deriveGameFieldsFromRawGame(rawGame) {
-  const killEvents = (rawGame.events || []).filter(e => e.kind === "kill");
+  // Sorted by happened_at rather than trusted to already be in order --
+  // this is what makes same-turn tie-breaking below actually correct
+  // instead of just usually-correct.
+  const killEvents = (rawGame.events || [])
+    .filter(e => e.kind === "kill")
+    .sort((a, b) => new Date(a.happened_at) - new Date(b.happened_at));
   const deckNameByUserId = {};
   for (const p of rawGame.participations) deckNameByUserId[p.user_id] = p.deck_name;
 
@@ -1148,21 +1153,42 @@ function deriveGameFieldsFromRawGame(rawGame) {
     if (deckName) kosByDeckName[deckName] = (kosByDeckName[deckName] || 0) + 1;
   }
 
-  const eliminationTurnByUserId = {};
-  for (const e of killEvents) {
-    eliminationTurnByUserId[e.receiver_user_id] = e.turn;
-  }
+  // turn alone isn't fine-grained enough to order two eliminations that
+  // happen in the same turn -- confirmed the hard way against a real game
+  // where Ryan eliminated Manny, then Mateo eliminated Ryan, both turn 8:
+  // sorting on turn alone ties them and falls back to array order, which
+  // doesn't necessarily match what actually happened. seq (this event's
+  // position among kill events in chronological order) breaks that tie
+  // correctly: whoever was eliminated later, even within the same turn,
+  // placed better.
+  const eliminationByUserId = {};
+  killEvents.forEach((e, seq) => {
+    eliminationByUserId[e.receiver_user_id] = { turn: e.turn, seq };
+  });
+
+  // total_rounds has been seen to under-report the actual last turn
+  // played (a real game's winner_declared/end_game events landed on turn
+  // 9 while playgroup.gg's own total_rounds said 8) -- the highest turn
+  // number actually seen in the event log is the more trustworthy source
+  // for "what turn did the game end on."
+  const maxTurn = Math.max(0, ...(rawGame.events || []).map(e => e.turn));
 
   const ranked = [...rawGame.participations].sort((a, b) => {
     if (a.winner !== b.winner) return a.winner ? -1 : 1;
-    const aTurn = eliminationTurnByUserId[a.user_id] ?? -1;
-    const bTurn = eliminationTurnByUserId[b.user_id] ?? -1;
-    return bTurn - aTurn;
+    const aElim = eliminationByUserId[a.user_id];
+    const bElim = eliminationByUserId[b.user_id];
+    const aTurn = aElim ? aElim.turn : -1;
+    const bTurn = bElim ? bElim.turn : -1;
+    if (aTurn !== bTurn) return bTurn - aTurn;
+    const aSeq = aElim ? aElim.seq : -1;
+    const bSeq = bElim ? bElim.seq : -1;
+    return bSeq - aSeq;
   });
 
   const byDeckName = {};
   ranked.forEach((p, i) => {
-    const tov = p.winner ? rawGame.total_rounds : eliminationTurnByUserId[p.user_id];
+    const elim = eliminationByUserId[p.user_id];
+    const tov = p.winner ? maxTurn : (elim ? elim.turn : null);
     byDeckName[p.deck_name] = {
       place: i + 1,
       kos: kosByDeckName[p.deck_name] || 0,
@@ -1223,7 +1249,14 @@ function openGameForm(pgGame) {
     tbody.appendChild(tr);
   });
   table.appendChild(tbody);
-  box.appendChild(table);
+  // 12 columns of real content don't fit a phone (or even a narrower
+  // desktop card) at once -- confirmed the hard way, the table was
+  // overflowing its own wrapper with no way to reach the clipped columns.
+  // Scrolls inside its own box instead of breaking out of it.
+  const tableScroll = document.createElement("div");
+  tableScroll.className = "gtu-table-scroll";
+  tableScroll.appendChild(table);
+  box.appendChild(tableScroll);
 
   // Fills in Place/KOs/TOV from playgroup.gg's raw per-game event log --
   // still fully editable, same as the Cmdr Strength/Bracket prefills
