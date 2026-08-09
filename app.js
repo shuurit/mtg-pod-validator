@@ -976,12 +976,24 @@ function computeLoggedMatches(pgGames) {
   return matches;
 }
 
+// playgroup.gg sometimes spells a commander with real diacritics (Eowyn ->
+// Éowyn, Kennerud -> Kennerüd) that this spreadsheet's own plain-ASCII
+// deck names never have -- confirmed the hard way when Ryan's "Arna
+// Kennerüd, Skycaptain" from a live game submission didn't exactly match
+// Current Deck Strength's "Arna Kennerud, Skycaptain", so the LOOKUP
+// formula there silently kept using an older game's result instead.
+// Mirrors strip_accents in scripts/backfill_playgroup_ids.py.
+function stripAccents(s) {
+  return (s || "").normalize("NFKD").replace(/[̀-ͯ]/g, "");
+}
+
 // Shared by findDefaultStrength below and computeRosterDiff -- a deck name
-// or commander name reduced to its first segment, case-insensitive, so
-// small naming variations ("Ms. Bumbleflower" vs "Ms. Bumbleflower, Deck")
-// still line up.
+// or commander name reduced to its first segment, case-insensitive and
+// accent-folded, so small naming variations ("Ms. Bumbleflower" vs
+// "Ms. Bumbleflower, Deck", or a playgroup.gg diacritic the spreadsheet
+// doesn't have) still line up.
 function normalizeCommanderName(s) {
-  return (s || "").toLowerCase().split(/[,/]/)[0].trim();
+  return stripAccents(s || "").toLowerCase().split(/[,/]/)[0].trim();
 }
 
 function findDefaultStrength(playerName, commanderName) {
@@ -1326,7 +1338,11 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
     bracket: parseInt(box.querySelector(`.gtu-bracket[data-i="${i}"]`).value, 10),
   });
 
-  const inputs = pgGame.participants.map((p, i) => ({ ...p, ...readInputs(i) }));
+  // stripAccents here (not just in normalizeCommanderName) matters: this
+  // is the text that actually gets written to the Game Log, and it needs
+  // to exactly match Current Deck Strength's plain-ASCII deck name for
+  // the LOOKUP formula there to find it -- see stripAccents' own comment.
+  const inputs = pgGame.participants.map((p, i) => ({ ...p, commander: stripAccents(p.commander), ...readInputs(i) }));
   const missingField = inputs.find(inp =>
     Number.isNaN(inp.strength) || Number.isNaN(inp.place) || Number.isNaN(inp.tov) || Number.isNaN(inp.bracket)
   );
