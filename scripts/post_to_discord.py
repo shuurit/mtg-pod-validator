@@ -1,7 +1,8 @@
 """
 Posts four Discord messages after a game has been added and the
 spreadsheet recalculated: a "Season N - Game M is in the books!"
-announcement, then a screenshot each of the player rankings, the full
+announcement, then a screenshot each of the player rankings (with a
+Trend column -- see compute_rank_trend in discord_report.py), the full
 Current Deck Strength tab, and the full Deck Win Rates tab (see
 discord_report.py for how those are built).
 
@@ -30,14 +31,7 @@ from pathlib import Path
 import openpyxl
 
 from discord_common import delete_messages
-from discord_report import (
-    XLSX_PATH,
-    compute_player_rankings,
-    get_season_and_game_info,
-    load_rankings_snapshot,
-    post_report,
-    save_rankings_snapshot,
-)
+from discord_report import XLSX_PATH, get_season_and_game_info, post_report
 
 # Message IDs from the most recent post, so delete_last_discord_post.py can
 # find and remove them later. Committed alongside deck-strength.xlsx --
@@ -66,14 +60,12 @@ def main():
         f"\U0001F4CA Rankings, deck strength, and win rates below \U0001F447"
     )
 
-    previous_ranks = load_rankings_snapshot()
-    message_ids = post_report(webhook_url, wb_formulas, wb_values, banner, subtitle, previous_ranks)
+    message_ids = post_report(webhook_url, wb_formulas, wb_values, banner, subtitle, show_trend=True)
 
     LAST_POST_PATH.write_text(
         json.dumps({"season": season_num, "game": game_num, "message_ids": message_ids}, indent=2) + "\n",
         encoding="utf-8",
     )
-    save_rankings_snapshot(compute_player_rankings(wb_values))
 
     print(f"Posted Season {season_num} Game {game_num} rankings, Current Deck Strength, and Deck Win Rates to Discord.")
 

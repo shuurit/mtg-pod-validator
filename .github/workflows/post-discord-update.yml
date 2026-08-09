@@ -28,7 +28,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add discord_last_post.json discord_rankings_snapshot.json
+          git add discord_last_post.json
           git diff --staged --quiet && echo "No changes to commit" && exit 0
           git commit -m "Track latest Discord post (manual re-post)"
           git push

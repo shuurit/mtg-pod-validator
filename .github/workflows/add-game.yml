@@ -44,7 +44,7 @@ jobs:
 
       - name: Commit Discord post tracking
         run: |
-          git add discord_last_post.json discord_rankings_snapshot.json
+          git add discord_last_post.json
           git diff --staged --quiet && echo "No changes to commit" && exit 0
           git commit -m "Track latest Discord post for this game (automated)"
           git push

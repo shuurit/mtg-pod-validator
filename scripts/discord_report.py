@@ -17,7 +17,6 @@ Both Current Deck Strength and Deck Win Rates are grouped by player,
 matching how the sheet itself is laid out (see find_cds_header_rows).
 """
 import io
-import json
 import re
 import time
 from pathlib import Path
@@ -31,25 +30,6 @@ from discord_common import DISCORD_HEADERS
 from season_config import CURRENT_SEASON_SHEET
 
 XLSX_PATH = Path(__file__).parent.parent / "deck-strength.xlsx"
-# {player: win_rate} as of the last live post -- lets the rankings table
-# show a trend arrow for each player. Only post_to_discord.py (the live,
-# "current standings" channel) reads/writes this; post_to_discord_archive.py
-# is a permanent per-game record where "trend since last post" isn't a
-# meaningful thing to show, so it never touches this file.
-RANKINGS_SNAPSHOT_PATH = Path(__file__).parent.parent / "discord_rankings_snapshot.json"
-
-
-def load_rankings_snapshot():
-    if not RANKINGS_SNAPSHOT_PATH.exists():
-        return None
-    return json.loads(RANKINGS_SNAPSHOT_PATH.read_text(encoding="utf-8"))
-
-
-def save_rankings_snapshot(ranks):
-    """ranks: [(player, win_rate), ...], as returned by compute_player_rankings."""
-    RANKINGS_SNAPSHOT_PATH.write_text(
-        json.dumps(dict(ranks), indent=2) + "\n", encoding="utf-8",
-    )
 
 HEADER_BG = "#2b2d31"  # Discord's own dark blurple-gray, so the header reads native
 HEADER_FG = "white"
@@ -189,17 +169,18 @@ def find_cds_header_rows(wb_formulas):
     return headers
 
 
-TREND_EPSILON = 0.0005  # win-rate deltas smaller than this read as "steady," not float noise
 TREND_UP = "▲"
 TREND_DOWN = "▼"
 TREND_STEADY = "–"
 TREND_UP_COLOR = "#1a7f37"
 TREND_DOWN_COLOR = "#d1242f"
-TREND_STEADY_COLOR = "#6e7781"
+TREND_STEADY_COLOR = "#6e7771"
 
 
 def compute_player_rankings(wb_values):
-    """[(player, win_rate), ...], sorted by win_rate descending."""
+    """[(player, win_rate), ...], sorted by win_rate descending. Reads the
+    already-computed Player Adjusted Ranks tab directly -- exact by
+    construction, no need to re-derive it."""
     ws = wb_values["Player Adjusted Ranks"]
     ranks = []
     for r in range(2, ws.max_row + 1):
@@ -212,15 +193,104 @@ def compute_player_rankings(wb_values):
     return ranks
 
 
-def build_player_rankings_table(wb_values, subtitle, previous_ranks=None):
-    """previous_ranks, if given, is a {player: win_rate} snapshot from the
-    last time this was posted -- adds a Trend column (▲/▼/–, colored)
-    comparing each player's current win rate against it. A player with no
-    entry in previous_ranks (new to tracking, or there's no snapshot at
-    all yet) gets a blank trend cell rather than a guess."""
+def compute_pawr_from_rows(player_rows):
+    """Player Adjusted Win Rate computed directly from a list of that
+    player's Game Log rows ({result, J, K, M}) -- a Python port of the
+    Player Adjusted Ranks B column formula (see that sheet's B2/F2-L2),
+    used to answer "what would the rankings have been without the latest
+    game" since there's no sheet tab that stores a prior game's snapshot.
+    Verified to reproduce the sheet's own cached values exactly when given
+    every row for a player (not just a subset)."""
+    wins = [r for r in player_rows if r["result"] == 1]
+    losses = [r for r in player_rows if r["result"] == 0]
+    C, D = len(wins), len(losses)
+    F = sum(r["J"] for r in wins)
+    avg_j_losses = sum(r["J"] for r in losses) / len(losses) if losses else None
+    G = (1 - (avg_j_losses * -1)) * D if avg_j_losses is not None else 0
+    H = F / (F + G) if (F + G) != 0 else 0
+    I = (sum(r["K"] for r in player_rows) / len(player_rows)) if C != 0 and player_rows else 0
+    avg_m_wins = sum(r["M"] for r in wins) / len(wins) if wins else None
+    Jv = (1 - (avg_m_wins - 0.5)) * C if avg_m_wins is not None else 0
+    avg_m_losses = sum(r["M"] for r in losses) / len(losses) if losses else None
+    Kv = (1 + (avg_m_losses - 0.5)) * D if avg_m_losses is not None else 0
+    L = Jv / (Jv + Kv) if (Jv + Kv) != 0 else 0
+    return (H * 0.3) + (I * 0.2) + (L * 0.5)
+
+
+def assign_ranks(ranked_list):
+    """{player: rank} from a list already sorted descending by rate, with
+    tied rates getting the same rank (competition-style: 1,1,3, not
+    1,2,3) -- otherwise players who've never played (all tied at 0) would
+    show spurious up/down movement purely from sort tie-breaking order."""
+    ranks = {}
+    for i, (player, rate) in enumerate(ranked_list):
+        if i > 0 and abs(rate - ranked_list[i - 1][1]) < 1e-9:
+            ranks[player] = ranks[ranked_list[i - 1][0]]
+        else:
+            ranks[player] = i + 1
+    return ranks
+
+
+def compute_rank_trend(wb_values, log_rows):
+    """{player: 'up'/'down'/'steady'} -- whether each player's position in
+    the rankings moved compared to standings without the most recent game.
+    Rank-based (did someone get passed / pass someone), not raw score
+    movement: this is a leaderboard table, and a player's raw Player
+    Adjusted Win Rate can move for reasons (deck-strength-adjusted
+    probabilities, pod-size weighting) that don't read as "better/worse"
+    at a glance the way "moved up the leaderboard" does."""
+    if not log_rows:
+        return {}
+    max_game = max(r["game"] for r in log_rows)
+
+    current_ranks = assign_ranks(compute_player_rankings(wb_values))
+
+    players = sorted(set(r["player"] for r in log_rows))
+    previous_ranked = sorted(
+        ((p, compute_pawr_from_rows([r for r in log_rows if r["player"] == p and r["game"] != max_game]))
+         for p in players),
+        key=lambda x: -x[1],
+    )
+    previous_ranks = assign_ranks(previous_ranked)
+
+    trend = {}
+    for p in players:
+        if current_ranks[p] < previous_ranks[p]:
+            trend[p] = "up"
+        elif current_ranks[p] > previous_ranks[p]:
+            trend[p] = "down"
+        else:
+            trend[p] = "steady"
+    return trend
+
+
+def read_game_log_rows_for_pawr(wb_values):
+    """[{game, player, result, J, K, M}, ...] for every Game Log row --
+    the raw inputs compute_pawr_from_rows/compute_rank_trend need."""
+    ws = wb_values[CURRENT_SEASON_SHEET]
+    rows = []
+    for r in range(3, ws.max_row + 1):
+        player = ws.cell(row=r, column=3).value
+        if player is None:
+            continue
+        rows.append({
+            "game": ws.cell(row=r, column=2).value,
+            "player": player,
+            "result": ws.cell(row=r, column=6).value,
+            "J": ws.cell(row=r, column=10).value,
+            "K": ws.cell(row=r, column=11).value,
+            "M": ws.cell(row=r, column=13).value,
+        })
+    return rows
+
+
+def build_player_rankings_table(wb_values, subtitle, show_trend=False):
+    """show_trend adds a Trend column (▲/▼/–, colored) showing whether
+    each player's rank moved compared to standings without the most
+    recent game -- see compute_rank_trend."""
     ranks = compute_player_rankings(wb_values)
 
-    if previous_ranks is None:
+    if not show_trend:
         rows = [[str(i + 1), player, format_pct(rate)] for i, (player, rate) in enumerate(ranks)]
         return render_table_png(
             f"Player Rankings — Player Adjusted Win Rate  |  {subtitle}",
@@ -228,21 +298,18 @@ def build_player_rankings_table(wb_values, subtitle, previous_ranks=None):
             highlight_indices={0} if rows else set(),
         )
 
+    log_rows = read_game_log_rows_for_pawr(wb_values)
+    trend_by_player = compute_rank_trend(wb_values, log_rows)
+    trend_symbol = {"up": TREND_UP, "down": TREND_DOWN, "steady": TREND_STEADY}
+    trend_color = {"up": TREND_UP_COLOR, "down": TREND_DOWN_COLOR, "steady": TREND_STEADY_COLOR}
+
     rows = []
     cell_text_colors = {}
     for i, (player, rate) in enumerate(ranks):
-        prev = previous_ranks.get(player)
-        if prev is None:
-            trend = ""
-        elif rate > prev + TREND_EPSILON:
-            trend, color = TREND_UP, TREND_UP_COLOR
-            cell_text_colors[(i, 3)] = color
-        elif rate < prev - TREND_EPSILON:
-            trend, color = TREND_DOWN, TREND_DOWN_COLOR
-            cell_text_colors[(i, 3)] = color
-        else:
-            trend, color = TREND_STEADY, TREND_STEADY_COLOR
-            cell_text_colors[(i, 3)] = color
+        direction = trend_by_player.get(player)
+        trend = trend_symbol.get(direction, "")
+        if direction:
+            cell_text_colors[(i, 3)] = trend_color[direction]
         rows.append([str(i + 1), player, format_pct(rate), trend])
 
     return render_table_png(
@@ -298,15 +365,15 @@ def build_deck_win_rates_table(wb_values, header_rows, subtitle):
     )
 
 
-def post_report(webhook_url, wb_formulas, wb_values, banner, subtitle, previous_ranks=None):
+def post_report(webhook_url, wb_formulas, wb_values, banner, subtitle, show_trend=False):
     """Posts the standalone banner, then the three table screenshots, in
-    order. Returns the four message IDs, in post order. previous_ranks is
+    order. Returns the four message IDs, in post order. show_trend is
     forwarded to build_player_rankings_table -- see there for what it does."""
     message_ids = [post_message(webhook_url, banner)]
 
     header_rows = find_cds_header_rows(wb_formulas)
 
-    rankings_png = build_player_rankings_table(wb_values, subtitle, previous_ranks)
+    rankings_png = build_player_rankings_table(wb_values, subtitle, show_trend)
     message_ids.append(post_image(webhook_url, "", rankings_png, "player_rankings.png"))
 
     cds_png = build_current_deck_strength_table(wb_values, header_rows, subtitle)

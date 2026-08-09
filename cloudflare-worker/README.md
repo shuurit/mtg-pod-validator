@@ -144,12 +144,18 @@ in `scripts/discord_report.py` — they only differ in webhook, banner
 text, and whether anything gets deleted first.
 
 The rankings screenshot in the live channel also shows a ▲/▼/– trend
-column, comparing each player's Player Adjusted Win Rate against
-`discord_rankings_snapshot.json` (the numbers as of the last live post,
-also committed alongside the spreadsheet). Only `post_to_discord.py`
-reads/writes it — the archive channel is a permanent per-game record, so
-a "since last post" trend isn't a meaningful thing to show there, and its
-rankings table has no Trend column.
+column: whether each player's *rank position* moved compared to what the
+standings would be without the most recent game (someone passed them, or
+they passed someone) -- not raw score movement, since a player's Player
+Adjusted Win Rate can shift for reasons (deck-strength-adjusted
+probabilities, pod-size weighting) that don't read as "better/worse" the
+way a leaderboard position does. Computed fresh from the Game Log every
+time (see compute_rank_trend in `scripts/discord_report.py`) by
+re-deriving the Player Adjusted Win Rate formula in Python for every game
+except the latest one -- no snapshot file, so re-running the same post
+twice never falsely shows everyone as "steady." Live-only; the archive
+channel is a permanent per-game record where "since last post" isn't a
+meaningful thing to show, so its rankings table has no Trend column.
 
 ## Notes on scope
 
