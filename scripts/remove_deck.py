@@ -31,7 +31,6 @@ import re
 import shutil
 import sys
 import zipfile
-from pathlib import Path
 
 from add_deck import (
     ROW_RE,
@@ -40,8 +39,7 @@ from add_deck import (
     is_header_row,
     load_shared_strings,
 )
-
-XLSX_PATH = Path(__file__).parent.parent / "deck-strength.xlsx"
+from season_config import XLSX_PATH
 CDS_SHEET_FILE = "xl/worksheets/sheet4.xml"  # Current Deck Strength
 DWR_SHEET_FILE = "xl/worksheets/sheet5.xml"  # Deck Win Rates
 

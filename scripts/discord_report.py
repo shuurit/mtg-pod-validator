@@ -19,7 +19,6 @@ matching how the sheet itself is laid out (see find_cds_header_rows).
 import io
 import re
 import time
-from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
@@ -27,9 +26,7 @@ import matplotlib.pyplot as plt
 import requests
 
 from discord_common import DISCORD_HEADERS
-from season_config import CURRENT_SEASON_SHEET
-
-XLSX_PATH = Path(__file__).parent.parent / "deck-strength.xlsx"
+from season_config import CURRENT_SEASON_SHEET, XLSX_PATH
 
 HEADER_BG = "#2b2d31"  # Discord's own dark blurple-gray, so the header reads native
 HEADER_FG = "white"

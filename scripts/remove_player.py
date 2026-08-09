@@ -29,8 +29,8 @@ from pathlib import Path
 
 from add_deck import ROW_RE, find_player_block, is_header_row, load_shared_strings
 from remove_deck import shift_cds_row_up, shift_dwr_row_up
+from season_config import XLSX_PATH
 
-XLSX_PATH = Path(__file__).parent.parent / "deck-strength.xlsx"
 RELAY_JS_PATH = Path(__file__).parent.parent / "cloudflare-worker" / "relay.js"
 CDS_SHEET_FILE = "xl/worksheets/sheet4.xml"
 DWR_SHEET_FILE = "xl/worksheets/sheet5.xml"

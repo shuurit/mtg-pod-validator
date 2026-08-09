@@ -17,14 +17,11 @@ blank forever, and still falls back to the existing heuristic matching.
 Usage:
     python scripts/add_game_id_column.py
 """
-from pathlib import Path
-
 import openpyxl
 
 from xlsx_recalc import recalc
-from season_config import CURRENT_SEASON_SHEET
+from season_config import CURRENT_SEASON_SHEET, XLSX_PATH
 
-XLSX_PATH = Path(__file__).parent.parent / "deck-strength.xlsx"
 HEADER_ROW = 2
 NEW_COL = "Y"
 CATEGORY_LABEL = "Playgroup Game ID"

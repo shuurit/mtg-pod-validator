@@ -24,15 +24,13 @@ import argparse
 import json
 import urllib.request
 from datetime import datetime
-from pathlib import Path
 
 import openpyxl
 
 from xlsx_recalc import recalc
-from season_config import CURRENT_SEASON_SHEET
+from season_config import CURRENT_SEASON_SHEET, XLSX_PATH
 
 PLAYGROUP_GAMES_URL = "https://mtg-pod-validator-relay.mattdomi18.workers.dev/playgroup-games"
-XLSX_PATH = Path(__file__).parent.parent / "deck-strength.xlsx"
 HEADER_ROW = 2
 
 

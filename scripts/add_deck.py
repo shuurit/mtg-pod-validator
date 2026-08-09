@@ -30,11 +30,9 @@ import re
 import shutil
 import sys
 import zipfile
-from pathlib import Path
 
-from season_config import CURRENT_SEASON_SHEET
+from season_config import CURRENT_SEASON_SHEET, XLSX_PATH
 
-XLSX_PATH = Path(__file__).parent.parent / "deck-strength.xlsx"
 CDS_SHEET_FILE = "xl/worksheets/sheet4.xml"  # Current Deck Strength
 DWR_SHEET_FILE = "xl/worksheets/sheet5.xml"  # Deck Win Rates
 LOG_SHEET = CURRENT_SEASON_SHEET
@@ -154,7 +152,10 @@ def shift_dwr_row(inner, old_row, new_row):
 
 
 def row_styles(sheet_xml, rownum, columns):
+    """{'A': style_id, 'B': style_id, ...} for an existing row, used as a template."""
     m = re.search(rf'<row r="{rownum}"[^>]*>(.*?)</row>', sheet_xml, re.DOTALL)
+    if not m:
+        raise RuntimeError(f"row {rownum} not found -- can't read style template")
     styles = {}
     for col in columns:
         cm = re.search(rf'<c r="{col}{rownum}" s="(\d+)"', m.group(1))

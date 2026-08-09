@@ -29,7 +29,7 @@ import re
 import zipfile
 from pathlib import Path
 
-from add_deck import load_shared_strings, process_cds as deck_process_cds, process_dwr as deck_process_dwr
+from add_deck import load_shared_strings, process_cds as deck_process_cds, process_dwr as deck_process_dwr, row_styles
 from add_player import (
     append_to_sheet,
     cds_rows_xml,
@@ -37,12 +37,11 @@ from add_player import (
     existing_player_names,
     last_row_of,
     normalize_decks,
-    row_styles,
 )
+from season_config import XLSX_PATH
 from xlsx_recalc import recalc
 
 REPO_ROOT = Path(__file__).parent.parent
-XLSX_PATH = REPO_ROOT / "deck-strength.xlsx"
 RELAY_JS_PATH = REPO_ROOT / "cloudflare-worker" / "relay.js"
 CDS_SHEET_FILE = "xl/worksheets/sheet4.xml"
 DWR_SHEET_FILE = "xl/worksheets/sheet5.xml"

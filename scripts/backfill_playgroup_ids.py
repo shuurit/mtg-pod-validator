@@ -31,9 +31,9 @@ import zipfile
 from pathlib import Path
 
 from add_deck import ROW_RE, cell_a_label, is_header_row, load_shared_strings
+from season_config import XLSX_PATH
 
 ROSTER_DIFF_URL = "https://mtg-pod-validator-relay.mattdomi18.workers.dev/roster-diff"
-XLSX_PATH = Path(__file__).parent.parent / "deck-strength.xlsx"
 CDS_SHEET_FILE = "xl/worksheets/sheet4.xml"
 
 

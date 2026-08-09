@@ -33,10 +33,9 @@ import zipfile
 from pathlib import Path
 
 from add_deck import ROW_RE, cell_a_label, is_header_row, load_shared_strings
-from season_config import CURRENT_SEASON_SHEET
+from season_config import CURRENT_SEASON_SHEET, XLSX_PATH
 
 REPO_ROOT = Path(__file__).parent.parent
-XLSX_PATH = REPO_ROOT / "deck-strength.xlsx"
 APP_JS_PATH = REPO_ROOT / "app.js"
 SEASON_CONFIG_PATH = Path(__file__).parent / "season_config.py"
 

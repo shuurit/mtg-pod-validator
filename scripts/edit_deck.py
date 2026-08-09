@@ -28,12 +28,11 @@ import re
 import shutil
 import sys
 import zipfile
-from pathlib import Path
 
 from add_deck import ROW_RE, load_shared_strings
 from remove_deck import find_deck_row
+from season_config import XLSX_PATH
 
-XLSX_PATH = Path(__file__).parent.parent / "deck-strength.xlsx"
 CDS_SHEET_FILE = "xl/worksheets/sheet4.xml"
 DWR_SHEET_FILE = "xl/worksheets/sheet5.xml"
 

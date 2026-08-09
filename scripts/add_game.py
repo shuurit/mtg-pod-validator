@@ -38,9 +38,8 @@ from datetime import datetime
 import openpyxl
 
 from xlsx_recalc import recalc
-from season_config import CURRENT_SEASON_SHEET
+from season_config import CURRENT_SEASON_SHEET, XLSX_PATH
 
-XLSX_PATH = os.path.join(os.path.dirname(__file__), "..", "deck-strength.xlsx")
 SHEET_NAME = CURRENT_SEASON_SHEET
 HEADER_ROW = 2
 COLUMNS = "ABCDEFGHIJKLMNOPQRSTUVWXY"
