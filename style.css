@@ -610,25 +610,33 @@ td.num {
   margin-bottom: 0;
 }
 
-.gtu-input-table, .gtu-results-table {
+/* Shared by every gtu- and uta- data-entry table (input table, results
+   table, deck table) -- .gtu-input-table/.gtu-results-table additionally
+   get margin-bottom, which .uta-deck-table has never had (it sits inside
+   .uta-group's own padding instead). */
+.gtu-input-table, .gtu-results-table, .uta-deck-table {
   width: 100%;
   border-collapse: collapse;
-  margin-bottom: 14px;
   font-size: 0.85rem;
 }
 
+.gtu-input-table, .gtu-results-table {
+  margin-bottom: 14px;
+}
+
 .gtu-input-table th, .gtu-input-table td,
-.gtu-results-table th, .gtu-results-table td {
+.gtu-results-table th, .gtu-results-table td,
+.uta-deck-table th, .uta-deck-table td {
   padding: 6px 8px;
   border-bottom: 1px solid var(--border-soft);
   text-align: left;
 }
 
-.gtu-input-table input[type="number"] {
+.gtu-input-table input[type="number"], .uta-deck-table input[type="number"] {
   width: 64px;
 }
 
-.gtu-input-table input[type="checkbox"] {
+.gtu-input-table input[type="checkbox"], .uta-deck-table input[type="checkbox"] {
   width: 18px;
   height: 18px;
 }
@@ -637,11 +645,12 @@ td.num {
   margin-top: 12px;
 }
 
-.gtu-submit-btn {
+/* Shared by the Games to Update and Update the App submit controls. */
+.gtu-submit-btn, .uta-submit-btn {
   margin-top: 4px;
 }
 
-.gtu-submit-status {
+.gtu-submit-status, .uta-submit-status {
   display: block;
   margin-top: 8px;
   font-size: 0.85rem;
@@ -684,38 +693,6 @@ td.num {
 
 .uta-group-header input[type="text"] {
   margin-left: 6px;
-}
-
-.uta-deck-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.85rem;
-}
-
-.uta-deck-table th, .uta-deck-table td {
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--border-soft);
-  text-align: left;
-}
-
-.uta-deck-table input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
-}
-
-.uta-deck-table input[type="number"] {
-  width: 64px;
-}
-
-.uta-submit-btn {
-  margin-top: 4px;
-}
-
-.uta-submit-status {
-  display: block;
-  margin-top: 8px;
-  font-size: 0.85rem;
-  color: var(--muted);
 }
 
 /* ---------- phone / tablet ---------- */
