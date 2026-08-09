@@ -28,7 +28,7 @@
      image so it still reads as "this app's page," light or dark, rather
      than the artwork fighting the theme. */
   --bg-scrim: rgba(245, 243, 238, 0.83);
-  --card-bg-translucent: rgba(255, 255, 255, 0.48);
+  --card-bg-translucent: rgba(255, 255, 255, 0.25);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -56,7 +56,7 @@
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
     --shadow-md: 0 14px 36px -16px rgba(0, 0, 0, 0.65);
     --bg-scrim: rgba(19, 18, 23, 0.83);
-    --card-bg-translucent: rgba(28, 27, 34, 0.42);
+    --card-bg-translucent: rgba(28, 27, 34, 0.25);
   }
 }
 
@@ -257,8 +257,8 @@ header h1 {
 
 .card {
   background: var(--card-bg-translucent);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
