@@ -19,11 +19,17 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 </head>
 <body>
+<!-- One fixed, full-viewport layer per tab, stacked and cross-faded via
+     opacity (id matches that tab's data-tab / #tab-<name> panel, and
+     initTabs() in app.js toggles the same "active" class on whichever of
+     these matches the newly-selected tab). A CSS background-image can't be
+     transitioned directly between two different URLs -- this is the
+     standard way to get a smooth crossfade instead of a hard cut. -->
+<div class="tab-bg active" id="bg-pod"></div>
+<div class="tab-bg" id="bg-games-to-update"></div>
+<div class="tab-bg" id="bg-update-app"></div>
+<div class="tab-bg" id="bg-winrates"></div>
 <button id="global-refresh-btn" aria-label="Refresh live data" title="Refresh live data">&#8635;</button>
-<!-- 38-frame sprite sheet (moogle-sprite.png, one row of uniform cells) --
-     stepped through with a CSS steps() animation, classic sprite-sheet
-     style, rather than a single static icon. -->
-<div id="moogle-mascot" aria-hidden="true"></div>
 <div class="wrap">
   <header>
     <h1>Amass a Gathering - App Edition</h1>

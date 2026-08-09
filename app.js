@@ -683,6 +683,12 @@ function initTabs() {
       btn.classList.add("active");
       document.querySelectorAll(".tab-panel").forEach(p => { p.hidden = true; });
       document.getElementById(`tab-${btn.dataset.tab}`).hidden = false;
+      // Same id scheme as the tab panel (#bg-<tab> next to #tab-<tab>) --
+      // opacity-transitions to the new one via the .active class, see the
+      // .tab-bg rules in style.css for the actual crossfade.
+      document.querySelectorAll(".tab-bg").forEach(bg => { bg.classList.remove("active"); });
+      const bgEl = document.getElementById(`bg-${btn.dataset.tab}`);
+      if (bgEl) bgEl.classList.add("active");
     });
   });
 }

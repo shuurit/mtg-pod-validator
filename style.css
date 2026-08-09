@@ -24,6 +24,11 @@
   --radius-lg: 16px;
   --radius-md: 10px;
   --radius-sm: 7px;
+  /* Same color as --bg, alpha'd -- layered over each tab's background
+     image so it still reads as "this app's page," light or dark, rather
+     than the artwork fighting the theme. */
+  --bg-scrim: rgba(245, 243, 238, 0.83);
+  --card-bg-translucent: rgba(255, 255, 255, 0.88);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -50,6 +55,8 @@
     --warn-border: #5c421c;
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
     --shadow-md: 0 14px 36px -16px rgba(0, 0, 0, 0.65);
+    --bg-scrim: rgba(19, 18, 23, 0.83);
+    --card-bg-translucent: rgba(28, 27, 34, 0.82);
   }
 }
 
@@ -58,12 +65,46 @@
 body {
   margin: 0;
   font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
-  background:
-    radial-gradient(1200px 480px at 15% -10%, var(--accent-soft), transparent 60%),
-    var(--bg);
+  /* Solid var(--bg) fill removed -- the .tab-bg layers (behind everything,
+     see below) are the real background now; this radial accent still
+     sits on top of them, unlit corners stay transparent so the artwork
+     shows through. */
+  background: radial-gradient(1200px 480px at 15% -10%, var(--accent-soft), transparent 60%);
   color: var(--ink);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+}
+
+/* One full-viewport layer per tab, stacked behind everything and
+   cross-faded via opacity (a background-image can't be transitioned
+   directly between two URLs). --bg-scrim is painted over each image in
+   the same background shorthand so the artwork reads as part of this
+   app's theme rather than fighting it, light or dark. initTabs() in
+   app.js toggles which one has .active to match the selected tab. */
+.tab-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-size: cover;
+  background-position: center;
+  opacity: 0;
+  transition: opacity 0.9s ease;
+  pointer-events: none;
+}
+
+.tab-bg.active {
+  opacity: 1;
+}
+
+#bg-pod { background-image: linear-gradient(var(--bg-scrim), var(--bg-scrim)), url('bg-validator.webp'); }
+#bg-games-to-update { background-image: linear-gradient(var(--bg-scrim), var(--bg-scrim)), url('bg-games-to-update.webp'); }
+#bg-update-app { background-image: linear-gradient(var(--bg-scrim), var(--bg-scrim)), url('bg-update-app.webp'); }
+#bg-winrates { background-image: linear-gradient(var(--bg-scrim), var(--bg-scrim)), url('bg-winrates.webp'); }
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-bg {
+    transition: none;
+  }
 }
 
 .wrap {
@@ -215,7 +256,9 @@ header h1 {
 }
 
 .card {
-  background: var(--card-bg);
+  background: var(--card-bg-translucent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
@@ -675,9 +718,9 @@ td.num {
 
   header h1 {
     font-size: 1.5rem;
-    /* Leaves room for the fixed refresh button + moogle mascot pinned to
-       the top-right corner, so wrapped title text doesn't run under them. */
-    padding-right: 90px;
+    /* Leaves room for the fixed refresh button pinned to the top-right
+       corner, so wrapped title text doesn't run under it. */
+    padding-right: 60px;
   }
 
   .card {
@@ -732,39 +775,5 @@ td.num {
   .to-game-btn {
     font-size: 1rem;
     padding: 13px 14px;
-  }
-
-  #moogle-mascot { right: max(56px, calc(env(safe-area-inset-right) + 56px)); }
-}
-
-/* ---------- moogle mascot: 38-frame sprite sheet stepped next to the
-   refresh button, classic background-position sprite animation.
-   Frames are baked into moogle-sprite.png at exactly 46x63 (their real
-   on-screen size) so the browser displays them 1:1 with no live scaling --
-   scaling a detailed small face live (any algorithm, any browser) tended
-   to alias the dark eye/nose linework into a solid smudge. ---------- */
-#moogle-mascot {
-  position: fixed;
-  top: max(11px, env(safe-area-inset-top));
-  right: max(62px, calc(env(safe-area-inset-right) + 62px));
-  z-index: 100;
-  width: 46px;
-  height: 63px;
-  background-image: url('moogle-sprite.png');
-  background-repeat: no-repeat;
-  background-size: 1748px 63px; /* 38 frames x 46px, native size */
-  pointer-events: none;
-  animation: moogle-flip 4s steps(38) infinite;
-}
-
-@keyframes moogle-flip {
-  from { background-position: 0 0; }
-  to { background-position: -1748px 0; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  #moogle-mascot {
-    animation: none;
-    background-position: 0 0;
   }
 }
