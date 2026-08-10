@@ -89,32 +89,33 @@ no new bindings, same `DECK_CACHE` binding as before.
 6. Copy the Worker's `workers.dev` URL and hand it back so it can be wired
    into `app.js` (`RELAY_BASE_URL`).
 
-## Optional: automatic redeploy when a new player is added
+## Automatic redeploy when a new player is added
 
 Adding a new player through the "Update the App" tab edits this Worker's
 own `USERNAME_TO_PLAYER` map (via `scripts/apply_roster_update.py`), which
 means the *deployed* Worker needs to pick up that change too — otherwise
 the new player's spreadsheet data is correct but the Worker still won't
-recognize their playgroup.gg account. Two ways to handle that:
+recognize their playgroup.gg account.
 
-- **Manual (default until set up)**: after adding a new player, redeploy
-  once by hand using the steps above. Everything else about the update
-  (spreadsheet rows, IDs) already happened automatically; this is the one
-  remaining manual step.
-- **Automatic**: `.github/workflows/roster-update.yml` has a conditional
-  `wrangler deploy` step that only runs when `relay.js` actually changed
-  (i.e. a new player was part of the batch). To make it work:
-  1. Get this Worker's real KV namespace ID (dashboard → **KV** → click
-     the namespace → copy its ID, or `wrangler kv namespace list` with a
-     token) and fill it into `id = ""` in `wrangler.toml`.
-  2. Add `account_id = "..."` to `wrangler.toml` (found on the Cloudflare
-     dashboard's right sidebar on most pages).
-  3. Add two GitHub repo secrets: `CLOUDFLARE_API_TOKEN` (scoped to
-     Workers Scripts:Edit + Workers KV Storage:Edit for this account) and
-     `CLOUDFLARE_ACCOUNT_ID`.
-  4. Do one manual `wrangler deploy` first (locally, with a throwaway
-     token) to confirm it doesn't touch the two existing secrets and that
-     the KV binding survives — then CI deploys are safe to trust.
+This is already set up and active, no manual step needed:
+`.github/workflows/roster-update.yml` has a conditional `wrangler deploy`
+step that runs only when `relay.js` actually changed (i.e. a new player
+was part of the batch), so the redeploy happens automatically as part of
+that same workflow run. What it depends on, for reference (all already in
+place, not something you need to do again):
+
+- `wrangler.toml` has this Worker's real KV namespace `id` and
+  `account_id` filled in — not the placeholder `id = ""` a fresh clone of
+  this repo starts with.
+- Two GitHub repo secrets exist: `CLOUDFLARE_API_TOKEN` (scoped to
+  Workers Scripts:Edit + Workers KV Storage:Edit for this account) and
+  `CLOUDFLARE_ACCOUNT_ID`.
+
+If this Worker or its KV namespace is ever recreated from scratch, redo
+those two pieces (get the new namespace ID via dashboard → **KV**, or
+`wrangler kv namespace list`) and the automatic path picks back up. Until
+then, the fallback is redeploying by hand using the steps in "Updating an
+already-deployed Worker" above.
 
 ## Optional: Discord posting after a game is added
 
