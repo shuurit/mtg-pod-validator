@@ -118,6 +118,18 @@ let lastCeiling = null;
 let expandedPlayerIds = new Set(); // player blocks currently showing their deck table
 let rosterDiffData = null; // raw playgroup.gg roster/decks from loadRosterDiff, used for the Playgroup Power comparison column too
 
+// player.id -> { column, direction }. Deliberately per-player rather than
+// one shared sort like winRatesSortColumn -- sorting Becca's 5 decks by
+// Power shouldn't also reorder Mateo's 17 out from under him. No entry
+// means unsorted (each player's decks in Current Deck Strength's own row
+// order), the state before that player's ever had a header clicked.
+const playerDeckSortState = new Map();
+const PLAYER_DECK_COLUMNS = [
+  { key: "deck", label: "Deck", defaultDir: "asc" },
+  { key: "power", label: "Power", defaultDir: "desc" },
+  { key: "pgPower", label: "Playgroup Power", defaultDir: "desc" },
+];
+
 // ---------- deriving players/decks from source data ----------
 // Current Deck Strength (deck-strength.xlsx) is the only source for this --
 // nothing in the UI edits it. IDs are derived from the name text itself
@@ -464,15 +476,66 @@ function renderPlayersTable() {
       continue;
     }
 
-    const rows = player.decks.map(deck => {
-      const pgPower = findPlaygroupPowerLevel(player.name, deck);
-      return [
-        deck.name,
-        { node: buildPowerChip(deck.power), className: "num" },
-        { text: pgPower === null ? "—" : formatPower(pgPower), className: "num" },
-      ];
-    });
-    const { table } = buildTable(null, ["Deck", "Power", "Playgroup Power"], rows);
+    // pgPower computed once up front (not inline during sort) so a sort by
+    // that column doesn't re-look-it-up on every comparison.
+    const deckRows = player.decks.map(deck => ({ deck, pgPower: findPlaygroupPowerLevel(player.name, deck) }));
+
+    const sortState = playerDeckSortState.get(player.id) || { column: null, direction: "asc" };
+    if (sortState.column) {
+      const dir = sortState.direction === "asc" ? 1 : -1;
+      deckRows.sort((a, b) => {
+        if (sortState.column === "deck") return a.deck.name.localeCompare(b.deck.name) * dir;
+        const av = sortState.column === "power" ? a.deck.power : a.pgPower;
+        const bv = sortState.column === "power" ? b.deck.power : b.pgPower;
+        // Missing Playgroup Power always sorts last regardless of
+        // direction, same reasoning as renderWinRatesTable's null
+        // handling -- "unknown" isn't the same thing as "weakest."
+        if (av === null || bv === null) {
+          if (av === null && bv === null) return 0;
+          return av === null ? 1 : -1;
+        }
+        return (av - bv) * dir;
+      });
+    }
+
+    const table = document.createElement("table");
+    table.className = "winrates-table";
+    const thead = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    for (const col of PLAYER_DECK_COLUMNS) {
+      const th = document.createElement("th");
+      th.className = "sortable";
+      const isActive = sortState.column === col.key;
+      th.textContent = col.label + (isActive ? (sortState.direction === "desc" ? " ▾" : " ▴") : "");
+      if (isActive) th.classList.add("sorted");
+      th.addEventListener("click", () => {
+        if (sortState.column === col.key) {
+          playerDeckSortState.set(player.id, { column: col.key, direction: sortState.direction === "desc" ? "asc" : "desc" });
+        } else {
+          playerDeckSortState.set(player.id, { column: col.key, direction: col.defaultDir });
+        }
+        renderPlayersTable();
+      });
+      headRow.appendChild(th);
+    }
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement("tbody");
+    for (const { deck, pgPower } of deckRows) {
+      const tr = document.createElement("tr");
+      const nameTd = document.createElement("td");
+      nameTd.textContent = deck.name;
+      const powerTd = document.createElement("td");
+      powerTd.className = "num";
+      powerTd.appendChild(buildPowerChip(deck.power));
+      const pgTd = document.createElement("td");
+      pgTd.className = "num";
+      pgTd.textContent = pgPower === null ? "—" : formatPower(pgPower);
+      tr.append(nameTd, powerTd, pgTd);
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
     block.appendChild(table);
     container.appendChild(block);
   }
