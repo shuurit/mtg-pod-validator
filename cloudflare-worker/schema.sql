@@ -7,8 +7,21 @@
 
 CREATE TABLE seasons (
   id INTEGER PRIMARY KEY,
-  label TEXT NOT NULL UNIQUE  -- "Season 3"
+  label TEXT NOT NULL UNIQUE,  -- "Season 3", or playgroup.gg's own league name once auto-created (see below)
+  -- playgroup.gg's league id. NULL for seasons migrated from the spreadsheet
+  -- (they predate this and have no clean 1:1 playgroup.gg league to point
+  -- at). Populated automatically going forward: POST /games (Phase 3)
+  -- resolves playgroup.gg's current active league at write time and looks
+  -- it up here; if no season has that league_id yet, one is auto-created
+  -- using the league's own name as the label -- so starting a new league in
+  -- playgroup.gg is what starts a new season here too, no separate manual
+  -- step. A plain UNIQUE column can't be added via ALTER TABLE in SQLite
+  -- (confirmed the hard way), hence the separate unique index below --
+  -- which also correctly allows multiple NULLs, unlike a UNIQUE column
+  -- constraint would.
+  playgroup_league_id TEXT
 );
+CREATE UNIQUE INDEX idx_seasons_league ON seasons(playgroup_league_id);
 
 CREATE TABLE players (
   id INTEGER PRIMARY KEY,
