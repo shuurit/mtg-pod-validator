@@ -50,12 +50,21 @@ CREATE TABLE game_results (
   recoveries INTEGER NOT NULL,
   games_clearly_behind INTEGER NOT NULL,
   bracket INTEGER NOT NULL,
-  -- j/k/l/m/n/o/q/u/x mirror computeGameRowFormulas' own {J,K,L,M,N,O,Q,U,X}
-  -- return keys 1:1 -- computed once at write time, stored (not
-  -- recomputed on every read), same as a spreadsheet's cached formula value.
-  j REAL NOT NULL, k REAL NOT NULL, l REAL NOT NULL, m REAL NOT NULL,
-  n REAL NOT NULL, o REAL NOT NULL, q REAL NOT NULL, u REAL NOT NULL,
-  x REAL NOT NULL,  -- Game Calculated Deck Strength
+  -- Computed once at write time and stored (not recomputed on every read),
+  -- same as a spreadsheet's cached formula value. Named for what they are
+  -- rather than the Game Log's column letters, so PRAGMA table_info (which
+  -- shows no comments) is still self-explanatory to anyone querying this
+  -- table directly. Names below map 1:1 to computeGameRowFormulas' own
+  -- {J,K,L,M,N,O,Q,U,X} return keys in that order.
+  adjusted_pod_size_score REAL NOT NULL,      -- J: Adjusted Pod Size Win/Loss Score
+  knockout_score REAL NOT NULL,               -- K: Knockout Score
+  deck_strength_differential REAL NOT NULL,   -- L: Deck Strength Comparison Differential
+  win_probability REAL NOT NULL,              -- M: Win Probability based on Deck Strength
+  player_score REAL NOT NULL,                 -- N: Player Score
+  normalized_player_score REAL NOT NULL,      -- O: Normalized Player Score
+  normalized_tov REAL NOT NULL,               -- Q: Normalized TOV
+  deck_resilience_score REAL NOT NULL,        -- U: Deck Resilience Score
+  game_calculated_deck_strength REAL NOT NULL, -- X: Game Calculated Deck Strength
   PRIMARY KEY (game_id, player_id)
 );
 

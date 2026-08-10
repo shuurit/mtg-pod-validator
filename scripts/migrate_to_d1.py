@@ -197,7 +197,9 @@ def main():
         out.append(
             "INSERT INTO game_results (game_id, player_id, deck_id, commander_strength, result, place, "
             "knockouts, tov, pop_off, disruptions, recoveries, games_clearly_behind, bracket, "
-            "j, k, l, m, n, o, q, u, x) VALUES ("
+            "adjusted_pod_size_score, knockout_score, deck_strength_differential, win_probability, "
+            "player_score, normalized_player_score, normalized_tov, deck_resilience_score, "
+            "game_calculated_deck_strength) VALUES ("
             f"{game_id}, {player_id}, {deck_id}, {sql_num(row['commander_strength'])}, {sql_int(row['result'])}, "
             f"{sql_int(row['place'])}, {sql_int(row['knockouts'])}, {sql_int(row['tov'])}, "
             f"{sql_int(row['pop_off'])}, {sql_int(row['disruptions'])}, {sql_int(row['recoveries'])}, "
