@@ -6,3 +6,8 @@ account_id = "8ca62cd3d17495e04f67d67caa28e0a8"
 [[kv_namespaces]]
 binding = "DECK_CACHE"
 id = "77b23dc700d94ad59b05dbc2712dfe63"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "mtg-pod-validator-db"
+database_id = "033e3773-25f9-4f6a-ba86-9cb8bbcc5b8e"
