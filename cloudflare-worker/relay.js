@@ -1030,10 +1030,19 @@ function computePlayerAdjustedWinRate(rows) {
 
 async function computeRankingsData(env) {
   const { results: playerRows } = await env.DB.prepare("SELECT name FROM players ORDER BY id").all();
+  // Scoped to the most-recently-created season only -- same "one season
+  // at a time" rule app.js's gameLogRowsFromD1 and discord_report.py's
+  // current_season_games already established (Player Adjusted Ranks has
+  // never combined seasons). Previously unscoped, which happened to read
+  // right only because D1 held just one season's worth of game_results;
+  // fixed now so it stays correct once Season 4 exists alongside it.
   const { results: gameRows } = await env.DB.prepare(`
     SELECT p.name AS player, gr.result,
            gr.adjusted_pod_size_score AS j, gr.knockout_score AS k, gr.win_probability AS m
-    FROM game_results gr JOIN players p ON p.id = gr.player_id
+    FROM game_results gr
+    JOIN players p ON p.id = gr.player_id
+    JOIN games g ON g.id = gr.game_id
+    WHERE g.season_id = (SELECT MAX(season_id) FROM games)
   `).all();
 
   const byPlayer = {};
