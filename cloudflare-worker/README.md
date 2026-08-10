@@ -1,12 +1,13 @@
 # mtg-pod-validator relay
 
 This Worker holds two write/read credentials server-side so the browser
-never sees either of them:
+never sees either of them, and reads/writes the app's Cloudflare D1
+database directly:
 
-- **GITHUB_TOKEN** — fires a `repository_dispatch` event at the repo when
-  a game is submitted, or when a roster update (new player/deck) is
-  submitted. The actual spreadsheet edit runs in GitHub Actions using
-  GitHub's own auto-issued token, not this one.
+- **GITHUB_TOKEN** — fires a `repository_dispatch` event at the repo after
+  a game is submitted (`POST /games`), to trigger the Discord-posting
+  workflow. Nothing else uses this token; it never touches repo contents
+  directly.
 - **PLAYGROUP_API_KEY** — reads playgroup.gg live (games, active-league
   membership, and full member/deck rosters) so the app doesn't need a
   manually-regenerated static file.
@@ -22,15 +23,21 @@ storage), for:
   remove its league on playgroup.gg after the fact — confirmed both
   directions the hard way. `?recheck=<game_id>` forces one specific game
   to go through classification again immediately.
-- A short-lived dedupe key for `/apply-roster-update` submissions, so an
-  accidental double-click or reload within a couple minutes doesn't fire
-  the same GitHub Action run twice.
+- Caching playgroup.gg's *active league* itself for 60 seconds
+  (`getActiveLeagueId`) — the two playgroup.gg calls this takes measured
+  ~1.6s combined in production, and it's called by `/playgroup-games`,
+  `/roster-diff`, and `POST /games`' season resolution. The active league
+  only actually changes when a season rolls over, weeks apart, so a 60s
+  cache window is effectively free correctness-wise for a real ~1.6s
+  latency cut on every request that lands within it of another. (60s, not
+  a shorter value — Workers KV rejects any `expirationTtl` below 60.)
 
 Neither `/playgroup-games` nor `/roster-diff` cache their *response* at
 all (`Cache-Control: no-store`) — both exist specifically to answer "what's
 true on playgroup.gg right now," so a cached answer would defeat the
-point. The KV caching above is a different thing: it's caching the
-*expensive-to-derive* league classification, not the response itself.
+point. The KV caching above is a different thing: it's caching
+*expensive-to-derive* data (league classification, the active league
+itself), not the response.
 
 ## Rate limiting
 
@@ -58,9 +65,28 @@ network never trips it.
   classification). Not used by the main data endpoints above, but *is*
   used by the app's Games to Update tab to pre-fill Place/KOs/TOV from the
   event log — otherwise purely a manual debugging aid.
-- `POST /` — add-game dispatch (from Games to Update).
-- `POST /apply-roster-update` — new-player/new-deck dispatch (from Update
-  the App).
+- `GET /players` — every player and their decks, with each deck's current
+  power (most recent logged game's calculated strength, falling back to
+  its baseline). What app.js's Deck Strength Validator and Games to Update
+  read.
+- `GET /games` — one row per player per game, every season's full history,
+  every stored formula value. What app.js's Games to Update/Player Win
+  Rates read (scoped client-side to the current season).
+- `GET /rankings` — Player Adjusted Win Rate per player, scoped to the
+  current season. Not currently used by anything (app.js computes it
+  client-side instead, since it also needs the same formula for a live
+  pre-submit preview) — kept for any future consumer that wants it
+  precomputed.
+- `GET /deck-win-rates` — games/wins/win-rate per deck, and per player
+  (subtotal). Used by the Discord scripts (`scripts/discord_report.py`).
+- `POST /games` — logs a game: resolves the season from playgroup.gg's
+  *current* active league (never trusted from the client, auto-creating a
+  season the first time a league is seen), resolves each participant's
+  player/deck by exact name match, computes and stores every per-game
+  formula value, then fires the `post-discord` dispatch (fire-and-forget)
+  described below.
+- `POST /roster` — adds a new player (with their starting decks) and/or
+  new decks for existing players, in one combined write.
 
 ## Updating an already-deployed Worker (new code only, no new bindings)
 
@@ -69,8 +95,10 @@ network never trips it.
 2. Replace everything with the current contents of `relay.js` from this
    folder → **Deploy**
 
+Or from the command line, from this folder: `npx wrangler deploy`.
+
 That's it for any change that's just new endpoint logic — no new secrets,
-no new bindings, same `DECK_CACHE` binding as before.
+no new bindings, same `DECK_CACHE`/`DB` bindings as before.
 
 ## Fresh setup (if starting from scratch)
 
@@ -86,54 +114,34 @@ no new bindings, same `DECK_CACHE` binding as before.
 5. **KV namespace**: **Workers & Pages** → **KV** → **Create a namespace**
    (e.g. `mtg-pod-validator-cache`) → bind it to the Worker under
    **Settings** → **Bindings**, variable name exactly `DECK_CACHE`.
-6. Copy the Worker's `workers.dev` URL and hand it back so it can be wired
+6. **D1 database**: `npx wrangler d1 create mtg-pod-validator-db`, bind it
+   under **Settings** → **Bindings** as a D1 database, variable name
+   exactly `DB`, then apply the schema:
+   `npx wrangler d1 execute mtg-pod-validator-db --remote --file=schema.sql`.
+7. Copy the Worker's `workers.dev` URL and hand it back so it can be wired
    into `app.js` (`RELAY_BASE_URL`).
 
-## Automatic redeploy when a new player is added
+## Discord posting after a game is added
 
-Adding a new player through the "Update the App" tab edits this Worker's
-own `USERNAME_TO_PLAYER` map (via `scripts/apply_roster_update.py`), which
-means the *deployed* Worker needs to pick up that change too — otherwise
-the new player's spreadsheet data is correct but the Worker still won't
-recognize their playgroup.gg account.
-
-This is already set up and active, no manual step needed:
-`.github/workflows/roster-update.yml` has a conditional `wrangler deploy`
-step that runs only when `relay.js` actually changed (i.e. a new player
-was part of the batch), so the redeploy happens automatically as part of
-that same workflow run. What it depends on, for reference (all already in
-place, not something you need to do again):
-
-- `wrangler.toml` has this Worker's real KV namespace `id` and
-  `account_id` filled in — not the placeholder `id = ""` a fresh clone of
-  this repo starts with.
-- Two GitHub repo secrets exist: `CLOUDFLARE_API_TOKEN` (scoped to
-  Workers Scripts:Edit + Workers KV Storage:Edit for this account) and
-  `CLOUDFLARE_ACCOUNT_ID`.
-
-If this Worker or its KV namespace is ever recreated from scratch, redo
-those two pieces (get the new namespace ID via dashboard → **KV**, or
-`wrangler kv namespace list`) and the automatic path picks back up. Until
-then, the fallback is redeploying by hand using the steps in "Updating an
-already-deployed Worker" above.
-
-## Optional: Discord posting after a game is added
-
-`.github/workflows/add-game.yml` posts four messages to Discord right
-after a game is added and the spreadsheet recalculates: a "Season N · Game
-M" announcement, then a screenshot each of the player rankings, the full
-Current Deck Strength tab, and the full Deck Win Rates tab (see
-`scripts/post_to_discord.py` — rendered as images with matplotlib, not
-plain text, since a ~74-row wall of text was unreadable in practice).
-Needs one GitHub repo secret: `SEASON_STAT_WEBHOOK` (Discord: channel →
-Edit Channel → Integrations → Webhooks → New Webhook → Copy Webhook URL).
-Without it, the game still gets added and committed either way — only
-that last step fails.
+`POST /games` fires a `post-discord` `repository_dispatch` after a
+successful write (fire-and-forget via `ctx.waitUntil` — it doesn't block
+the response, and a dispatch failure doesn't undo the already-written
+game). That triggers `.github/workflows/post-discord-live.yml`, which posts
+four messages to Discord: a "Season N · Game M" announcement, then a
+screenshot each of the player rankings, Current Deck Strength, and Deck
+Win Rates (see `scripts/post_to_discord.py` — rendered as images with
+matplotlib, not plain text, since a ~74-row wall of text was unreadable in
+practice; data read live from this Worker's `/players`, `/games`, and
+`/deck-win-rates`, not from a file). Needs one GitHub repo secret:
+`SEASON_STAT_WEBHOOK` (Discord: channel → Edit Channel → Integrations →
+Webhooks → New Webhook → Copy Webhook URL). Without it, the game still
+gets logged either way — only the Discord post fails, silently (logged via
+`console.error`, not surfaced to the client).
 
 The channel is meant to always show only the latest game: before posting,
 `post_to_discord.py` deletes whatever it posted last time (using the
-message IDs saved to `discord_last_post.json`, committed alongside the
-spreadsheet), then posts the new set and saves their IDs the same way.
+message IDs saved to `discord_last_post.json`, committed to the repo by
+the workflow), then posts the new set and saves their IDs the same way.
 To clear the channel entirely without posting a replacement (e.g. to
 remove a bad/test post, or tidy up at the end of a season), run the
 "Delete Last Discord Post" workflow by hand (Actions tab → select it →
@@ -142,8 +150,8 @@ deletes those four messages and clears the tracking file. A webhook can't
 list channel history, so this only works for a post made after this
 tracking existed; anything older has to be deleted by hand in Discord.
 
-To (re-)post the current numbers without adding a game (e.g. after a
-manual spreadsheet edit, or just to refresh the channel), run the
+To (re-)post the current numbers without adding a game (e.g. to refresh
+the channel, or recover after the automatic post got interrupted), run the
 "Post Discord Update" workflow by hand the same way (`gh workflow run
 post-discord-update.yml`) — it runs `post_to_discord.py` directly, which
 still deletes whatever was posted last time first.
@@ -165,8 +173,8 @@ standings would be without the most recent game (someone passed them, or
 they passed someone) -- not raw score movement, since a player's Player
 Adjusted Win Rate can shift for reasons (deck-strength-adjusted
 probabilities, pod-size weighting) that don't read as "better/worse" the
-way a leaderboard position does. Computed fresh from the Game Log every
-time (see compute_rank_trend in `scripts/discord_report.py`) by
+way a leaderboard position does. Computed fresh from `GET /games` every
+time (see `compute_rank_trend` in `scripts/discord_report.py`) by
 re-deriving the Player Adjusted Win Rate formula in Python for every game
 except the latest one -- no snapshot file, so re-running the same post
 twice never falsely shows everyone as "steady." Live-only; the archive

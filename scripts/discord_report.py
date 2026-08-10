@@ -336,10 +336,11 @@ def build_player_rankings_table(all_player_names, log_rows, subtitle, show_trend
 
 def build_current_deck_strength_table(all_players, subtitle):
     """all_players is GET /players' players list -- every player+deck in
-    the roster, tracked or not, same scope Current Deck Strength always
-    had. The old sheet's third "Notes" column held free-text bracket
-    notes (e.g. "*Bracket 3") that the D1 migration deliberately never
-    carried over (see migrate_to_d1.py) -- always blank here now."""
+    the roster, tracked or not, same scope the old spreadsheet's Current
+    Deck Strength tab always had. Its third "Notes" column held free-text
+    bracket notes (e.g. "*Bracket 3") that the one-time move to D1
+    deliberately never carried over (no clean field to migrate into) --
+    always blank here now."""
     rows = []
     section_indices = []
     for player in all_players:

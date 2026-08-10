@@ -1,13 +1,7 @@
 /**
  * Relay Worker for mtg-pod-validator.
  *
- * Three jobs, two secrets, each used for exactly one thing:
- *
- * - POST /            -> GITHUB_TOKEN: fires a repository_dispatch event at
- *   the repo. Never touches repo contents directly -- the GitHub Actions
- *   workflow does the actual file edit, using GitHub's own auto-issued
- *   token for that run. Also used by POST /apply-roster-update below, same
- *   dispatch pattern, different event_type.
+ * Two secrets, each used for exactly one thing:
  *
  * - GET  /playgroup-games -> PLAYGROUP_API_KEY: reads playgroup.gg on the
  *   app's behalf. playgroup.gg has no league field on a game, so active-
@@ -45,10 +39,9 @@
  *   (not just tracked ones) and every member's full deck list, independent
  *   of games played -- lets the app detect a new player or new deck the
  *   moment it exists on playgroup.gg, not just after a game gets logged.
- *   This Worker doesn't know what's already in deck-strength.xlsx, so it
- *   doesn't diff anything itself -- same division of labor as
- *   /playgroup-games: raw playgroup.gg data here, comparison against the
- *   synced workbook happens client-side in app.js.
+ *   This Worker doesn't diff anything itself -- same division of labor as
+ *   /playgroup-games: raw playgroup.gg data here, comparison against
+ *   what's already in D1 happens client-side in app.js.
  *
  * - GET  /debug/game?id=<game_id>[&events=true] -> PLAYGROUP_API_KEY: raw
  *   pass-through of one game exactly as playgroup.gg returns it, no
@@ -63,19 +56,22 @@
  *   currently unused -- and unlike the others, unscoped by season, so
  *   don't reach for it without fixing that first if something ever does).
  *
- * - POST /games, POST /roster -> DB (D1) + GITHUB_TOKEN: writes to the
- *   same database -- app.js's actual submit paths, replacing the old
- *   POST / / POST /apply-roster-update dispatch-to-GitHub flow above
- *   (those two still exist but nothing calls them anymore). POST /games
- *   resolves the season from playgroup.gg's *current* active league
- *   itself (never trusted from the client), auto-creating one the first
- *   time a league is seen -- starting a new league in playgroup.gg is
- *   what starts a new season here, the moment its first game is
- *   submitted, no separate manual step. After a successful write, it
- *   also fires a "post-discord" repository_dispatch (best-effort, see
- *   dispatchGithubEvent) that triggers post-discord-live.yml, which
- *   reads the new game straight back out of D1 and posts the rankings/
- *   deck-strength/win-rate screenshots -- see scripts/discord_report.py.
+ * - POST /games, POST /roster -> DB (D1) + GITHUB_TOKEN: app.js's actual
+ *   submit paths (Games to Update / Update the App) -- writes straight to
+ *   D1, no GitHub Actions round trip. (An earlier version of this Worker
+ *   wrote by dispatching a repository_dispatch event to GitHub Actions,
+ *   which edited deck-strength.xlsx directly; that whole pipeline, and
+ *   the scripts/workflows it depended on, is gone -- see git history if
+ *   you need it.) POST /games resolves the season from playgroup.gg's
+ *   *current* active league itself (never trusted from the client),
+ *   auto-creating one the first time a league is seen -- starting a new
+ *   league in playgroup.gg is what starts a new season here, the moment
+ *   its first game is submitted, no separate manual step. After a
+ *   successful write, it also fires a "post-discord" repository_dispatch
+ *   (best-effort, see dispatchGithubEvent) that triggers
+ *   post-discord-live.yml, which reads the new game straight back out of
+ *   D1 and posts the rankings/deck-strength/win-rate screenshots -- see
+ *   scripts/discord_report.py.
  *
  * Deploy with: wrangler deploy
  * Secrets:     wrangler secret put GITHUB_TOKEN
@@ -199,13 +195,13 @@ async function kvGetJson(env, key, fallback) {
   }
 }
 
-// Fires a GitHub repository_dispatch event -- shared by every dispatch
-// call site (add-game, roster-update, post-discord) so the request
-// shape/headers/error handling lives in exactly one place. Returns null
-// on success, or an error string on failure (caller decides what that
-// means for its own response -- a required dispatch like add-game should
-// fail the request, but post-discord firing from handleGamesWrite is a
-// best-effort side effect on an already-successful D1 write).
+// Fires a GitHub repository_dispatch event. Only one caller now
+// (handleGamesWrite's "post-discord" dispatch) -- this used to also
+// back the add-game/roster-update GitHub-dispatch endpoints, removed in
+// the D1 migration's decommission pass along with the workflows/scripts
+// they triggered. Returns null on success, or an error string on
+// failure; post-discord treats that as best-effort (see its own
+// comment) rather than failing the request.
 async function dispatchGithubEvent(env, eventType, payload) {
   const res = await fetch(
     `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/dispatches`,
@@ -226,7 +222,13 @@ async function dispatchGithubEvent(env, eventType, payload) {
   return null;
 }
 
-// ---------- POST / : add-game dispatch ----------
+// isValidGamePayload/isValidRosterUpdatePayload validate POST /games and
+// POST /roster below -- the GitHub-dispatch endpoints these originally
+// validated for (POST / and POST /apply-roster-update) are gone (see the
+// D1 migration; nothing has called them since app.js's Phase 4 cutover),
+// but the D1 write endpoints reuse the same payload shapes app.js already
+// builds, so the validators moved over with them rather than being
+// duplicated.
 
 function isValidGamePayload(payload) {
   if (!payload || typeof payload !== "object") return false;
@@ -242,28 +244,6 @@ function isValidGamePayload(payload) {
     p && typeof p === "object" && requiredFields.every(f => f in p)
   );
 }
-
-async function handleAddGame(request, env) {
-  let payload;
-  try {
-    payload = await request.json();
-  } catch {
-    return jsonResponse({ error: "Invalid JSON" }, 400);
-  }
-
-  if (!isValidGamePayload(payload)) {
-    return jsonResponse({ error: "Payload missing required fields" }, 400);
-  }
-
-  const dispatchErr = await dispatchGithubEvent(env, "add-game", payload);
-  if (dispatchErr) {
-    return jsonResponse({ error: "GitHub dispatch failed", detail: dispatchErr }, 502);
-  }
-
-  return jsonResponse({ ok: true }, 202);
-}
-
-// ---------- POST /apply-roster-update : new player / new deck dispatch ----------
 
 function isValidRosterUpdatePayload(payload) {
   if (!payload || typeof payload !== "object") return false;
@@ -285,45 +265,6 @@ function isValidRosterUpdatePayload(payload) {
     d && typeof d === "object" && typeof d.player === "string" && d.player && validDeck(d);
 
   return newPlayers.every(validNewPlayer) && newDecks.every(validExistingDeck);
-}
-
-async function hashPayload(payload) {
-  const data = new TextEncoder().encode(JSON.stringify(payload));
-  const digest = await crypto.subtle.digest("SHA-256", data);
-  return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, "0")).join("");
-}
-
-async function handleApplyRosterUpdate(request, env) {
-  let payload;
-  try {
-    payload = await request.json();
-  } catch {
-    return jsonResponse({ error: "Invalid JSON" }, 400);
-  }
-
-  if (!isValidRosterUpdatePayload(payload)) {
-    return jsonResponse({ error: "Payload missing required fields" }, 400);
-  }
-
-  // The GitHub Action this dispatches takes 1-3 minutes, long enough for a
-  // second click or a page reload to beat a client-side disabled-button
-  // guard -- reject an exact repeat of the same payload within a short
-  // window using the KV binding this Worker already has for other reasons.
-  if (env.DECK_CACHE) {
-    const dedupeKey = `roster_update_submit:${await hashPayload(payload)}`;
-    const alreadySubmitted = await env.DECK_CACHE.get(dedupeKey);
-    if (alreadySubmitted) {
-      return jsonResponse({ error: "This exact update was already submitted moments ago." }, 409);
-    }
-    await env.DECK_CACHE.put(dedupeKey, "1", { expirationTtl: 120 });
-  }
-
-  const dispatchErr = await dispatchGithubEvent(env, "roster-update", payload);
-  if (dispatchErr) {
-    return jsonResponse({ error: "GitHub dispatch failed", detail: dispatchErr }, 502);
-  }
-
-  return jsonResponse({ ok: true }, 202);
 }
 
 // ---------- POST /games, POST /roster : D1 writes ----------
@@ -555,12 +496,13 @@ async function handleGamesWrite(request, env, ctx) {
 // /players, POST /decks" split, which would have made the client
 // orchestrate two calls and reconcile a partial failure between them.
 //
-// No KV dedupe guard (unlike handleApplyRosterUpdate above) -- that
-// exists there specifically because the GitHub Action round trip takes
-// 1-3 minutes, long enough for a second click to beat a disabled-button
-// guard. A D1 write lands in ~100-300ms, far too narrow a window for that
-// same concern to carry the same weight. A duplicate player name is still
-// caught (see below); a duplicate deck name for the same player is not --
+// No KV dedupe guard, unlike the old GitHub-dispatch roster endpoint this
+// replaced had -- that existed specifically because the GitHub Action
+// round trip took 1-3 minutes, long enough for a second click to beat a
+// disabled-button guard. A D1 write lands in ~100-300ms, far too narrow a
+// window for that same concern to carry the same weight. A duplicate
+// player name is still caught (see below); a duplicate deck name for
+// the same player is not --
 // decks have no uniqueness constraint yet, since nothing currently
 // submits at high enough frequency or low enough supervision for that gap
 // to matter in practice. Worth a real constraint if that ever changes.
@@ -880,10 +822,10 @@ async function handleDebugGame(request, env) {
 // Returns the raw "world according to playgroup.gg" -- every member (not
 // just tracked ones, so the app can preview what a brand-new player would
 // bring in) and every member's full deck list, independent of games played.
-// This Worker doesn't know what's already in deck-strength.xlsx (only the
-// app does, via the synced workbook), so it doesn't attempt to diff -- same
-// division of responsibility as /playgroup-games: Worker supplies the raw
-// playgroup.gg data, app.js compares it against what it already parsed.
+// This Worker doesn't attempt to diff anything itself -- same division of
+// responsibility as /playgroup-games: Worker supplies the raw playgroup.gg
+// data, app.js compares it against what's already in D1 (fetched via
+// GET /players).
 async function computeRosterDiff(env) {
   const usernameToPlayer = await getUsernameToPlayerMap(env);
 
@@ -1234,14 +1176,6 @@ export default {
 
     if (request.method === "GET" && url.pathname === "/debug/game") {
       return handleDebugGame(request, env);
-    }
-
-    if (request.method === "POST" && url.pathname === "/") {
-      return handleAddGame(request, env);
-    }
-
-    if (request.method === "POST" && url.pathname === "/apply-roster-update") {
-      return handleApplyRosterUpdate(request, env);
     }
 
     if (request.method === "POST" && url.pathname === "/games") {

@@ -1043,9 +1043,9 @@ async function refreshPlaygroupGames() {
 
 // Matches every currently-tracked playgroup.gg game against the Game Log's
 // logged games, one-to-one. A row already carrying a Playgroup Game ID
-// (column Y -- written automatically by add_game.py, or backfilled onto
-// older rows by backfill_game_ids.py) matches by exact ID, no inference
-// needed. For everything else, a logged game and a playgroup.gg game are
+// (set by POST /games at write time; NULL for older manually-entered
+// games predating that) matches by exact ID, no inference needed. For
+// everything else, a logged game and a playgroup.gg game are
 // treated as the same real game if the same set of tracked players appears
 // under a Game Log game number, within a day and a half of the
 // playgroup.gg timestamp (playgroup.gg logs in UTC+2; the sheet's date can
@@ -1081,11 +1081,11 @@ function computeLoggedMatches(pgGames) {
 
   const matches = new Map();
 
-  // A row backfill_game_ids.py or add_game.py already stamped with the real
-  // playgroup.gg game ID needs no inference at all -- exact id equality,
-  // no heuristics, no ambiguity. Handled first and removed from the pool so
-  // the heuristic loop below only ever sees games that still need it (a
-  // manually-entered game, or one predating the ID column).
+  // A row already stamped with the real playgroup.gg game ID needs no
+  // inference at all -- exact id equality, no heuristics, no ambiguity.
+  // Handled first and removed from the pool so the heuristic loop below
+  // only ever sees games that still need it (a manually-entered game, or
+  // one predating playgroup.gg integration).
   const remainingPgGames = [];
   for (const pgGame of pgGames) {
     const idStr = String(pgGame.playgroup_game_id);
@@ -1147,12 +1147,13 @@ function computeLoggedMatches(pgGames) {
 }
 
 // playgroup.gg sometimes spells a commander with real diacritics (Eowyn ->
-// Éowyn, Kennerud -> Kennerüd) that this spreadsheet's own plain-ASCII
-// deck names never have -- confirmed the hard way when Ryan's "Arna
-// Kennerüd, Skycaptain" from a live game submission didn't exactly match
-// Current Deck Strength's "Arna Kennerud, Skycaptain", so the LOOKUP
-// formula there silently kept using an older game's result instead.
-// Mirrors strip_accents in scripts/backfill_playgroup_ids.py.
+// Éowyn, Kennerud -> Kennerüd) that this app's own plain-ASCII deck names
+// never have -- confirmed the hard way when Ryan's "Arna Kennerüd,
+// Skycaptain" from a live game submission didn't exactly match his deck's
+// stored "Arna Kennerud, Skycaptain", silently misattributing the game.
+// Mirrors stripAccentsForMatch in cloudflare-worker/relay.js (the
+// server-side deck-matching port -- see its own comment for why it's a
+// separate copy, deliberately stricter, not just trusted from the client).
 function stripAccents(s) {
   return (s || "").normalize("NFKD").replace(/[̀-ͯ]/g, "");
 }
@@ -1716,21 +1717,22 @@ async function loadRosterDiff() {
 }
 
 // Compares the Worker's raw playgroup.gg roster/decks against what's
-// already parsed from Current Deck Strength (the `players` array -- same
-// data source Deck Strength Validator and Player Win Rates already use). Matches by
-// playgroup deck ID first; for rows the ID backfill hasn't reached yet,
-// falls back to the same name normalization findDefaultStrength uses, so
-// backfill completeness is never a hard requirement for correctness.
+// already in D1 (the `players` array -- same data source Deck Strength
+// Validator and Player Win Rates already use). Matches by playgroup deck
+// ID first; for a deck with no ID on file (added without one), falls back
+// to the same name normalization findDefaultStrength uses, so a missing
+// ID is never a hard requirement for correctness.
 // Usernames submitted as a brand-new player this session. computeRosterDiff
 // below has no way to know a submitted new player isn't "new" anymore
 // other than this: member.tracked (and mapped_player) come straight from
-// rosterDiffData, which only reflects reality once roster-update.yml's
-// Worker redeploy finishes -- well after the optimistic merge into
-// `players` already happened. Without this override, a submitted new
-// player keeps showing as pending for those few minutes even though
-// they're already fully added. Any of their decks left unsubmitted stay
-// hidden until the real backend catches up too -- an acceptable gap given
-// it's normally seconds to a few minutes, not an unbounded amount of time.
+// rosterDiffData, which is read fresh from D1 on every request (see
+// relay.js's getUsernameToPlayerMap) -- correct almost immediately after
+// POST /roster's write completes, but "almost immediately" still leaves
+// a brief window, between that write finishing and refreshEverything's
+// own subsequent GET /roster-diff landing, where a stale response could
+// otherwise flash the just-added player back to "pending." Any of their
+// decks left unsubmitted stay hidden until a real refresh actually shows
+// them as new -- an acceptable, seconds-long gap, not an unbounded one.
 const rosterUpdateOptimisticallyTrackedUsernames = new Set();
 
 function computeRosterDiff(data) {

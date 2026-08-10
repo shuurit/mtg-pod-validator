@@ -7,8 +7,8 @@ import time
 import requests
 
 # Discord's API sits behind Cloudflare, which 403s the default User-Agent
-# -- same issue this project already hit and fixed for the roster-diff
-# fetches (see backfill_playgroup_ids.py). Anything normal-looking works.
+# -- same issue this project already hit and fixed for playgroup.gg
+# fetches (see relay.js's pgFetch). Anything normal-looking works.
 DISCORD_HEADERS = {"User-Agent": "mtg-pod-validator-discord-bot"}
 
 
