@@ -56,20 +56,26 @@
  *   debugging aid for inspecting a specific game.
  *
  * - GET  /players, /games, /rankings, /deck-win-rates -> DB (D1): reads
- *   from the D1 database this project is migrating onto (replacing
- *   deck-strength.xlsx -- see the migration plan doc and
- *   cloudflare-worker/schema.sql). Not wired to the app yet; these run
- *   alongside the still-live XLSX-based data with zero production risk
- *   until the app actually cuts over.
+ *   from the D1 database that replaced deck-strength.xlsx as this app's
+ *   source of truth (see cloudflare-worker/schema.sql). app.js reads
+ *   /players and /games directly; /rankings and /deck-win-rates exist for
+ *   other consumers (Discord scripts use /deck-win-rates; /rankings is
+ *   currently unused -- and unlike the others, unscoped by season, so
+ *   don't reach for it without fixing that first if something ever does).
  *
- * - POST /games, POST /roster -> DB (D1): writes to the same database --
- *   new endpoints, not replacements for POST / / POST /apply-roster-update
- *   above (those still dispatch to GitHub; nothing calls these new ones
- *   yet). POST /games resolves the season from playgroup.gg's *current*
- *   active league itself (never trusted from the client), auto-creating
- *   one the first time a league is seen -- starting a new league in
- *   playgroup.gg is what starts a new season here, the moment its first
- *   game is submitted, no separate manual step.
+ * - POST /games, POST /roster -> DB (D1) + GITHUB_TOKEN: writes to the
+ *   same database -- app.js's actual submit paths, replacing the old
+ *   POST / / POST /apply-roster-update dispatch-to-GitHub flow above
+ *   (those two still exist but nothing calls them anymore). POST /games
+ *   resolves the season from playgroup.gg's *current* active league
+ *   itself (never trusted from the client), auto-creating one the first
+ *   time a league is seen -- starting a new league in playgroup.gg is
+ *   what starts a new season here, the moment its first game is
+ *   submitted, no separate manual step. After a successful write, it
+ *   also fires a "post-discord" repository_dispatch (best-effort, see
+ *   dispatchGithubEvent) that triggers post-discord-live.yml, which
+ *   reads the new game straight back out of D1 and posts the rankings/
+ *   deck-strength/win-rate screenshots -- see scripts/discord_report.py.
  *
  * Deploy with: wrangler deploy
  * Secrets:     wrangler secret put GITHUB_TOKEN
@@ -179,6 +185,33 @@ async function kvGetJson(env, key, fallback) {
   }
 }
 
+// Fires a GitHub repository_dispatch event -- shared by every dispatch
+// call site (add-game, roster-update, post-discord) so the request
+// shape/headers/error handling lives in exactly one place. Returns null
+// on success, or an error string on failure (caller decides what that
+// means for its own response -- a required dispatch like add-game should
+// fail the request, but post-discord firing from handleGamesWrite is a
+// best-effort side effect on an already-successful D1 write).
+async function dispatchGithubEvent(env, eventType, payload) {
+  const res = await fetch(
+    `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/dispatches`,
+    {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${env.GITHUB_TOKEN}`,
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "mtg-pod-validator-relay",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ event_type: eventType, client_payload: payload || {} }),
+    }
+  );
+  if (res.status !== 204) {
+    return await res.text();
+  }
+  return null;
+}
+
 // ---------- POST / : add-game dispatch ----------
 
 function isValidGamePayload(payload) {
@@ -208,23 +241,9 @@ async function handleAddGame(request, env) {
     return jsonResponse({ error: "Payload missing required fields" }, 400);
   }
 
-  const dispatchRes = await fetch(
-    `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/dispatches`,
-    {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${env.GITHUB_TOKEN}`,
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "mtg-pod-validator-relay",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ event_type: "add-game", client_payload: payload }),
-    }
-  );
-
-  if (dispatchRes.status !== 204) {
-    const errText = await dispatchRes.text();
-    return jsonResponse({ error: "GitHub dispatch failed", detail: errText }, 502);
+  const dispatchErr = await dispatchGithubEvent(env, "add-game", payload);
+  if (dispatchErr) {
+    return jsonResponse({ error: "GitHub dispatch failed", detail: dispatchErr }, 502);
   }
 
   return jsonResponse({ ok: true }, 202);
@@ -285,23 +304,9 @@ async function handleApplyRosterUpdate(request, env) {
     await env.DECK_CACHE.put(dedupeKey, "1", { expirationTtl: 120 });
   }
 
-  const dispatchRes = await fetch(
-    `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/dispatches`,
-    {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${env.GITHUB_TOKEN}`,
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "mtg-pod-validator-relay",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ event_type: "roster-update", client_payload: payload }),
-    }
-  );
-
-  if (dispatchRes.status !== 204) {
-    const errText = await dispatchRes.text();
-    return jsonResponse({ error: "GitHub dispatch failed", detail: errText }, 502);
+  const dispatchErr = await dispatchGithubEvent(env, "roster-update", payload);
+  if (dispatchErr) {
+    return jsonResponse({ error: "GitHub dispatch failed", detail: dispatchErr }, 502);
   }
 
   return jsonResponse({ ok: true }, 202);
@@ -469,7 +474,19 @@ async function handleGamesWrite(request, env) {
   });
   await env.DB.batch(gameResultStmts);
 
-  return jsonResponse({ ok: true, gameId, seasonId, gameNum, results: responseResults }, 201);
+  // Fires post-discord-live.yml, which reads the just-written game back
+  // out of D1 (via GET /players, /games, /deck-win-rates -- see
+  // discord_report.py) and posts the rankings/deck-strength/win-rate
+  // screenshots. Best-effort: the game itself is already durably written
+  // above, so a dispatch failure (GitHub down, token expired) doesn't
+  // undo it or fail this response -- discordPostDispatched tells the
+  // client whether it's expected, without blocking on it.
+  const dispatchErr = await dispatchGithubEvent(env, "post-discord", {});
+  if (dispatchErr) {
+    console.error("post-discord dispatch failed:", dispatchErr);
+  }
+
+  return jsonResponse({ ok: true, gameId, seasonId, gameNum, results: responseResults, discordPostDispatched: !dispatchErr }, 201);
 }
 
 // New players + new decks for existing players, in one combined write --
@@ -927,8 +944,8 @@ async function handlePlayers(env) {
 // currently reads.
 async function computeGamesData(env) {
   const { results } = await env.DB.prepare(`
-    SELECT g.id AS game_id, g.season_id, g.game_num, g.played_at, g.pod_size,
-           g.playgroup_game_id,
+    SELECT g.id AS game_id, g.season_id, s.label AS season_label, g.game_num,
+           g.played_at, g.pod_size, g.playgroup_game_id,
            p.name AS player, d.name AS commander,
            gr.commander_strength, gr.result, gr.place, gr.knockouts, gr.tov,
            gr.pop_off, gr.disruptions, gr.recoveries, gr.games_clearly_behind,
@@ -938,6 +955,7 @@ async function computeGamesData(env) {
            gr.game_calculated_deck_strength
     FROM game_results gr
     JOIN games g ON g.id = gr.game_id
+    JOIN seasons s ON s.id = g.season_id
     JOIN players p ON p.id = gr.player_id
     JOIN decks d ON d.id = gr.deck_id
     ORDER BY g.id, p.name
@@ -946,6 +964,7 @@ async function computeGamesData(env) {
   const games = results.map(r => ({
     gameId: r.game_id,
     seasonId: r.season_id,
+    seasonLabel: r.season_label,
     gameNum: r.game_num,
     date: r.played_at,
     podSize: r.pod_size,

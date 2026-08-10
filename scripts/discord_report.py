@@ -5,19 +5,19 @@ per-game stats, replaces the previous post) and post_to_discord_archive.py
 in their webhook, their banner text, and whether they delete anything
 first.
 
-Builds three table images from the current deck-strength.xlsx:
-  1. Player rankings: Player + Player Adjusted Win Rate (desc), from
-     Player Adjusted Ranks -- #1 place highlighted gold.
-  2. The full Current Deck Strength tab, all headers except "Baseline
-     (used until a game is logged)" and "Playgroup Deck ID" -- the empty
-     third column is labeled "Notes".
-  3. The full Deck Win Rates tab.
+Builds three table images from the relay's D1-backed read endpoints
+(GET /players, /games, /deck-win-rates -- see cloudflare-worker/relay.js):
+  1. Player rankings: Player + Player Adjusted Win Rate (desc), computed
+     from this season's game_results the same way the old spreadsheet's
+     Player Adjusted Ranks tab did (see compute_pawr_from_rows) --
+     #1 place highlighted gold.
+  2. Current Deck Strength: every player's decks and current power.
+  3. Deck Win Rates: every player's decks, games/wins/win rate.
 
-Both Current Deck Strength and Deck Win Rates are grouped by player,
-matching how the sheet itself is laid out (see find_cds_header_rows).
+Both are grouped by player, one player-header row followed by their deck
+rows, matching how the old sheet was laid out.
 """
 import io
-import re
 import time
 
 import matplotlib
@@ -26,7 +26,11 @@ import matplotlib.pyplot as plt
 import requests
 
 from discord_common import DISCORD_HEADERS
-from season_config import CURRENT_SEASON_SHEET, XLSX_PATH
+
+RELAY_BASE_URL = "https://mtg-pod-validator-relay.mattdomi18.workers.dev"
+PLAYERS_URL = f"{RELAY_BASE_URL}/players"
+GAMES_URL = f"{RELAY_BASE_URL}/games"
+DECK_WIN_RATES_URL = f"{RELAY_BASE_URL}/deck-win-rates"
 
 HEADER_BG = "#2b2d31"  # Discord's own dark blurple-gray, so the header reads native
 HEADER_FG = "white"
@@ -45,17 +49,67 @@ def format_pct(v):
     return f"{v * 100:.2f}%" if isinstance(v, (int, float)) else "--"
 
 
-def get_season_and_game_info(wb_values):
-    """(season_num, game_num, subtitle) for the current season sheet, e.g.
-    ("3", 15, "Season 3 · Game 15")."""
-    season_num = re.search(r"Season (\d+)", CURRENT_SEASON_SHEET).group(1)
-    game_log = wb_values[CURRENT_SEASON_SHEET]
-    game_num = max(
-        (v for r in range(3, game_log.max_row + 1)
-         if isinstance(v := game_log.cell(row=r, column=2).value, (int, float))),
-        default="?",
-    )
-    return season_num, game_num, f"Season {season_num} · Game {game_num}"
+def fetch_json(url):
+    resp = requests.get(url, timeout=15)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def current_season_games(all_games):
+    """Rows (one per player per game) from GET /games belonging to the
+    most-recently-created season -- same "current season" scope app.js's
+    gameLogRowsFromD1 already established (Player Adjusted Ranks has
+    always been one-season-at-a-time, never combined across seasons, even
+    though GET /games itself returns every season's history)."""
+    if not all_games:
+        return []
+    current_season_id = max(g["seasonId"] for g in all_games)
+    return [g for g in all_games if g["seasonId"] == current_season_id]
+
+
+def to_pawr_rows(season_games):
+    """[{game, player, result, J, K, M}, ...] -- the compact shape
+    compute_pawr_from_rows/compute_rank_trend need, mapped from GET
+    /games' field names. 'game' is the season-scoped game number
+    (gameNum), matching the old Game Log's 'Game #' column -- unique
+    within one season, all compute_rank_trend needs to tell games apart."""
+    return [
+        {"game": g["gameNum"], "player": g["player"], "result": g["result"],
+         "J": g["adjustedPodSizeScore"], "K": g["knockoutScore"], "M": g["winProbability"]}
+        for g in season_games
+    ]
+
+
+def fetch_report_data():
+    """Fetches everything post_report needs from the relay in one place,
+    so post_to_discord.py/post_to_discord_archive.py don't each need
+    their own copy of this wiring."""
+    players_data = fetch_json(PLAYERS_URL)
+    games_data = fetch_json(GAMES_URL)
+    deck_win_rates_data = fetch_json(DECK_WIN_RATES_URL)
+
+    all_players = players_data["players"]
+    all_player_names = [p["name"] for p in all_players]
+    season_games = current_season_games(games_data["games"])
+    if not season_games:
+        raise RuntimeError("No games logged yet in the current season -- nothing to report.")
+    log_rows = to_pawr_rows(season_games)
+
+    return {
+        "all_players": all_players,
+        "all_player_names": all_player_names,
+        "deck_win_rates": deck_win_rates_data,
+        "season_games": season_games,
+        "log_rows": log_rows,
+    }
+
+
+def get_season_and_game_info(season_games):
+    """(season_label, game_num, subtitle) for the current season, e.g.
+    ("Amass a Gathering Season 3", 17, "Amass a Gathering Season 3 · Game 17")."""
+    season_label = season_games[0]["seasonLabel"]
+    game_num = max(g["gameNum"] for g in season_games)
+    return season_label, game_num, f"{season_label} · Game {game_num}"
 
 
 def render_table_png(title, col_labels, rows, section_indices, fontsize=10, char_w=0.105, highlight_indices=frozenset(), cell_text_colors=None):
@@ -148,24 +202,6 @@ def post_image(webhook_url, content, image_buf, filename):
     return resp.json()["id"]
 
 
-def find_cds_header_rows(wb_formulas):
-    """Row numbers that are player-header rows in Current Deck Strength,
-    detected the same way the rest of this project's scripts do (see
-    is_header_row in add_deck.py): a header row's column-B formula is
-    AVERAGE(...); a deck row's is IFERROR(LOOKUP(...), D). Deck Win Rates
-    is kept in exact row-number lockstep with Current Deck Strength
-    (confirmed elsewhere in this project), so this same set of row numbers
-    identifies header rows there too -- no separate detection needed.
-    """
-    ws = wb_formulas["Current Deck Strength"]
-    headers = set()
-    for r in range(2, ws.max_row + 1):
-        v = ws.cell(row=r, column=2).value
-        if isinstance(v, str) and v.startswith("=") and "AVERAGE(" in v:
-            headers.add(r)
-    return headers
-
-
 TREND_UP = "▲"
 TREND_DOWN = "▼"
 TREND_STEADY = "–"
@@ -174,30 +210,15 @@ TREND_DOWN_COLOR = "#d1242f"
 TREND_STEADY_COLOR = "#6e7771"
 
 
-def compute_player_rankings(wb_values):
-    """[(player, win_rate), ...], sorted by win_rate descending. Reads the
-    already-computed Player Adjusted Ranks tab directly -- exact by
-    construction, no need to re-derive it."""
-    ws = wb_values["Player Adjusted Ranks"]
-    ranks = []
-    for r in range(2, ws.max_row + 1):
-        player = ws.cell(row=r, column=1).value
-        if player is None:
-            continue
-        rate = ws.cell(row=r, column=2).value
-        ranks.append((player, rate if isinstance(rate, (int, float)) else 0))
-    ranks.sort(key=lambda x: x[1], reverse=True)
-    return ranks
-
-
 def compute_pawr_from_rows(player_rows):
     """Player Adjusted Win Rate computed directly from a list of that
     player's Game Log rows ({result, J, K, M}) -- a Python port of the
     Player Adjusted Ranks B column formula (see that sheet's B2/F2-L2),
-    used to answer "what would the rankings have been without the latest
-    game" since there's no sheet tab that stores a prior game's snapshot.
-    Verified to reproduce the sheet's own cached values exactly when given
-    every row for a player (not just a subset)."""
+    verified to reproduce the sheet's own cached values exactly when
+    given every row for a player (not just a subset). Now the only
+    place this project computes it in Python -- discord_report.py used
+    to read it back pre-computed from the sheet; there's no D1 table
+    that stores it, only the per-game inputs it's derived from."""
     wins = [r for r in player_rows if r["result"] == 1]
     losses = [r for r in player_rows if r["result"] == 0]
     C, D = len(wins), len(losses)
@@ -214,6 +235,21 @@ def compute_pawr_from_rows(player_rows):
     return (H * 0.3) + (I * 0.2) + (L * 0.5)
 
 
+def compute_player_rankings(all_player_names, log_rows):
+    """[(player, win_rate), ...], sorted descending, one row per name in
+    all_player_names -- including anyone with zero games logged this
+    season (Player Adjusted Ranks always showed every roster player, 0%
+    for anyone with nothing logged yet -- confirmed by direct inspection
+    of the live sheet before this cutover: Kristy/Joseph/Red all had
+    rows despite zero or few games)."""
+    by_player = {}
+    for r in log_rows:
+        by_player.setdefault(r["player"], []).append(r)
+    ranks = [(name, compute_pawr_from_rows(by_player.get(name, []))) for name in all_player_names]
+    ranks.sort(key=lambda x: x[1], reverse=True)
+    return ranks
+
+
 def assign_ranks(ranked_list):
     """{player: rank} from a list already sorted descending by rate, with
     tied rates getting the same rank (competition-style: 1,1,3, not
@@ -228,19 +264,21 @@ def assign_ranks(ranked_list):
     return ranks
 
 
-def compute_rank_trend(wb_values, log_rows):
-    """{player: 'up'/'down'/'steady'} -- whether each player's position in
-    the rankings moved compared to standings without the most recent game.
-    Rank-based (did someone get passed / pass someone), not raw score
-    movement: this is a leaderboard table, and a player's raw Player
-    Adjusted Win Rate can move for reasons (deck-strength-adjusted
-    probabilities, pod-size weighting) that don't read as "better/worse"
-    at a glance the way "moved up the leaderboard" does."""
+def compute_rank_trend(all_player_names, log_rows):
+    """{player: 'up'/'down'/'steady'} for every player with at least one
+    game already logged this season (nothing to compare for someone with
+    zero games) -- whether their position in the rankings moved compared
+    to standings without the most recent game. Rank-based (did someone
+    get passed / pass someone), not raw score movement: this is a
+    leaderboard table, and a player's raw Player Adjusted Win Rate can
+    move for reasons (deck-strength-adjusted probabilities, pod-size
+    weighting) that don't read as "better/worse" at a glance the way
+    "moved up the leaderboard" does."""
     if not log_rows:
         return {}
     max_game = max(r["game"] for r in log_rows)
 
-    current_ranks = assign_ranks(compute_player_rankings(wb_values))
+    current_ranks = assign_ranks(compute_player_rankings(all_player_names, log_rows))
 
     players = sorted(set(r["player"] for r in log_rows))
     previous_ranked = sorted(
@@ -261,31 +299,11 @@ def compute_rank_trend(wb_values, log_rows):
     return trend
 
 
-def read_game_log_rows_for_pawr(wb_values):
-    """[{game, player, result, J, K, M}, ...] for every Game Log row --
-    the raw inputs compute_pawr_from_rows/compute_rank_trend need."""
-    ws = wb_values[CURRENT_SEASON_SHEET]
-    rows = []
-    for r in range(3, ws.max_row + 1):
-        player = ws.cell(row=r, column=3).value
-        if player is None:
-            continue
-        rows.append({
-            "game": ws.cell(row=r, column=2).value,
-            "player": player,
-            "result": ws.cell(row=r, column=6).value,
-            "J": ws.cell(row=r, column=10).value,
-            "K": ws.cell(row=r, column=11).value,
-            "M": ws.cell(row=r, column=13).value,
-        })
-    return rows
-
-
-def build_player_rankings_table(wb_values, subtitle, show_trend=False):
+def build_player_rankings_table(all_player_names, log_rows, subtitle, show_trend=False):
     """show_trend adds a Trend column (▲/▼/–, colored) showing whether
     each player's rank moved compared to standings without the most
     recent game -- see compute_rank_trend."""
-    ranks = compute_player_rankings(wb_values)
+    ranks = compute_player_rankings(all_player_names, log_rows)
 
     if not show_trend:
         rows = [[str(i + 1), player, format_pct(rate)] for i, (player, rate) in enumerate(ranks)]
@@ -295,8 +313,7 @@ def build_player_rankings_table(wb_values, subtitle, show_trend=False):
             highlight_indices={0} if rows else set(),
         )
 
-    log_rows = read_game_log_rows_for_pawr(wb_values)
-    trend_by_player = compute_rank_trend(wb_values, log_rows)
+    trend_by_player = compute_rank_trend(all_player_names, log_rows)
     trend_symbol = {"up": TREND_UP, "down": TREND_DOWN, "steady": TREND_STEADY}
     trend_color = {"up": TREND_UP_COLOR, "down": TREND_DOWN_COLOR, "steady": TREND_STEADY_COLOR}
 
@@ -317,21 +334,19 @@ def build_player_rankings_table(wb_values, subtitle, show_trend=False):
     )
 
 
-def build_current_deck_strength_table(wb_values, header_rows, subtitle):
-    ws = wb_values["Current Deck Strength"]
+def build_current_deck_strength_table(all_players, subtitle):
+    """all_players is GET /players' players list -- every player+deck in
+    the roster, tracked or not, same scope Current Deck Strength always
+    had. The old sheet's third "Notes" column held free-text bracket
+    notes (e.g. "*Bracket 3") that the D1 migration deliberately never
+    carried over (see migrate_to_d1.py) -- always blank here now."""
     rows = []
     section_indices = []
-    for r in range(2, ws.max_row + 1):
-        name = ws.cell(row=r, column=1).value
-        if name is None:
-            continue
-        if r in header_rows:
-            section_indices.append(len(rows))
-            rows.append([name, "", ""])
-            continue
-        power = format_power(ws.cell(row=r, column=2).value)
-        note = ws.cell(row=r, column=3).value or ""
-        rows.append([f"    {name}", power, note])
+    for player in all_players:
+        section_indices.append(len(rows))
+        rows.append([player["name"], "", ""])
+        for deck in player["decks"]:
+            rows.append([f"    {deck['name']}", format_power(deck["power"]), ""])
     return render_table_png(
         f"Current Deck Strength  |  {subtitle}",
         ["Decks", "Current Deck Strength", "Notes"], rows, set(section_indices),
@@ -339,22 +354,17 @@ def build_current_deck_strength_table(wb_values, header_rows, subtitle):
     )
 
 
-def build_deck_win_rates_table(wb_values, header_rows, subtitle):
-    ws = wb_values["Deck Win Rates"]
+def build_deck_win_rates_table(deck_win_rates_data, subtitle):
+    """deck_win_rates_data is GET /deck-win-rates' response -- already
+    grouped by player and computed server-side, no local aggregation
+    needed."""
     rows = []
     section_indices = []
-    for r in range(2, ws.max_row + 1):
-        name = ws.cell(row=r, column=1).value
-        if name is None:
-            continue
-        if r in header_rows:
-            section_indices.append(len(rows))
-            rows.append([name, "", "", ""])
-            continue
-        games = ws.cell(row=r, column=2).value
-        wins = ws.cell(row=r, column=3).value
-        rate = format_pct(ws.cell(row=r, column=4).value)
-        rows.append([f"    {name}", str(games), str(wins), rate])
+    for player in deck_win_rates_data["players"]:
+        section_indices.append(len(rows))
+        rows.append([player["player"], "", "", ""])
+        for deck in player["decks"]:
+            rows.append([f"    {deck['deck']}", str(deck["gamesPlayed"]), str(deck["wins"]), format_pct(deck["winRate"])])
     return render_table_png(
         f"Deck Win Rates  |  {subtitle}",
         ["Player / Deck", "Games", "Wins", "Win Rate"], rows, set(section_indices),
@@ -362,21 +372,19 @@ def build_deck_win_rates_table(wb_values, header_rows, subtitle):
     )
 
 
-def post_report(webhook_url, wb_formulas, wb_values, banner, subtitle, show_trend=False):
+def post_report(webhook_url, report_data, banner, subtitle, show_trend=False):
     """Posts the standalone banner, then the three table screenshots, in
     order. Returns the four message IDs, in post order. show_trend is
     forwarded to build_player_rankings_table -- see there for what it does."""
     message_ids = [post_message(webhook_url, banner)]
 
-    header_rows = find_cds_header_rows(wb_formulas)
-
-    rankings_png = build_player_rankings_table(wb_values, subtitle, show_trend)
+    rankings_png = build_player_rankings_table(report_data["all_player_names"], report_data["log_rows"], subtitle, show_trend)
     message_ids.append(post_image(webhook_url, "", rankings_png, "player_rankings.png"))
 
-    cds_png = build_current_deck_strength_table(wb_values, header_rows, subtitle)
+    cds_png = build_current_deck_strength_table(report_data["all_players"], subtitle)
     message_ids.append(post_image(webhook_url, "", cds_png, "current_deck_strength.png"))
 
-    dwr_png = build_deck_win_rates_table(wb_values, header_rows, subtitle)
+    dwr_png = build_deck_win_rates_table(report_data["deck_win_rates"], subtitle)
     message_ids.append(post_image(webhook_url, "", dwr_png, "deck_win_rates.png"))
 
     return message_ids

@@ -1,13 +1,14 @@
-name: Post Discord Update
+name: Post Discord Live Report
 
 on:
-  workflow_dispatch:
+  repository_dispatch:
+    types: [post-discord]
 
 permissions:
   contents: write
 
 jobs:
-  post-discord-update:
+  post-discord-live:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -30,7 +31,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add discord_last_post.json
           git diff --staged --quiet && echo "No changes to commit" && exit 0
-          git commit -m "Track latest Discord post (manual re-post)"
+          git commit -m "Track latest Discord post for this game (automated)"
           git push
 
       - name: Archive to Discord
