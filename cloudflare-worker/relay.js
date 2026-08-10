@@ -54,10 +54,18 @@
  *   filtering or classification. Not used by the app -- a manual
  *   debugging aid for inspecting a specific game.
  *
+ * - GET  /players, /games, /rankings, /deck-win-rates -> DB (D1): reads
+ *   from the D1 database this project is migrating onto (replacing
+ *   deck-strength.xlsx -- see the migration plan doc and
+ *   cloudflare-worker/schema.sql). Not wired to the app yet; these run
+ *   alongside the still-live XLSX-based data with zero production risk
+ *   until the app actually cuts over.
+ *
  * Deploy with: wrangler deploy
  * Secrets:     wrangler secret put GITHUB_TOKEN
  *              wrangler secret put PLAYGROUP_API_KEY
  * Bindings:    KV namespace bound as DECK_CACHE
+ *              D1 database bound as DB
  */
 
 const GITHUB_OWNER = "shuurit";
@@ -605,6 +613,245 @@ async function handleRosterDiff(env, ctx) {
   return jsonResponse(data, 200, { "Cache-Control": "no-store" });
 }
 
+// ---------- GET /players, /games, /rankings, /deck-win-rates : D1 reads ----------
+// D1 migration Phase 2 -- run alongside the existing XLSX-based data the
+// app still actually uses; nothing switches over to these until Phase 4.
+// See cloudflare-worker/schema.sql for the table layout and the migration
+// plan doc for the full rationale.
+
+// A deck's "current power": the most recent logged game's calculated
+// strength, falling back to its baseline -- same fallback behavior as
+// Current Deck Strength's own IFERROR(LOOKUP(...), baseline) formula.
+// "Most recent" is g.id DESC (insertion order), not game_num DESC, since
+// game_num resets per season and isn't comparable across seasons.
+async function computePlayersData(env) {
+  const { results: playerRows } = await env.DB.prepare(
+    "SELECT id, name, playgroup_username FROM players ORDER BY id"
+  ).all();
+
+  const { results: deckRows } = await env.DB.prepare(`
+    SELECT d.id, d.player_id, d.name, d.playgroup_deck_id,
+           COALESCE(
+             (SELECT gr.game_calculated_deck_strength
+              FROM game_results gr JOIN games g ON g.id = gr.game_id
+              WHERE gr.deck_id = d.id
+              ORDER BY g.id DESC LIMIT 1),
+             d.baseline_power
+           ) AS power
+    FROM decks d
+    ORDER BY d.id
+  `).all();
+
+  const decksByPlayer = {};
+  for (const d of deckRows) {
+    (decksByPlayer[d.player_id] ||= []).push({
+      id: d.id,
+      name: d.name,
+      power: d.power,
+      playgroupId: d.playgroup_deck_id,
+    });
+  }
+
+  // Every player, unfiltered -- same split of responsibility as today's
+  // players (all) vs podPlayers (playgroup-linked only) in app.js. This
+  // endpoint hands back the raw truth; filtering stays client-side.
+  const players = playerRows.map(p => ({
+    id: p.id,
+    name: p.name,
+    playgroupUsername: p.playgroup_username,
+    decks: decksByPlayer[p.id] || [],
+  }));
+
+  return { generated_at: new Date().toISOString(), players };
+}
+
+async function handlePlayers(env) {
+  let data;
+  try {
+    data = await computePlayersData(env);
+  } catch (err) {
+    return jsonResponse({ error: "Failed to read players from D1", detail: err.message }, 500);
+  }
+  return jsonResponse(data, 200, { "Cache-Control": "no-store" });
+}
+
+// One row per player per game, joined out to plain values -- the D1
+// equivalent of today's gameLogSeason3Rows (extractGameLogFromWorkbook),
+// but with every game_results column, not just the handful app.js
+// currently reads.
+async function computeGamesData(env) {
+  const { results } = await env.DB.prepare(`
+    SELECT g.id AS game_id, g.season_id, g.game_num, g.played_at, g.pod_size,
+           g.playgroup_game_id,
+           p.name AS player, d.name AS commander,
+           gr.commander_strength, gr.result, gr.place, gr.knockouts, gr.tov,
+           gr.pop_off, gr.disruptions, gr.recoveries, gr.games_clearly_behind,
+           gr.bracket, gr.adjusted_pod_size_score, gr.knockout_score,
+           gr.deck_strength_differential, gr.win_probability, gr.player_score,
+           gr.normalized_player_score, gr.normalized_tov, gr.deck_resilience_score,
+           gr.game_calculated_deck_strength
+    FROM game_results gr
+    JOIN games g ON g.id = gr.game_id
+    JOIN players p ON p.id = gr.player_id
+    JOIN decks d ON d.id = gr.deck_id
+    ORDER BY g.id, p.name
+  `).all();
+
+  const games = results.map(r => ({
+    gameId: r.game_id,
+    seasonId: r.season_id,
+    gameNum: r.game_num,
+    date: r.played_at,
+    podSize: r.pod_size,
+    playgroupGameId: r.playgroup_game_id,
+    player: r.player,
+    commander: r.commander,
+    commanderStrength: r.commander_strength,
+    result: r.result,
+    place: r.place,
+    knockouts: r.knockouts,
+    tov: r.tov,
+    popOff: r.pop_off,
+    disruptions: r.disruptions,
+    recoveries: r.recoveries,
+    gamesClearlyBehind: r.games_clearly_behind,
+    bracket: r.bracket,
+    adjustedPodSizeScore: r.adjusted_pod_size_score,
+    knockoutScore: r.knockout_score,
+    deckStrengthDifferential: r.deck_strength_differential,
+    winProbability: r.win_probability,
+    playerScore: r.player_score,
+    normalizedPlayerScore: r.normalized_player_score,
+    normalizedTov: r.normalized_tov,
+    deckResilienceScore: r.deck_resilience_score,
+    gameCalculatedDeckStrength: r.game_calculated_deck_strength,
+  }));
+
+  return { generated_at: new Date().toISOString(), games };
+}
+
+async function handleGames(env) {
+  let data;
+  try {
+    data = await computeGamesData(env);
+  } catch (err) {
+    return jsonResponse({ error: "Failed to read games from D1", detail: err.message }, 500);
+  }
+  return jsonResponse(data, 200, { "Cache-Control": "no-store" });
+}
+
+// Direct port of computePlayerAdjustedWinRate in app.js -- verified exact
+// against the spreadsheet's own cached Player Adjusted Ranks values
+// earlier this session. j/k/m here are adjusted_pod_size_score/
+// knockout_score/win_probability, kept short to stay visually close to
+// the formula it mirrors.
+function computePlayerAdjustedWinRate(rows) {
+  const wins = rows.filter(g => g.result === 1);
+  const losses = rows.filter(g => g.result === 0);
+  const C = wins.length, D = losses.length;
+  const F = wins.reduce((s, g) => s + g.j, 0);
+  const avgJLosses = D ? losses.reduce((s, g) => s + g.j, 0) / D : 0;
+  const G = (1 - (avgJLosses * -1)) * D;
+  const H = (F + G) ? F / (F + G) : 0;
+  const I = C ? rows.reduce((s, g) => s + g.k, 0) / rows.length : 0;
+  const avgMWins = C ? wins.reduce((s, g) => s + g.m, 0) / C : 0;
+  const Jagg = (1 - (avgMWins - 0.5)) * C;
+  const avgMLosses = D ? losses.reduce((s, g) => s + g.m, 0) / D : 0;
+  const Kagg = (1 + (avgMLosses - 0.5)) * D;
+  const L = (Jagg + Kagg) ? Jagg / (Jagg + Kagg) : 0;
+  const B = H * 0.3 + I * 0.2 + L * 0.5;
+  return { rate: B, wins: C, losses: D };
+}
+
+async function computeRankingsData(env) {
+  const { results: playerRows } = await env.DB.prepare("SELECT name FROM players ORDER BY id").all();
+  const { results: gameRows } = await env.DB.prepare(`
+    SELECT p.name AS player, gr.result,
+           gr.adjusted_pod_size_score AS j, gr.knockout_score AS k, gr.win_probability AS m
+    FROM game_results gr JOIN players p ON p.id = gr.player_id
+  `).all();
+
+  const byPlayer = {};
+  for (const row of gameRows) {
+    (byPlayer[row.player] ||= []).push(row);
+  }
+
+  const rankings = playerRows
+    .map(p => ({ player: p.name, ...computePlayerAdjustedWinRate(byPlayer[p.name] || []) }))
+    .sort((a, b) => b.rate - a.rate);
+
+  return { generated_at: new Date().toISOString(), rankings };
+}
+
+async function handleRankings(env) {
+  let data;
+  try {
+    data = await computeRankingsData(env);
+  } catch (err) {
+    return jsonResponse({ error: "Failed to compute rankings from D1", detail: err.message }, 500);
+  }
+  return jsonResponse(data, 200, { "Cache-Control": "no-store" });
+}
+
+// Deck Win Rates: plain COUNT/SUM grouped by deck, and separately by
+// player for the subtotal rows -- confirmed via direct inspection that
+// the spreadsheet's own version is exactly this (COUNTIFS/IFERROR), not a
+// PivotTable as earlier assumed. Nested (player -> its decks) rather than
+// the spreadsheet's flat "player row then indented deck rows" layout,
+// since JSON has no reason to imitate that convention.
+async function computeDeckWinRatesData(env) {
+  const { results: deckRows } = await env.DB.prepare(`
+    SELECT d.id AS deck_id, d.player_id, p.name AS player, d.name AS deck,
+           COUNT(gr.result) AS games_played,
+           COALESCE(SUM(CASE WHEN gr.result = 1 THEN 1 ELSE 0 END), 0) AS wins
+    FROM decks d
+    JOIN players p ON p.id = d.player_id
+    LEFT JOIN game_results gr ON gr.deck_id = d.id
+    GROUP BY d.id
+    ORDER BY d.id
+  `).all();
+
+  const { results: playerRows } = await env.DB.prepare(`
+    SELECT p.id AS player_id, p.name AS player,
+           COUNT(gr.result) AS games_played,
+           COALESCE(SUM(CASE WHEN gr.result = 1 THEN 1 ELSE 0 END), 0) AS wins
+    FROM players p
+    LEFT JOIN game_results gr ON gr.player_id = p.id
+    GROUP BY p.id
+    ORDER BY p.id
+  `).all();
+
+  const decksByPlayer = {};
+  for (const d of deckRows) {
+    (decksByPlayer[d.player_id] ||= []).push({
+      deck: d.deck,
+      gamesPlayed: d.games_played,
+      wins: d.wins,
+      winRate: d.games_played ? d.wins / d.games_played : 0,
+    });
+  }
+
+  const players = playerRows.map(p => ({
+    player: p.player,
+    gamesPlayed: p.games_played,
+    wins: p.wins,
+    winRate: p.games_played ? p.wins / p.games_played : 0,
+    decks: decksByPlayer[p.player_id] || [],
+  }));
+
+  return { generated_at: new Date().toISOString(), players };
+}
+
+async function handleDeckWinRates(env) {
+  let data;
+  try {
+    data = await computeDeckWinRatesData(env);
+  } catch (err) {
+    return jsonResponse({ error: "Failed to compute Deck Win Rates from D1", detail: err.message }, 500);
+  }
+  return jsonResponse(data, 200, { "Cache-Control": "no-store" });
+}
+
 // ---------- router ----------
 
 export default {
@@ -629,6 +876,22 @@ export default {
 
     if (request.method === "GET" && url.pathname === "/roster-diff") {
       return handleRosterDiff(env, ctx);
+    }
+
+    if (request.method === "GET" && url.pathname === "/players") {
+      return handlePlayers(env);
+    }
+
+    if (request.method === "GET" && url.pathname === "/games") {
+      return handleGames(env);
+    }
+
+    if (request.method === "GET" && url.pathname === "/rankings") {
+      return handleRankings(env);
+    }
+
+    if (request.method === "GET" && url.pathname === "/deck-win-rates") {
+      return handleDeckWinRates(env);
     }
 
     if (request.method === "GET" && url.pathname === "/debug/game") {
