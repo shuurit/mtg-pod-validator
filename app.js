@@ -125,9 +125,9 @@ let rosterDiffData = null; // raw playgroup.gg roster/decks from loadRosterDiff,
 // order), the state before that player's ever had a header clicked.
 const playerDeckSortState = new Map();
 const PLAYER_DECK_COLUMNS = [
-  { key: "deck", label: "Deck", defaultDir: "asc" },
-  { key: "power", label: "Power", defaultDir: "desc" },
-  { key: "pgPower", label: "Playgroup Power", defaultDir: "desc" },
+  { key: "deck", label: "Deck", defaultDir: "asc", numeric: false },
+  { key: "power", label: "Power", defaultDir: "desc", numeric: true },
+  { key: "pgPower", label: "Playgroup Power", defaultDir: "desc", numeric: true },
 ];
 
 // ---------- deriving players/decks from source data ----------
@@ -504,7 +504,7 @@ function renderPlayersTable() {
     const headRow = document.createElement("tr");
     for (const col of PLAYER_DECK_COLUMNS) {
       const th = document.createElement("th");
-      th.className = "sortable";
+      th.className = col.numeric ? "sortable num" : "sortable";
       const isActive = sortState.column === col.key;
       th.textContent = col.label + (isActive ? (sortState.direction === "desc" ? " ▾" : " ▴") : "");
       if (isActive) th.classList.add("sorted");
@@ -951,7 +951,7 @@ function renderWinRatesTable(data) {
 
   for (const col of WINRATES_COLUMNS) {
     const th = document.createElement("th");
-    th.className = "sortable";
+    th.className = "sortable num"; // both columns here are numeric/right-aligned
     const isActive = winRatesSortColumn === col.key;
     th.textContent = col.label + (isActive ? (winRatesSortDirection === "desc" ? " ▾" : " ▴") : "");
     if (isActive) th.classList.add("sorted");

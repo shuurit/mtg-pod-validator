@@ -229,10 +229,15 @@ header h1 {
 }
 
 .winrates-table th.sortable {
-  text-align: right;
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
+}
+
+/* Only numeric sortable columns right-align -- a text column like Deck
+   stays left-aligned to match its own (left-aligned) data cells below it. */
+.winrates-table th.sortable.num {
+  text-align: right;
 }
 .winrates-table th.sortable:hover {
   color: var(--accent);
