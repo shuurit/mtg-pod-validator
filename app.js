@@ -367,6 +367,25 @@ function formatPower(power) {
   return power.toFixed(1);
 }
 
+// Illustrative-only thresholds (not a canonical scale defined anywhere else
+// in this app) -- just enough to bucket a deck's power into a color so a
+// player's whole pool reads visually at a glance instead of needing to
+// parse a column of numbers. Reuses the existing good/warn/bad tokens
+// already established for banners/result-rows elsewhere.
+function powerTierClass(power) {
+  if (power < 2.5) return "power-chip-low";
+  if (power < 3.2) return "power-chip-mid";
+  if (power < 3.7) return "power-chip-high";
+  return "power-chip-max";
+}
+
+function buildPowerChip(power) {
+  const chip = document.createElement("span");
+  chip.className = `power-chip ${powerTierClass(power)}`;
+  chip.textContent = formatPower(power);
+  return chip;
+}
+
 // Looks up a deck's power_level as playgroup.gg itself has it rated, for
 // comparison against our own tracked Power column. Matches by playgroup
 // deck ID first (backfilled onto most rows via deck-strength.xlsx column
@@ -449,7 +468,7 @@ function renderPlayersTable() {
       const pgPower = findPlaygroupPowerLevel(player.name, deck);
       return [
         deck.name,
-        { text: formatPower(deck.power), className: "num" },
+        { node: buildPowerChip(deck.power), className: "num" },
         { text: pgPower === null ? "—" : formatPower(pgPower), className: "num" },
       ];
     });

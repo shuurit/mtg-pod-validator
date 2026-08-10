@@ -465,6 +465,20 @@ td.num {
   font-variant-numeric: tabular-nums;
 }
 
+/* Illustrative power-tier thresholds -- see powerTierClass in app.js. */
+.power-chip {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.power-chip-low { background: var(--accent-soft); color: var(--accent); }
+.power-chip-mid { background: var(--good-bg); color: var(--good); }
+.power-chip-high { background: var(--warn-bg); color: var(--warn); }
+.power-chip-max { background: var(--bad-bg); color: var(--bad); }
+
 .slot {
   display: grid;
   grid-template-columns: 90px 1fr 1fr;
