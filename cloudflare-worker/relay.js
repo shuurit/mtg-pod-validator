@@ -447,19 +447,42 @@ async function handleGamesWrite(request, env, ctx) {
 
   const nextRow = await env.DB.prepare("SELECT COALESCE(MAX(game_num), 0) + 1 AS next FROM games WHERE season_id = ?")
     .bind(seasonId).first();
-  const gameNum = nextRow.next;
+  let gameNum = nextRow.next;
 
+  // Two UNIQUE constraints can fail here (playgroup_game_id, and
+  // (season_id, game_num)) and they mean different things -- a genuine
+  // duplicate submission of the same real game, vs. two DIFFERENT games
+  // racing for the same game_num (gameNum was computed from a snapshot
+  // a moment ago; another request can insert in between). SQLite's error
+  // message names the column(s) involved, so check specifically rather
+  // than treating any UNIQUE failure as "already logged" -- that was
+  // actively misleading for a numbering race, and silently uncaught
+  // (raw 500) for a game with no playgroupGameId at all. The numbering
+  // race is retried a few times (recomputing gameNum each time) since
+  // it's transient by nature; a genuine duplicate isn't retried.
   let gameId;
-  try {
-    const insertResult = await env.DB.prepare(
-      "INSERT INTO games (season_id, game_num, played_at, pod_size, playgroup_game_id) VALUES (?, ?, ?, ?, ?)"
-    ).bind(seasonId, gameNum, payload.date, payload.podSize, payload.playgroupGameId ?? null).run();
-    gameId = insertResult.meta.last_row_id;
-  } catch (err) {
-    if (String(err.message).includes("UNIQUE") && payload.playgroupGameId) {
-      return jsonResponse({ error: `This game (playgroup_game_id=${payload.playgroupGameId}) has already been logged.` }, 409);
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const insertResult = await env.DB.prepare(
+        "INSERT INTO games (season_id, game_num, played_at, pod_size, playgroup_game_id) VALUES (?, ?, ?, ?, ?)"
+      ).bind(seasonId, gameNum, payload.date, payload.podSize, payload.playgroupGameId ?? null).run();
+      gameId = insertResult.meta.last_row_id;
+      break;
+    } catch (err) {
+      const msg = String(err.message);
+      if (!msg.includes("UNIQUE")) throw err;
+
+      if (msg.includes("playgroup_game_id")) {
+        return jsonResponse({ error: `This game (playgroup_game_id=${payload.playgroupGameId}) has already been logged.` }, 409);
+      }
+      if (msg.includes("game_num") && attempt < 3) {
+        const retryRow = await env.DB.prepare("SELECT COALESCE(MAX(game_num), 0) + 1 AS next FROM games WHERE season_id = ?")
+          .bind(seasonId).first();
+        gameNum = retryRow.next;
+        continue;
+      }
+      return jsonResponse({ error: "Couldn't assign a game number (too many concurrent submissions) -- please try submitting again." }, 409);
     }
-    throw err;
   }
 
   // The game_results rows are batched together (one atomic transaction),
