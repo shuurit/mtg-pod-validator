@@ -61,6 +61,15 @@
  *   alongside the still-live XLSX-based data with zero production risk
  *   until the app actually cuts over.
  *
+ * - POST /games, POST /roster -> DB (D1): writes to the same database --
+ *   new endpoints, not replacements for POST / / POST /apply-roster-update
+ *   above (those still dispatch to GitHub; nothing calls these new ones
+ *   yet). POST /games resolves the season from playgroup.gg's *current*
+ *   active league itself (never trusted from the client), auto-creating
+ *   one the first time a league is seen -- starting a new league in
+ *   playgroup.gg is what starts a new season here, the moment its first
+ *   game is submitted, no separate manual step.
+ *
  * Deploy with: wrangler deploy
  * Secrets:     wrangler secret put GITHUB_TOKEN
  *              wrangler secret put PLAYGROUP_API_KEY
@@ -307,6 +316,234 @@ async function handleApplyRosterUpdate(request, env) {
   }
 
   return jsonResponse({ ok: true }, 202);
+}
+
+// ---------- POST /games, POST /roster : D1 writes ----------
+// D1 migration Phase 3. These are new endpoints (not replacements for
+// POST / or POST /apply-roster-update above, which still dispatch to
+// GitHub) -- nothing calls them yet. See the migration plan doc.
+
+// Direct port of computeGameRowFormulas in app.js -- verified exact
+// against the spreadsheet's own cached values earlier this session.
+function computeGameRowFormulas({ commanderStrength, otherStrengths, result, podSize, knockouts, place, tov, popOff, disruptions, recoveries, gamesClearlyBehind, bracket }) {
+  const J = result - (1 / podSize);
+  const K = ((knockouts - ((podSize - 1) / podSize)) - (-5 / 6)) / 5;
+  const otherAvg = otherStrengths.length ? otherStrengths.reduce((a, b) => a + b, 0) / (podSize - 1) : 0;
+  const L = commanderStrength - otherAvg;
+  const M = 0.5 + (L * 0.09);
+  const N = ((podSize - (place - 1)) / podSize) * (knockouts !== 0 ? (knockouts + podSize) / podSize : 1);
+  const O = (N - (1 / 6)) / (10 / 6);
+  const Q = result === 1
+    ? (((1 - ((tov - 3) / 15)) * 0.5) + 0.5)
+    : ((tov / 18) * 0.5);
+  const U = disruptions === 0 ? 1 : (recoveries / disruptions);
+  const X = (O * 0.3) + (Q * 0.175) + (popOff * 0.175) + (U * 0.175) + ((1 - gamesClearlyBehind) * 0.175) + bracket;
+  return { J, K, L, M, N, O, Q, U, X };
+}
+
+// Same normalization as normalizeCommanderName/stripAccents in app.js.
+// Ported server-side deliberately, not just trusted from the client: this
+// is a write path with real referential-integrity consequences (picking
+// the wrong deck_id misattributes a real game's stats forever), and the
+// accented-commander LOOKUP mismatch found earlier this session happened
+// specifically because nothing enforced this at write time.
+function stripAccentsForMatch(s) {
+  return (s || "").normalize("NFKD").replace(/[̀-ͯ]/g, "");
+}
+function normalizeCommanderForMatch(s) {
+  return stripAccentsForMatch(s || "").toLowerCase().split(/[,/]/)[0].trim();
+}
+
+// Resolves which season a new game belongs to, from playgroup.gg's
+// *current* active league -- never trusted from the client (see the
+// migration plan's Phase 3 season-resolution design). Auto-creates a
+// season the first time a league is seen, using the league's own name as
+// the label.
+async function resolveSeasonId(env) {
+  const activeLeague = await getActiveLeagueId(env);
+  const leagueId = String(activeLeague.id);
+
+  let row = await env.DB.prepare("SELECT id FROM seasons WHERE playgroup_league_id = ?").bind(leagueId).first();
+  if (row) return row.id;
+
+  // INSERT OR IGNORE + re-SELECT rather than a plain INSERT: two
+  // near-simultaneous first-games-of-a-new-league would otherwise race to
+  // create two season rows. The unique index on playgroup_league_id makes
+  // the loser of that race a no-op instead of an error, and both requests
+  // resolve to the same season either way.
+  await env.DB.prepare("INSERT OR IGNORE INTO seasons (label, playgroup_league_id) VALUES (?, ?)")
+    .bind(activeLeague.name, leagueId).run();
+  row = await env.DB.prepare("SELECT id FROM seasons WHERE playgroup_league_id = ?").bind(leagueId).first();
+  return row.id;
+}
+
+async function handleGamesWrite(request, env) {
+  let payload;
+  try {
+    payload = await request.json();
+  } catch {
+    return jsonResponse({ error: "Invalid JSON" }, 400);
+  }
+  if (!isValidGamePayload(payload)) {
+    return jsonResponse({ error: "Payload missing required fields" }, 400);
+  }
+
+  let seasonId;
+  try {
+    seasonId = await resolveSeasonId(env);
+  } catch (err) {
+    return jsonResponse({ error: "Failed to resolve current season from playgroup.gg", detail: err.message }, 502);
+  }
+
+  // Resolve every participant's player_id/deck_id up front, before writing
+  // anything -- a game should fail whole, not land half-written with a
+  // missing or misattributed participant. Deliberately stricter than the
+  // client-side default-suggestion matching in app.js (exact normalized
+  // match only, no startsWith fallback tier): that logic is just
+  // pre-filling a field a human reviews before submitting, this is what
+  // actually gets persisted.
+  const resolved = [];
+  for (const p of payload.participants) {
+    const player = await env.DB.prepare("SELECT id FROM players WHERE name = ?").bind(p.player).first();
+    if (!player) {
+      return jsonResponse({ error: `Unknown player: ${p.player}` }, 400);
+    }
+    const target = normalizeCommanderForMatch(p.commander);
+    const { results: decks } = await env.DB.prepare("SELECT id, name FROM decks WHERE player_id = ?").bind(player.id).all();
+    const matches = decks.filter(d => normalizeCommanderForMatch(d.name) === target);
+    if (matches.length === 0) {
+      return jsonResponse({ error: `No deck found for ${p.player} matching commander "${p.commander}" -- add the deck first via Update the App.` }, 400);
+    }
+    if (matches.length > 1) {
+      return jsonResponse({ error: `Ambiguous deck match for ${p.player} / "${p.commander}" (${matches.length} candidates) -- can't resolve safely.` }, 400);
+    }
+    resolved.push({ ...p, playerId: player.id, deckId: matches[0].id });
+  }
+
+  const nextRow = await env.DB.prepare("SELECT COALESCE(MAX(game_num), 0) + 1 AS next FROM games WHERE season_id = ?")
+    .bind(seasonId).first();
+  const gameNum = nextRow.next;
+
+  let gameId;
+  try {
+    const insertResult = await env.DB.prepare(
+      "INSERT INTO games (season_id, game_num, played_at, pod_size, playgroup_game_id) VALUES (?, ?, ?, ?, ?)"
+    ).bind(seasonId, gameNum, payload.date, payload.podSize, payload.playgroupGameId ?? null).run();
+    gameId = insertResult.meta.last_row_id;
+  } catch (err) {
+    if (String(err.message).includes("UNIQUE") && payload.playgroupGameId) {
+      return jsonResponse({ error: `This game (playgroup_game_id=${payload.playgroupGameId}) has already been logged.` }, 409);
+    }
+    throw err;
+  }
+
+  // The game_results rows are batched together (one atomic transaction),
+  // but not atomic with the games insert above -- D1 needs games.id
+  // (auto-generated) to build these statements, so it can't be known
+  // before that first insert runs. A crash in between would leave an
+  // orphan game row with zero results, which is rare, obviously visible
+  // (it'd break the aggregates), and recoverable by hand -- an acceptable
+  // tradeoff for a small low-traffic app, not a financial system.
+  const strengths = resolved.map(p => p.strength);
+  const responseResults = [];
+  const gameResultStmts = resolved.map((p, i) => {
+    const otherStrengths = strengths.filter((_, j) => j !== i);
+    const result = p.result === "win" ? 1 : 0;
+    const f = computeGameRowFormulas({
+      commanderStrength: p.strength,
+      otherStrengths,
+      result,
+      podSize: payload.podSize,
+      knockouts: p.knockouts,
+      place: p.place,
+      tov: p.tov,
+      popOff: p.popOff,
+      disruptions: p.disruptions,
+      recoveries: p.recoveries,
+      gamesClearlyBehind: p.gamesClearlyBehind,
+      bracket: p.bracket,
+    });
+    responseResults.push({ player: p.player, commander: p.commander, result: p.result, gameCalculatedDeckStrength: f.X });
+    return env.DB.prepare(`
+      INSERT INTO game_results (
+        game_id, player_id, deck_id, commander_strength, result, place, knockouts, tov,
+        pop_off, disruptions, recoveries, games_clearly_behind, bracket,
+        adjusted_pod_size_score, knockout_score, deck_strength_differential, win_probability,
+        player_score, normalized_player_score, normalized_tov, deck_resilience_score,
+        game_calculated_deck_strength
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      gameId, p.playerId, p.deckId, p.strength, result, p.place, p.knockouts, p.tov,
+      p.popOff, p.disruptions, p.recoveries, p.gamesClearlyBehind, p.bracket,
+      f.J, f.K, f.L, f.M, f.N, f.O, f.Q, f.U, f.X
+    );
+  });
+  await env.DB.batch(gameResultStmts);
+
+  return jsonResponse({ ok: true, gameId, seasonId, gameNum, results: responseResults }, 201);
+}
+
+// New players + new decks for existing players, in one combined write --
+// mirrors the existing single-submit-button UX in app.js's Update the App
+// tab (renderRosterUpdateSubmit posts both newPlayers and
+// newDecksForExisting together), unlike the plan doc's original "POST
+// /players, POST /decks" split, which would have made the client
+// orchestrate two calls and reconcile a partial failure between them.
+//
+// No KV dedupe guard (unlike handleApplyRosterUpdate above) -- that
+// exists there specifically because the GitHub Action round trip takes
+// 1-3 minutes, long enough for a second click to beat a disabled-button
+// guard. A D1 write lands in ~100-300ms, far too narrow a window for that
+// same concern to carry the same weight. A duplicate player name is still
+// caught (see below); a duplicate deck name for the same player is not --
+// decks have no uniqueness constraint yet, since nothing currently
+// submits at high enough frequency or low enough supervision for that gap
+// to matter in practice. Worth a real constraint if that ever changes.
+async function handleRosterWrite(request, env) {
+  let payload;
+  try {
+    payload = await request.json();
+  } catch {
+    return jsonResponse({ error: "Invalid JSON" }, 400);
+  }
+  if (!isValidRosterUpdatePayload(payload)) {
+    return jsonResponse({ error: "Payload missing required fields" }, 400);
+  }
+
+  const createdPlayers = [];
+  const createdDecks = [];
+
+  for (const p of payload.newPlayers) {
+    const existing = await env.DB.prepare("SELECT id FROM players WHERE name = ?").bind(p.displayName).first();
+    if (existing) {
+      return jsonResponse({ error: `A player named "${p.displayName}" already exists.` }, 409);
+    }
+    const insertPlayer = await env.DB.prepare("INSERT INTO players (name, playgroup_username) VALUES (?, ?)")
+      .bind(p.displayName, p.username).run();
+    const playerId = insertPlayer.meta.last_row_id;
+    createdPlayers.push({ id: playerId, name: p.displayName, username: p.username });
+
+    if (p.decks.length) {
+      const deckStmts = p.decks.map(d =>
+        env.DB.prepare("INSERT INTO decks (player_id, name, baseline_power, playgroup_deck_id) VALUES (?, ?, ?, ?)")
+          .bind(playerId, d.name, d.power, d.playgroupDeckId != null ? String(d.playgroupDeckId) : null)
+      );
+      await env.DB.batch(deckStmts);
+    }
+    createdDecks.push(...p.decks.map(d => ({ player: p.displayName, name: d.name })));
+  }
+
+  for (const d of payload.newDecksForExisting) {
+    const player = await env.DB.prepare("SELECT id FROM players WHERE name = ?").bind(d.player).first();
+    if (!player) {
+      return jsonResponse({ error: `Unknown player: ${d.player}` }, 400);
+    }
+    await env.DB.prepare("INSERT INTO decks (player_id, name, baseline_power, playgroup_deck_id) VALUES (?, ?, ?, ?)")
+      .bind(player.id, d.name, d.power, d.playgroupDeckId != null ? String(d.playgroupDeckId) : null).run();
+    createdDecks.push({ player: d.player, name: d.name });
+  }
+
+  return jsonResponse({ ok: true, createdPlayers, createdDecks }, 201);
 }
 
 // ---------- GET /playgroup-games : live playgroup.gg read ----------
@@ -904,6 +1141,14 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/apply-roster-update") {
       return handleApplyRosterUpdate(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/games") {
+      return handleGamesWrite(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/roster") {
+      return handleRosterWrite(request, env);
     }
 
     return new Response("Not found", { status: 404, headers: corsHeaders() });
