@@ -124,6 +124,20 @@ const RECLASSIFY_MIN_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 // makes this cheap enough to run fresh on every request.
 const MAX_MEMBER_DECK_LOOKUPS_PER_RUN = 40;
 
+// getActiveLeagueId's two sequential playgroup.gg calls (/me, then
+// /users/{id}/playgroups) measured ~1.6s combined in production --
+// dominating the total time of every endpoint that calls it
+// (/playgroup-games, /roster-diff, POST /games' resolveSeasonId). The
+// active league only actually changes when a season rolls over on
+// playgroup.gg's end, weeks apart -- a cache window this short is
+// effectively free correctness-wise, while cutting that 1.6s to ~0 for
+// any request that lands within it of another. 60s, not the 45s
+// originally intended -- Workers KV rejects any expirationTtl below 60
+// (confirmed the hard way: every write 400'd, which took down every
+// endpoint that calls getActiveLeagueId until this was caught).
+const ACTIVE_LEAGUE_CACHE_KEY = "active_league";
+const ACTIVE_LEAGUE_CACHE_TTL_SECONDS = 60;
+
 function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
@@ -313,9 +327,9 @@ async function handleApplyRosterUpdate(request, env) {
 }
 
 // ---------- POST /games, POST /roster : D1 writes ----------
-// D1 migration Phase 3. These are new endpoints (not replacements for
-// POST / or POST /apply-roster-update above, which still dispatch to
-// GitHub) -- nothing calls them yet. See the migration plan doc.
+// app.js's actual submit paths (Games to Update / Update the App) --
+// POST / and POST /apply-roster-update above still exist but nothing
+// calls them anymore. See the migration plan doc for the full rationale.
 
 // Direct port of computeGameRowFormulas in app.js -- verified exact
 // against the spreadsheet's own cached values earlier this session.
@@ -368,10 +382,27 @@ async function resolveSeasonId(env) {
   await env.DB.prepare("INSERT OR IGNORE INTO seasons (label, playgroup_league_id) VALUES (?, ?)")
     .bind(activeLeague.name, leagueId).run();
   row = await env.DB.prepare("SELECT id FROM seasons WHERE playgroup_league_id = ?").bind(leagueId).first();
-  return row.id;
+  if (row) return row.id;
+
+  // Still no row for this league_id -- the INSERT OR IGNORE didn't no-op
+  // on the playgroup_league_id race it was built for, it silently no-op'd
+  // on seasons.label instead: label is ALSO unique (see schema.sql), and
+  // playgroup.gg's league name is human-chosen free text, so a different
+  // league reusing an old name is possible. Not safe to guess through --
+  // fail loud with enough detail to actually fix it.
+  const labelClash = await env.DB.prepare("SELECT id, playgroup_league_id FROM seasons WHERE label = ?")
+    .bind(activeLeague.name).first();
+  if (labelClash) {
+    throw new Error(
+      `playgroup.gg's active league is named "${activeLeague.name}", which already exists as a season here ` +
+      `(id ${labelClash.id}) attached to a different league (${labelClash.playgroup_league_id ?? "none"}). ` +
+      `Rename the league on playgroup.gg, or resolve this by hand in D1.`
+    );
+  }
+  throw new Error(`Failed to resolve or create a season for league ${leagueId} ("${activeLeague.name}").`);
 }
 
-async function handleGamesWrite(request, env) {
+async function handleGamesWrite(request, env, ctx) {
   let payload;
   try {
     payload = await request.json();
@@ -477,16 +508,21 @@ async function handleGamesWrite(request, env) {
   // Fires post-discord-live.yml, which reads the just-written game back
   // out of D1 (via GET /players, /games, /deck-win-rates -- see
   // discord_report.py) and posts the rankings/deck-strength/win-rate
-  // screenshots. Best-effort: the game itself is already durably written
-  // above, so a dispatch failure (GitHub down, token expired) doesn't
-  // undo it or fail this response -- discordPostDispatched tells the
-  // client whether it's expected, without blocking on it.
-  const dispatchErr = await dispatchGithubEvent(env, "post-discord", {});
-  if (dispatchErr) {
-    console.error("post-discord dispatch failed:", dispatchErr);
-  }
+  // screenshots. Fire-and-forget via ctx.waitUntil (same pattern
+  // isRateLimited already uses for its own KV-adjacent write below) --
+  // the game itself is already durably written above, and app.js's
+  // submit-and-wait UX is built on D1 writes landing in ~100-300ms
+  // (see the comment above its fetch to this endpoint); awaiting an
+  // extra GitHub API round trip here before responding would quietly
+  // break that. A dispatch failure (GitHub down, token expired) has
+  // nothing left to undo -- it's logged, not surfaced to the client.
+  ctx.waitUntil(
+    dispatchGithubEvent(env, "post-discord", {}).then(err => {
+      if (err) console.error("post-discord dispatch failed:", err);
+    })
+  );
 
-  return jsonResponse({ ok: true, gameId, seasonId, gameNum, results: responseResults, discordPostDispatched: !dispatchErr }, 201);
+  return jsonResponse({ ok: true, gameId, seasonId, gameNum, results: responseResults }, 201);
 }
 
 // New players + new decks for existing players, in one combined write --
@@ -555,6 +591,9 @@ async function handleRosterWrite(request, env) {
 // ---------- GET /playgroup-games : live playgroup.gg read ----------
 
 async function getActiveLeagueId(env) {
+  const cached = await kvGetJson(env, ACTIVE_LEAGUE_CACHE_KEY, null);
+  if (cached) return cached;
+
   const meRes = await pgFetch("/me", env);
   if (!meRes.ok) throw new Error(`/me failed: HTTP ${meRes.status}`);
   const me = await meRes.json();
@@ -567,6 +606,8 @@ async function getActiveLeagueId(env) {
   if (!playgroup) throw new Error(`Playgroup ${PLAYGROUP_ID} not found for this account`);
   const active = (playgroup.leagues || []).find(l => l.active);
   if (!active) throw new Error(`No active league found for playgroup ${PLAYGROUP_ID}`);
+
+  await env.DECK_CACHE.put(ACTIVE_LEAGUE_CACHE_KEY, JSON.stringify(active), { expirationTtl: ACTIVE_LEAGUE_CACHE_TTL_SECONDS });
   return active;
 }
 
@@ -877,10 +918,10 @@ async function handleRosterDiff(env, ctx) {
 }
 
 // ---------- GET /players, /games, /rankings, /deck-win-rates : D1 reads ----------
-// D1 migration Phase 2 -- run alongside the existing XLSX-based data the
-// app still actually uses; nothing switches over to these until Phase 4.
-// See cloudflare-worker/schema.sql for the table layout and the migration
-// plan doc for the full rationale.
+// app.js reads /players and /games directly; the Discord scripts read
+// /deck-win-rates (see scripts/discord_report.py); /rankings is
+// currently unused by anything. See cloudflare-worker/schema.sql for the
+// table layout and the migration plan doc for the full rationale.
 
 // A deck's "current power": the most recent logged game's calculated
 // strength, falling back to its baseline -- same fallback behavior as
@@ -1181,7 +1222,7 @@ export default {
     }
 
     if (request.method === "POST" && url.pathname === "/games") {
-      return handleGamesWrite(request, env);
+      return handleGamesWrite(request, env, ctx);
     }
 
     if (request.method === "POST" && url.pathname === "/roster") {
