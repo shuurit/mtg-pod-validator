@@ -562,7 +562,12 @@ function renderPodSlots() {
       const opt = document.createElement("option");
       opt.value = p.id;
       opt.textContent = p.name;
-      if (p.id === slot.playerId) opt.selected = true;
+      // A <select>'s .value (and so slot.playerId, read from it) is always
+      // a string, but real D1 player ids are integers -- String() on both
+      // sides here (and at every other p.id/d.id comparison against a
+      // slot value below) so this works whether ids are D1 integers or
+      // the fallback roster's string slugs, without assuming either.
+      if (String(p.id) === slot.playerId) opt.selected = true;
       playerSelect.appendChild(opt);
     }
 
@@ -585,7 +590,7 @@ function renderPodSlots() {
 
     function refreshDeckOptions() {
       deckSelect.innerHTML = "";
-      const player = podPlayers.find(p => p.id === slot.playerId);
+      const player = podPlayers.find(p => String(p.id) === slot.playerId);
       const blank = document.createElement("option");
       blank.value = "";
       blank.textContent = player ? "Select deck…" : "—";
@@ -605,7 +610,7 @@ function renderPodSlots() {
           const opt = document.createElement("option");
           opt.value = d.id;
           opt.textContent = d.name;
-          if (d.id === slot.deckId) opt.selected = true;
+          if (String(d.id) === slot.deckId) opt.selected = true;
           deckSelect.appendChild(opt);
         }
       }
@@ -686,8 +691,8 @@ function runValidation() {
   }
 
   const entries = podSelections.map(s => {
-    const player = podPlayers.find(p => p.id === s.playerId);
-    const deck = player.decks.find(d => d.id === s.deckId);
+    const player = podPlayers.find(p => String(p.id) === s.playerId);
+    const deck = player.decks.find(d => String(d.id) === s.deckId);
     return {
       playerId: player.id,
       playerName: player.name,
