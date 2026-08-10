@@ -46,8 +46,8 @@
   <div id="tab-pod" class="tab-panel">
     <section class="card" id="manage-section">
       <h2>Players &amp; Decks</h2>
-      <p class="hint">Read-only — synced live from deck-strength.xlsx's Current Deck Strength tab. Only players with a playgroup.gg account in this playgroup are shown here.</p>
-      <p class="hint" id="sync-status">Loading latest data from deck-strength.xlsx…</p>
+      <p class="hint">Read-only — synced live from the app's database. Only players with a playgroup.gg account in this playgroup are shown here.</p>
+      <p class="hint" id="sync-status">Loading latest data…</p>
 
       <div id="players-table"></div>
     </section>
@@ -75,7 +75,7 @@
   <div id="tab-games-to-update" class="tab-panel" hidden>
     <section class="card">
       <h2>Games to Update</h2>
-      <p class="hint" id="gtu-intro">Games from playgroup.gg that aren't in the spreadsheet's Game Log yet. Fill in what playgroup.gg can't supply, then copy the finished row(s) into the real Game Log — this app never edits deck-strength.xlsx itself.</p>
+      <p class="hint" id="gtu-intro">Games from playgroup.gg that aren't logged yet. Fill in what playgroup.gg can't supply, then submit.</p>
       <p class="hint" id="gtu-status">Loading…</p>
       <div id="gtu-game-list"></div>
       <div id="gtu-form-area"></div>
@@ -85,7 +85,7 @@
   <div id="tab-update-app" class="tab-panel" hidden>
     <section class="card">
       <h2>Update the App</h2>
-      <p class="hint">New playgroup.gg members and new decks for tracked players, detected live — independent of whether a game's been played with them yet. Review, set a starting power for anything new, and submit once to add it all to the spreadsheet.</p>
+      <p class="hint">New playgroup.gg members and new decks for tracked players, detected live — independent of whether a game's been played with them yet. Review, set a starting power for anything new, and submit once to add it all.</p>
       <p class="hint" id="uta-status">Loading…</p>
       <div id="uta-list"></div>
       <div id="uta-form-area"></div>
@@ -95,7 +95,7 @@
   <div id="tab-winrates" class="tab-panel" hidden>
     <section class="card">
       <h2>Player Win Rates</h2>
-      <p class="hint">Read-only. Nothing on this tab can be edited — it's a side-by-side of playgroup.gg's tracked win rate and the spreadsheet's calculated Player Adjusted Win Rate.</p>
+      <p class="hint">Read-only. Nothing on this tab can be edited — it's a side-by-side of playgroup.gg's tracked win rate and the app's calculated Player Adjusted Win Rate.</p>
       <p class="hint" id="winrates-sync-status">Loading live data…</p>
       <div id="winrates-table"></div>
       <p class="hint" id="winrates-note"></p>
@@ -103,7 +103,6 @@
   </div>
 </div>
 
-<script src="xlsx.full.min.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

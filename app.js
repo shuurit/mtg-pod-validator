@@ -2,15 +2,24 @@ const RANGE_TOLERANCE = 1; // max power spread allowed within a pod
 const PLAYGROUP_URL = "https://playgroup.gg/tracker";
 
 // Cloudflare Worker relay. Set once the Worker is deployed (see
-// cloudflare-worker/README.md). GAME_SUBMIT_RELAY_URL empty disables
-// submission (Copy row still works); PLAYGROUP_GAMES_RELAY_URL empty
-// disables live playgroup.gg data (Games to Update and Player Win Rates
-// show a "not configured" message instead).
+// cloudflare-worker/README.md). GAME_SUBMIT_RELAY_URL/ROSTER_UPDATE_RELAY_URL
+// empty disables submission; PLAYGROUP_GAMES_RELAY_URL empty disables live
+// playgroup.gg data (Games to Update and Player Win Rates show a "not
+// configured" message instead).
+//
+// PLAYERS_RELAY_URL/GAMES_RELAY_URL read from the D1 database this app now
+// runs on (see cloudflare-worker/schema.sql) -- deck-strength.xlsx is no
+// longer read directly by the app at all. GAME_SUBMIT_RELAY_URL/
+// ROSTER_UPDATE_RELAY_URL write there too now, replacing the old GitHub
+// Actions dispatch path (POST // POST /apply-roster-update still exist on
+// the Worker for now but nothing here calls them anymore).
 const RELAY_BASE_URL = "https://mtg-pod-validator-relay.mattdomi18.workers.dev";
-const GAME_SUBMIT_RELAY_URL = RELAY_BASE_URL + "/";
+const PLAYERS_RELAY_URL = RELAY_BASE_URL + "/players";
+const GAMES_RELAY_URL = RELAY_BASE_URL + "/games";
+const GAME_SUBMIT_RELAY_URL = RELAY_BASE_URL + "/games";
 const PLAYGROUP_GAMES_RELAY_URL = RELAY_BASE_URL + "/playgroup-games";
 const ROSTER_DIFF_RELAY_URL = RELAY_BASE_URL + "/roster-diff";
-const ROSTER_UPDATE_RELAY_URL = RELAY_BASE_URL + "/apply-roster-update";
+const ROSTER_UPDATE_RELAY_URL = RELAY_BASE_URL + "/roster";
 
 // Fallback for knownPlaygroupPlayers below, used only until the Worker's
 // first response arrives. relay.js's USERNAME_TO_PLAYER is the real source
@@ -19,8 +28,8 @@ const ROSTER_UPDATE_RELAY_URL = RELAY_BASE_URL + "/apply-roster-update";
 // list is stale.
 const PLAYERS_WITH_PLAYGROUP_ACCOUNT = ["Becca", "Manny", "Mateo", "Ryan", "Michelle", "Red"];
 
-// Fallback roster shown only if deck-strength.xlsx fails to load at all
-// (e.g. offline). Real data always comes from Current Deck Strength.
+// Fallback roster shown only if the D1-backed /players read fails entirely
+// (e.g. offline, or the Worker's down). Real data always comes from D1.
 const DEFAULT_ROSTER = [
   { name: "Becca", decks: [
     ["Ms. Bumbleflower", 2.4],
@@ -159,14 +168,37 @@ function rowsToPlayers(rows) {
   return [...byName.values()];
 }
 
-// Called once with the DEFAULT_ROSTER fallback (so the UI isn't empty
-// before the first fetch resolves), then again with real rows every time
-// deck-strength.xlsx syncs successfully.
-function applyDeckStrengthRows(rows) {
-  players = rowsToPlayers(rows);
+// Shared tail of applying a freshly-built players array, regardless of
+// where it came from (DEFAULT_ROSTER fallback, or a real D1 read).
+function setPlayers(newPlayers) {
+  players = newPlayers;
   podPlayers = players.filter(p => knownPlaygroupPlayers.has(p.name));
   renderPlayersTable();
   renderPodSlots();
+}
+
+// Called once with the DEFAULT_ROSTER fallback (so the UI isn't empty
+// before the first fetch resolves) -- the real data source is
+// applyPlayersFromD1 below, called every time syncFromD1 succeeds.
+function applyDeckStrengthRows(rows) {
+  setPlayers(rowsToPlayers(rows));
+}
+
+// GET /players already returns players grouped with their decks nested
+// (unlike the old flat XLSX rows), so this bypasses rowsToPlayers entirely
+// -- just reshapes field names to match what the rest of the app already
+// expects. D1's real integer ids are used directly rather than slugified
+// strings; every consumer of player.id/deck.id already treats them as
+// opaque values (Map keys, dataset attributes, <option> values that
+// stringify automatically), so the format never mattered, only stability
+// across a re-sync -- which real database primary keys guarantee better
+// than a name-derived slug ever did.
+function applyPlayersFromD1(data) {
+  setPlayers(data.players.map(p => ({
+    id: p.id,
+    name: p.name,
+    decks: p.decks.map(d => ({ id: d.id, name: d.name, power: d.power, playgroupId: d.playgroupId })),
+  })));
 }
 
 // Picks up known_players from a /playgroup-games response, if it changed
@@ -186,144 +218,87 @@ function applyKnownPlayers(data) {
 
 applyDeckStrengthRows(rosterToRows(DEFAULT_ROSTER));
 
-// ---------- XLSX import ----------
+// ---------- D1 sync ----------
+// deck-strength.xlsx is no longer read by the app at all -- both of these
+// come from the Worker's D1-backed read endpoints instead (see
+// cloudflare-worker/schema.sql and relay.js's GET /players, GET /games).
 
-// Reads the "Current Deck Strength" tab. Its layout is: a bold player-name
-// row whose Power cell holds an =AVERAGE(...) formula over the deck rows
-// beneath it, followed by deck rows whose Power cell is itself a formula
-// (=IFERROR(LOOKUP(...), baseline) pulling the latest logged game's Game
-// Calculated Deck Strength, falling back to a manual baseline). We tell the
-// two apart by the formula itself, not just whether one exists.
-function extractRowsFromWorkbook(workbook) {
-  const sheetName =
-    workbook.SheetNames.find(n => n.trim().toLowerCase() === "current deck strength") ||
-    workbook.SheetNames.find(n => n.toLowerCase().includes("deck strength"));
-  if (!sheetName) {
-    throw new Error('No "Current Deck Strength" sheet found in this workbook.');
-  }
-
-  const sheet = workbook.Sheets[sheetName];
-  if (!sheet["!ref"]) return [];
-  const range = XLSX.utils.decode_range(sheet["!ref"]);
-
-  const rows = [];
-  let currentPlayer = null;
-  for (let r = range.s.r; r <= range.e.r; r++) {
-    const nameCell = sheet[XLSX.utils.encode_cell({ r, c: 0 })];
-    const powerCell = sheet[XLSX.utils.encode_cell({ r, c: 1 })];
-    const idCell = sheet[XLSX.utils.encode_cell({ r, c: 4 })]; // column E: Playgroup Deck ID
-    const name = nameCell && typeof nameCell.v === "string" ? nameCell.v.trim() : null;
-    if (!name || name.toLowerCase() === "decks") continue;
-
-    const isPlayerHeader = !!(powerCell && typeof powerCell.f === "string" && powerCell.f.trim().startsWith("AVERAGE"));
-    if (isPlayerHeader) {
-      currentPlayer = name;
-      continue;
-    }
-
-    const power = powerCell && typeof powerCell.v === "number" ? powerCell.v : NaN;
-    if (currentPlayer && Number.isFinite(power)) {
-      const playgroupId = idCell && idCell.v != null && idCell.v !== "" ? String(idCell.v).trim() : null;
-      rows.push({ name: currentPlayer, deck: name, power, playgroupId });
-    }
-  }
-  return rows;
-}
-
-// Name of the workbook this app auto-syncs from on every load, expected to
-// sit alongside index.html. Swap in each quarter's updated export under
-// this same filename — the app doesn't need to know the dated original name.
-const REPO_WORKBOOK_FILE = "deck-strength.xlsx";
-
-// The one place this app needs to know which season is current. Update this
-// (and nothing else in this file) when deck-strength.xlsx rolls to a new
-// Game Log tab -- see scripts/season_rollover.py.
-const CURRENT_SEASON_SHEET = "Game Log Season 3";
-
-// Rows already logged in the current season's Game Log tab, read fresh from
-// the workbook on every sync. Populated by syncFromRepoWorkbook; used by the
+// Rows for whichever season is currently active, read fresh on every sync.
+// Named gameLogSeason3Rows for historical reasons (kept as-is rather than
+// renamed across every call site in this file) -- it's no longer literally
+// scoped to "Season 3", just whichever season is current. Used by the
 // Games to Update tab to figure out which playgroup.gg games are missing,
-// and to recompute a player's full Player Adjusted Win Rate with a new game
-// added.
+// and to compute Player Adjusted Win Rate.
 let gameLogSeason3Rows = [];
 
-function extractGameLogFromWorkbook(workbook, sheetName) {
-  const sheet = workbook.Sheets[sheetName];
-  if (!sheet || !sheet["!ref"]) return [];
-  const range = XLSX.utils.decode_range(sheet["!ref"]);
-
-  const headerRowIndex = 1; // row 2 in Excel (row 1 is merged category labels)
-  const headerCols = {};
-  for (let c = range.s.c; c <= range.e.c; c++) {
-    const cell = sheet[XLSX.utils.encode_cell({ r: headerRowIndex, c })];
-    if (cell && typeof cell.v === "string") headerCols[cell.v.trim()] = c;
-  }
-
-  const get = (r, name) => {
-    const c = headerCols[name];
-    if (c === undefined) return undefined;
-    const cell = sheet[XLSX.utils.encode_cell({ r, c })];
-    return cell ? cell.v : undefined;
-  };
-
-  const rows = [];
-  for (let r = headerRowIndex + 1; r <= range.e.r; r++) {
-    const player = get(r, "Player Name");
-    if (!player) continue;
-    rows.push({
-      gameNum: get(r, "Game #"),
-      date: get(r, "Game Date"),
-      player,
-      commander: get(r, "Commander"),
-      playgroupGameId: get(r, "Playgroup Game ID"),
-      commanderStrength: get(r, "Commander Strength"),
-      result: get(r, "Game Result"),
-      podSize: get(r, "Pod Size"),
-      bracket: get(r, "Current Deck Bracket"),
-      J: get(r, "Adjusted Pod Size Win/Loss Score"),
-      K: get(r, "Knockout Score"),
-      M: get(r, "Win Probability based on Deck Strength"),
-    });
-  }
-  return rows;
+// GET /games returns every season's games, not just the current one (a
+// season never gets deleted, so history stays queryable). Player Adjusted
+// Win Rate/rankings have always been scoped to one season at a time --
+// Player Adjusted Ranks' own formulas were hardcoded to a single Game Log
+// tab, never combined across seasons -- so this filters down to just the
+// most-recently-created season (the highest seasonId; seasons are always
+// created in chronological order, whether from the original migration or
+// auto-created on a new league's first game) before handing rows off to
+// the rest of the app, matching that same one-season-at-a-time scope.
+function gameLogRowsFromD1(data) {
+  if (data.games.length === 0) return [];
+  const currentSeasonId = Math.max(...data.games.map(g => g.seasonId));
+  return data.games
+    .filter(g => g.seasonId === currentSeasonId)
+    .map(g => ({
+      gameNum: g.gameNum,
+      date: new Date(g.date),
+      player: g.player,
+      commander: g.commander,
+      playgroupGameId: g.playgroupGameId,
+      commanderStrength: g.commanderStrength,
+      result: g.result,
+      podSize: g.podSize,
+      bracket: g.bracket,
+      J: g.adjustedPodSizeScore,
+      K: g.knockoutScore,
+      M: g.winProbability,
+    }));
 }
 
-async function syncFromRepoWorkbook() {
+async function syncFromD1() {
   const statusEl = document.getElementById("sync-status");
   try {
-    const res = await fetch(REPO_WORKBOOK_FILE, { cache: "no-store" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const buffer = await res.arrayBuffer();
-    const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
-    const rows = extractRowsFromWorkbook(workbook);
-    if (rows.length === 0) throw new Error("no decks found in the sheet");
+    const [playersRes, gamesRes] = await Promise.all([
+      fetch(PLAYERS_RELAY_URL, { cache: "no-store" }),
+      fetch(GAMES_RELAY_URL, { cache: "no-store" }),
+    ]);
+    if (!playersRes.ok) throw new Error(`/players failed: HTTP ${playersRes.status}`);
+    if (!gamesRes.ok) throw new Error(`/games failed: HTTP ${gamesRes.status}`);
+    const playersData = await playersRes.json();
+    const gamesData = await gamesRes.json();
+    if (playersData.players.length === 0) throw new Error("no players returned");
 
-    applyDeckStrengthRows(rows);
+    applyPlayersFromD1(playersData);
     if (statusEl) {
       const deckCount = players.reduce((n, p) => n + p.decks.length, 0);
-      statusEl.textContent = `Synced from ${REPO_WORKBOOK_FILE} (${players.length} players, ${deckCount} decks; ${podPlayers.length} shown in Deck Strength Validator).`;
+      statusEl.textContent = `Synced (${players.length} players, ${deckCount} decks; ${podPlayers.length} shown in Deck Strength Validator).`;
     }
 
-    gameLogSeason3Rows = extractGameLogFromWorkbook(workbook, CURRENT_SEASON_SHEET);
+    gameLogSeason3Rows = gameLogRowsFromD1(gamesData);
     renderGamesToUpdate();
     renderWinRatesTable(playgroupGamesData);
     // computeRosterDiff (inside renderUpdateAppTab) reads the `players`
-    // array just rebuilt above by applyDeckStrengthRows. refreshEverything()
-    // runs this and loadRosterDiff() in parallel, and XLSX parsing is
-    // slower than the /roster-diff JSON fetch, so loadRosterDiff() often
-    // resolves first and renders Update the App against the *previous*
-    // players array -- e.g. a just-submitted new player not showing up in
-    // `players` yet, so they still look untracked and their decks still
-    // look pending even though the submission fully landed. Nothing else
-    // re-renders that tab once `players` catches up, so it has to happen
-    // here too, not just in loadRosterDiff().
+    // array just rebuilt above by applyPlayersFromD1. refreshEverything()
+    // runs this and loadRosterDiff() in parallel, and this fetch can
+    // resolve after /roster-diff does, so loadRosterDiff() often renders
+    // Update the App against the *previous* players array -- e.g. a
+    // just-submitted new player not showing up in `players` yet, so they
+    // still look untracked even though the submission fully landed.
+    // Nothing else re-renders that tab once `players` catches up, so it
+    // has to happen here too, not just in loadRosterDiff().
     if (!isEditingRosterUpdateForm()) renderUpdateAppTab();
   } catch (err) {
     if (statusEl) {
-      statusEl.textContent = `Using locally saved data — couldn't load ${REPO_WORKBOOK_FILE} (${err.message}).`;
+      statusEl.textContent = `Using locally saved data — couldn't load live data (${err.message}).`;
     }
     const gtuStatus = document.getElementById("gtu-status");
-    if (gtuStatus) gtuStatus.textContent = `Couldn't load ${REPO_WORKBOOK_FILE} — Games to Update needs it to know what's already logged.`;
+    if (gtuStatus) gtuStatus.textContent = `Couldn't load live data — Games to Update needs it to know what's already logged.`;
   }
 }
 
@@ -889,11 +864,10 @@ const TREND_CLASS = { up: "trend-up", down: "trend-down", steady: "trend-steady"
 // Renders the Player Win Rates table from an already-fetched
 // /playgroup-games response -- see refreshPlaygroupGames below, which is
 // the only place that actually fetches it. Called both from there and from
-// syncFromRepoWorkbook (a fresh gameLogSeason3Rows changes the Adjusted
-// Win Rate column even when the playgroup.gg data itself hasn't changed),
-// and from applyOptimisticGameSubmit for an instant, zero-network re-render
-// right after a game is submitted. Safe to call with data === null (e.g.
-// before the first fetch resolves) -- just leaves the status text as-is.
+// syncFromD1 (a fresh gameLogSeason3Rows changes the Adjusted Win Rate
+// column even when the playgroup.gg data itself hasn't changed). Safe to
+// call with data === null (e.g. before the first fetch resolves) -- just
+// leaves the status text as-is.
 function renderWinRatesTable(data) {
   const statusEl = document.getElementById("winrates-sync-status");
   const noteEl = document.getElementById("winrates-note");
@@ -993,7 +967,7 @@ function renderWinRatesTable(data) {
       adjTd.textContent = `${row.adjPct.toFixed(3)}% (${row.adjWins}-${row.adjLosses})`;
     } else {
       adjTd.className += " muted";
-      adjTd.innerHTML = `<span class="na">No games logged in ${CURRENT_SEASON_SHEET}</span>`;
+      adjTd.innerHTML = `<span class="na">No games logged this season</span>`;
     }
     tr.appendChild(adjTd);
 
@@ -1029,7 +1003,7 @@ function renderWinRatesTable(data) {
   noteEl.innerHTML = "";
   const note = document.createElement("span");
   note.className = "note-line";
-  note.textContent = `Scoped to the active league (${data.league || "unknown"}). Player Adjusted Win Rate is computed live from the spreadsheet's ${CURRENT_SEASON_SHEET}.`;
+  note.textContent = `Scoped to the active league (${data.league || "unknown"}). Player Adjusted Win Rate is computed live from the current season's Game Log.`;
   noteEl.appendChild(note);
 }
 
@@ -1040,9 +1014,9 @@ let playgroupGamesData = null;
 // The one place /playgroup-games actually gets fetched. Games to Update and
 // Player Win Rates used to each fetch it independently -- up to 3 calls to
 // the same endpoint on a single page load (direct loadWinRates() call,
-// loadWinRates() again via syncFromRepoWorkbook, and loadPlaygroupGames())
-// for data that's identical every time. Both now render from this single
-// fetch instead.
+// loadWinRates() again via syncFromD1, and loadPlaygroupGames()) for data
+// that's identical every time. Both now render from this single fetch
+// instead.
 async function refreshPlaygroupGames() {
   const gtuStatusEl = document.getElementById("gtu-status");
   const wrStatusEl = document.getElementById("winrates-sync-status");
@@ -1520,54 +1494,6 @@ function openGameForm(pgGame) {
   areaEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
-// Same reasoning as applyOptimisticRosterUpdate: the real round trip
-// (GitHub Action recalculating deck-strength.xlsx, the Pages rebuild, then
-// this page's next 60s poll) takes 1-3 minutes. This merges the
-// just-submitted game into gameLogSeason3Rows -- so Games to Update drops
-// it from the missing list and Player Win Rates' Adjusted Win Rate column
-// picks it up immediately, both computed client-side from this same array
-// already -- and updates each played deck's power in players/podPlayers to
-// its freshly computed Game Calculated Deck Strength (row.X), mirroring
-// what Current Deck Strength's own LOOKUP formula will settle on once it
-// recalcs (it always resolves to the newest logged game for that
-// player+commander, which this always is). Safe to be optimistic: the next
-// real syncFromRepoWorkbook() rebuilds both arrays from scratch, so nothing
-// here lingers or conflicts with the authoritative data.
-function applyOptimisticGameSubmit(pgGame, podSize, rows, gameNum) {
-  const gameDate = new Date(pgGame.date);
-
-  for (const row of rows) {
-    gameLogSeason3Rows.push({
-      gameNum,
-      date: gameDate,
-      player: row.player,
-      commander: row.commander,
-      commanderStrength: row.strength,
-      result: row.result === "win" ? 1 : 0,
-      podSize,
-      bracket: row.bracket,
-      J: row.J,
-      K: row.K,
-      M: row.M,
-    });
-
-    const player = players.find(p => p.name === row.player);
-    if (!player) continue;
-    const target = normalizeCommanderName(row.commander);
-    const deck = player.decks.find(d => normalizeCommanderName(d.name) === target) ||
-      player.decks.find(d =>
-        normalizeCommanderName(d.name).startsWith(target) || target.startsWith(normalizeCommanderName(d.name))
-      );
-    if (deck) deck.power = row.X;
-  }
-
-  podPlayers = players.filter(p => knownPlaygroupPlayers.has(p.name));
-  renderPlayersTable();
-  renderPodSlots();
-  renderGamesToUpdate();
-  renderWinRatesTable(playgroupGamesData);
-}
-
 function calculateGameToUpdate(pgGame, box, resultsEl) {
   const podSize = pgGame.pod_size;
   const readInputs = (i) => ({
@@ -1619,8 +1545,6 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
     return { ...inp, ...formulas };
   });
 
-  const nextGameNum = Math.max(0, ...gameLogSeason3Rows.map(r => Number(r.gameNum) || 0)) + 1;
-
   resultsEl.innerHTML = "";
 
   const tableRows = rows.map(row => {
@@ -1630,43 +1554,21 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
     const delta = after.B - before.B;
     const deltaStr = `${delta >= 0 ? "+" : ""}${(delta * 100).toFixed(2)}pt`;
 
-    const rowValues = [
-      pgGame.date, nextGameNum, row.player, row.commander, row.strength.toFixed(1),
-      row.result === "win" ? 1 : 0, row.place, podSize, row.knockouts,
-      row.J.toFixed(6), row.K.toFixed(6), row.L.toFixed(6), row.M.toFixed(6),
-      row.N.toFixed(6), row.O.toFixed(6), row.tov, row.Q.toFixed(6), row.popOff,
-      row.disruptions, row.recoveries, row.U.toFixed(6), row.behind, row.bracket, row.X.toFixed(6),
-    ];
-
-    const copyBtn = document.createElement("button");
-    copyBtn.textContent = "Copy row";
-    copyBtn.addEventListener("click", () => {
-      navigator.clipboard.writeText(rowValues.join("\t"));
-      copyBtn.textContent = "Copied!";
-      setTimeout(() => { copyBtn.textContent = "Copy row"; }, 1500);
-    });
-
     return [
       row.player,
       row.commander,
       row.result === "win" ? "Win" : "Loss",
       `${(before.B * 100).toFixed(2)}% (${before.wins}-${before.losses})`,
       `${(after.B * 100).toFixed(2)}% (${after.wins}-${after.losses}) — ${deltaStr}`,
-      { node: copyBtn },
     ];
   });
 
   const { table } = buildTable(
     "gtu-results-table",
-    ["Player", "Commander", "Result", "Current PAWR", "PAWR w/ this game", ""],
+    ["Player", "Commander", "Result", "Current PAWR", "PAWR w/ this game"],
     tableRows
   );
   resultsEl.appendChild(table);
-
-  const hint = document.createElement("p");
-  hint.className = "hint";
-  hint.textContent = `Row order for pasting into ${CURRENT_SEASON_SHEET}: Game Date, Game #, Player Name, Commander, Commander Strength, Game Result, Place, Pod Size, Knockouts, Adjusted Pod Size Win/Loss Score, Knockout Score, Deck Strength Comparison Differential, Win Probability based on Deck Strength, Player Score, Normalized Player Score, TOV, Normalized TOV, Pop-Off, Disruptions, Successful Recoveries, Deck Resilience Score, Games Clearly Behind, Current Deck Bracket, Game Calculated Deck Strength. Suggested next Game # is ${nextGameNum} — check it doesn't collide if you're filling in more than one game.`;
-  resultsEl.appendChild(hint);
 
   const submitBtn = document.createElement("button");
   submitBtn.className = "primary gtu-submit-btn";
@@ -1674,11 +1576,10 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
   statusEl.className = "gtu-submit-status";
 
   if (!GAME_SUBMIT_RELAY_URL) {
-    submitBtn.textContent = "Submit to Spreadsheet (not configured)";
+    submitBtn.textContent = "Submit Game (not configured)";
     submitBtn.disabled = true;
-    statusEl.textContent = "Relay not deployed yet — use Copy row for now.";
   } else {
-    submitBtn.textContent = "Submit to Spreadsheet";
+    submitBtn.textContent = "Submit Game";
     submitBtn.addEventListener("click", async () => {
       submitBtn.disabled = true;
       submitBtn.textContent = "Submitting...";
@@ -1708,27 +1609,30 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          throw new Error(body.error || `HTTP ${res.status}`);
-        }
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
         submitBtn.textContent = "Submitted ✓";
-        applyOptimisticGameSubmit(pgGame, podSize, rows, nextGameNum);
-        statusEl.textContent = "Added — already reflected in Games to Update, Player Win Rates, and Deck Strength Validator's deck power. GitHub Actions is syncing this to the spreadsheet in the background (usually 1-3 minutes) so it sticks around for everyone else.";
+        // D1 writes land in ~100-300ms (vs. the old GitHub Actions round
+        // trip's 1-3 minutes), so this waits for a real refetch instead of
+        // optimistically merging a guessed local copy -- the whole reason
+        // that complexity existed before was papering over that slow wait.
+        statusEl.textContent = "Refreshing…";
+        await refreshEverything();
+        statusEl.textContent = "Added — Games to Update, Player Win Rates, and Deck Strength Validator's deck power are all up to date.";
         // The submitted game is already gone from the missing-games list
-        // above (applyOptimisticGameSubmit just re-rendered it), but this
-        // filled-in form otherwise just sits here forever -- confirmed the
-        // hard way, it was still showing a "submitted" game's form as if
-        // still pending after switching tabs and back. Leaves the
-        // confirmation message up briefly so it's actually seen, then
-        // clears the form area so the tab returns to a clean state.
+        // above (refreshEverything just re-rendered it), but this filled-in
+        // form otherwise just sits here forever -- confirmed the hard way,
+        // it was still showing a "submitted" game's form as if still
+        // pending after switching tabs and back. Leaves the confirmation
+        // message up briefly so it's actually seen, then clears the form
+        // area so the tab returns to a clean state.
         setTimeout(() => {
           const areaEl = box.parentElement;
           if (areaEl) areaEl.innerHTML = "";
-        }, 2500);
+        }, 1500);
       } catch (err) {
         submitBtn.disabled = false;
-        submitBtn.textContent = "Submit to Spreadsheet";
+        submitBtn.textContent = "Submit Game";
         statusEl.textContent = `Submission failed: ${err.message}`;
       }
     });
@@ -2102,51 +2006,6 @@ function renderUpdateAppTab() {
   renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting);
 }
 
-// The real round trip (GitHub Action recalculating deck-strength.xlsx, the
-// Pages rebuild that follows, then this page's next 60s poll) takes 1-3
-// minutes -- too slow for someone who just added their own deck and wants
-// to pick it for the pod they're building right now. This merges the
-// just-submitted player/decks into the in-memory players/podPlayers arrays
-// immediately so they're selectable right away. It's safe to be
-// optimistic here: the next real syncFromRepoWorkbook() (interval or
-// reload) rebuilds `players` from scratch from the spreadsheet, so this
-// never lingers or conflicts with the authoritative data.
-function applyOptimisticRosterUpdate(payload) {
-  const findOrCreatePlayer = (name) => {
-    let player = players.find(p => p.name === name);
-    if (!player) {
-      player = { id: slugify(name), name, decks: [] };
-      players.push(player);
-    }
-    return player;
-  };
-
-  const addDeck = (player, d) => {
-    const deckId = `${player.id}::${slugify(d.name)}`;
-    if (player.decks.some(existing => existing.id === deckId)) return;
-    player.decks.push({
-      id: deckId,
-      name: d.name,
-      power: d.power,
-      playgroupId: d.playgroupDeckId != null ? String(d.playgroupDeckId) : null,
-    });
-  };
-
-  payload.newPlayers.forEach(p => {
-    const player = findOrCreatePlayer(p.displayName);
-    knownPlaygroupPlayers.add(p.displayName);
-    p.decks.forEach(d => addDeck(player, d));
-  });
-
-  payload.newDecksForExisting.forEach(d => {
-    addDeck(findOrCreatePlayer(d.player), d);
-  });
-
-  podPlayers = players.filter(p => knownPlaygroupPlayers.has(p.name));
-  renderPlayersTable();
-  renderPodSlots();
-}
-
 // A count of what's actually about to be submitted, across every pending
 // group -- not just the one currently visible in the dropdown. Exists
 // because the dropdown hides other groups' checkbox state from view, so
@@ -2199,10 +2058,10 @@ function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
   statusEl.className = "uta-submit-status";
 
   if (!ROSTER_UPDATE_RELAY_URL) {
-    submitBtn.textContent = "Add to Spreadsheet (not configured)";
+    submitBtn.textContent = "Add Player/Decks (not configured)";
     submitBtn.disabled = true;
   } else {
-    submitBtn.textContent = "Add to Spreadsheet";
+    submitBtn.textContent = "Add Player/Decks";
     submitBtn.addEventListener("click", async () => {
       submitBtn.disabled = true;
       submitBtn.textContent = "Submitting...";
@@ -2248,7 +2107,7 @@ function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
 
       if (payload.newPlayers.length === 0 && payload.newDecksForExisting.length === 0) {
         submitBtn.disabled = false;
-        submitBtn.textContent = "Add to Spreadsheet";
+        submitBtn.textContent = "Add Player/Decks";
         statusEl.textContent = "Nothing selected (or missing a starting power) — check the boxes and power fields above.";
         return;
       }
@@ -2259,11 +2118,9 @@ function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}));
-          throw new Error(body.error || `HTTP ${res.status}`);
-        }
-        applyOptimisticRosterUpdate(payload);
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+
         submittedDeckIds.forEach(id => rosterUpdateDeckState.delete(id));
         submittedUsernames.forEach(u => {
           rosterUpdateNameState.delete(u);
@@ -2280,22 +2137,30 @@ function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
           ...payload.newPlayers.map(p => `${p.displayName} (${p.decks.length} deck${p.decks.length === 1 ? "" : "s"})`),
           ...Object.entries(deckCountsByExistingPlayer).map(([player, n]) => `${player} (${n} deck${n === 1 ? "" : "s"})`),
         ];
+        // Set before refreshing, not after -- renderUpdateAppTab (called
+        // below) is what actually displays this, via
+        // renderRosterUpdateConfirmationBanner reading it and clearing it.
+        rosterUpdateSubmitConfirmation = `✓ Added ${submittedLabels.join(", ")}.`;
 
-        // Setting this and re-rendering is what makes the just-submitted
-        // group disappear immediately instead of lingering until the next
-        // poll -- computeRosterDiff won't find it pending anymore since
-        // applyOptimisticRosterUpdate just added it to `players`. The
-        // banner survives the re-render because renderUpdateAppTab reads
-        // and displays it before clearing it, not because anything here is
-        // preserved in place.
-        rosterUpdateSubmitConfirmation =
-          `✓ Added ${submittedLabels.join(", ")} — already selectable in Deck Strength Validator. ` +
-          "GitHub Actions is syncing it to the spreadsheet now (usually 1-3 minutes) so it sticks around for good.";
+        submitBtn.textContent = "Submitted ✓";
+        // D1 writes land in ~100-300ms (vs. the old GitHub Actions round
+        // trip's 1-3 minutes), so this waits for a real refetch instead of
+        // optimistically merging a guessed local copy.
+        await refreshEverything();
+        // refreshEverything's own internal renders skip Update the App
+        // while focus is inside it (isEditingRosterUpdateForm), so a
+        // background poll never yanks focus out from under someone
+        // mid-keystroke elsewhere in this tab -- but focus is on this
+        // submit button right now, itself inside that same guarded panel,
+        // so that guard would otherwise suppress the very render meant to
+        // show the confirmation banner just set above. Force it
+        // unconditionally, same as the optimistic-update code this
+        // replaces already had to do for the same reason.
         renderUpdateAppTab();
         return;
       } catch (err) {
         submitBtn.disabled = false;
-        submitBtn.textContent = "Add to Spreadsheet";
+        submitBtn.textContent = "Add Player/Decks";
         statusEl.textContent = `Submission failed: ${err.message}`;
       }
     });
@@ -2309,17 +2174,17 @@ function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
 
 const gtuIntroEl = document.getElementById("gtu-intro");
 if (gtuIntroEl) {
-  gtuIntroEl.textContent = `Games from playgroup.gg that aren't in the spreadsheet's ${CURRENT_SEASON_SHEET} yet. Fill in what playgroup.gg can't supply, then copy the finished row(s) into the real Game Log — this app never edits deck-strength.xlsx itself.`;
+  gtuIntroEl.textContent = "Games from playgroup.gg that aren't logged yet. Fill in what playgroup.gg can't supply, then submit.";
 }
 
 initPlayerCountSelect();
-syncFromRepoWorkbook();
+syncFromD1();
 initTabs();
 refreshPlaygroupGames();
 loadRosterDiff();
 
-// Re-fetches everything derived from either data source: syncFromRepoWorkbook
-// re-reads deck-strength.xlsx (also re-runs renderWinRatesTable as part of
+// Re-fetches everything derived from either data source: syncFromD1
+// re-reads the D1 database (also re-runs renderWinRatesTable as part of
 // it), refreshPlaygroupGames re-fetches the live playgroup.gg games list
 // that both Games to Update and Player Win Rates depend on, loadRosterDiff
 // re-fetches the live roster/deck list that Update the App depends on.
@@ -2329,15 +2194,17 @@ loadRosterDiff();
 // KV on every single call, and a continuous 60s poll from every open tab
 // added up fast against the free tier's daily read/write budget for
 // basically no benefit, since nothing here needs sub-minute freshness the
-// way a user's own submit already gets via the optimistic-update paths
-// elsewhere in this file. Triggered by: the manual refresh button, the
+// way a user's own submit already gets by awaiting this same function
+// directly after a successful submit (see calculateGameToUpdate and
+// renderRosterUpdateSubmit). Triggered by: the manual refresh button, the
 // visibility-change listener right below (so opening/returning to the app
-// never shows stale data), and once on initial page load.
+// never shows stale data), once on initial page load, and once right
+// after a game or roster submission.
 async function refreshEverything() {
   const btn = document.getElementById("global-refresh-btn");
   if (btn) btn.classList.add("spinning");
   try {
-    await Promise.all([syncFromRepoWorkbook(), refreshPlaygroupGames(), loadRosterDiff()]);
+    await Promise.all([syncFromD1(), refreshPlaygroupGames(), loadRosterDiff()]);
   } finally {
     if (btn) btn.classList.remove("spinning");
   }
