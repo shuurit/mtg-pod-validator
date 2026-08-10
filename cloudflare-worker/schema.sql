@@ -45,7 +45,15 @@ CREATE TABLE games (
   game_num INTEGER NOT NULL,       -- scoped per season, matches today's Game Log
   played_at TEXT NOT NULL,
   pod_size INTEGER NOT NULL,
-  playgroup_game_id TEXT UNIQUE,
+  -- INTEGER, not TEXT -- a JS number bound into a TEXT-affinity column
+  -- gets REAL-to-TEXT cast by SQLite regardless of whether it's whole
+  -- (confirmed the hard way: two real games got stored as "944159.0" /
+  -- "945272.0" the moment they were written through the live app, not
+  -- just via the one-time migration script that originally introduced
+  -- this for a couple of rows). INTEGER affinity converts a whole-valued
+  -- REAL back to a clean integer on write, so this can't recur regardless
+  -- of how a future write path binds the value.
+  playgroup_game_id INTEGER UNIQUE,
   UNIQUE(season_id, game_num)
 );
 
