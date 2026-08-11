@@ -2092,7 +2092,7 @@ function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
           if (!state || !state.checked) return;
           const power = parseFloat(state.power);
           if (!Number.isFinite(power)) return;
-          decks.push({ name: d.commander_name, power, playgroupDeckId: d.id });
+          decks.push({ name: d.commander_name, power, playgroupDeckId: d.id, playgroupDeckName: d.name });
           submittedDeckIds.push(String(d.id));
         });
         if (displayName && decks.length > 0) {
@@ -2107,7 +2107,7 @@ function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
           if (!state || !state.checked) return;
           const power = parseFloat(state.power);
           if (!Number.isFinite(power)) return;
-          payload.newDecksForExisting.push({ player: g.player, name: d.commander_name, power, playgroupDeckId: d.id });
+          payload.newDecksForExisting.push({ player: g.player, name: d.commander_name, power, playgroupDeckId: d.id, playgroupDeckName: d.name });
           submittedDeckIds.push(String(d.id));
         });
       });

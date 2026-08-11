@@ -532,8 +532,8 @@ async function handleRosterWrite(request, env) {
 
     if (p.decks.length) {
       const deckStmts = p.decks.map(d =>
-        env.DB.prepare("INSERT INTO decks (player_id, name, baseline_power, playgroup_deck_id) VALUES (?, ?, ?, ?)")
-          .bind(playerId, d.name, d.power, d.playgroupDeckId != null ? String(d.playgroupDeckId) : null)
+        env.DB.prepare("INSERT INTO decks (player_id, name, baseline_power, playgroup_deck_id, playgroup_deck_name) VALUES (?, ?, ?, ?, ?)")
+          .bind(playerId, d.name, d.power, d.playgroupDeckId != null ? String(d.playgroupDeckId) : null, d.playgroupDeckName ?? null)
       );
       await env.DB.batch(deckStmts);
     }
@@ -545,8 +545,8 @@ async function handleRosterWrite(request, env) {
     if (!player) {
       return jsonResponse({ error: `Unknown player: ${d.player}` }, 400);
     }
-    await env.DB.prepare("INSERT INTO decks (player_id, name, baseline_power, playgroup_deck_id) VALUES (?, ?, ?, ?)")
-      .bind(player.id, d.name, d.power, d.playgroupDeckId != null ? String(d.playgroupDeckId) : null).run();
+    await env.DB.prepare("INSERT INTO decks (player_id, name, baseline_power, playgroup_deck_id, playgroup_deck_name) VALUES (?, ?, ?, ?, ?)")
+      .bind(player.id, d.name, d.power, d.playgroupDeckId != null ? String(d.playgroupDeckId) : null, d.playgroupDeckName ?? null).run();
     createdDecks.push({ player: d.player, name: d.name });
   }
 

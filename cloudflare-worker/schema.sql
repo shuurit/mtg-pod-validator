@@ -35,6 +35,13 @@ CREATE TABLE decks (
   name TEXT NOT NULL,
   baseline_power REAL NOT NULL,
   playgroup_deck_id TEXT,
+  -- playgroup.gg's own name for this deck (e.g. "Pizza Party!") -- distinct
+  -- from `name` above, which is the tracked/commander-based name this app
+  -- uses. Not surfaced in the app yet; captured so a deck's playgroup.gg
+  -- identity is on record for things like spotting a commander swap that
+  -- splits one physical deck into two playgroup.gg deck ids (see the
+  -- Leonardo/Michelangelo case this column exists because of).
+  playgroup_deck_name TEXT,
   bracket INTEGER,
   archived INTEGER NOT NULL DEFAULT 0
 );
