@@ -197,7 +197,7 @@ function applyPlayersFromD1(data) {
   setPlayers(data.players.map(p => ({
     id: p.id,
     name: p.name,
-    decks: p.decks.map(d => ({ id: d.id, name: d.name, power: d.power, playgroupId: d.playgroupId })),
+    decks: p.decks.map(d => ({ id: d.id, name: d.name, power: d.power, playgroupId: d.playgroupId, archived: !!d.archived })),
   })));
 }
 
@@ -407,6 +407,9 @@ function renderPlayersTable() {
 
   for (const player of podPlayers) {
     const isExpanded = expandedPlayerIds.has(player.id);
+    // Archived on playgroup.gg means retired -- not shown here, and not
+    // offered in Set Up Pod either (see renderPodSlots).
+    const activeDecks = player.decks.filter(d => !d.archived);
 
     const block = document.createElement("div");
     block.className = "player-block";
@@ -430,7 +433,7 @@ function renderPlayersTable() {
 
     const deckCount = document.createElement("span");
     deckCount.className = "deck-count";
-    deckCount.textContent = `${player.decks.length} deck${player.decks.length === 1 ? "" : "s"}`;
+    deckCount.textContent = `${activeDecks.length} deck${activeDecks.length === 1 ? "" : "s"}`;
     deckCount.addEventListener("click", () => {
       if (isExpanded) expandedPlayerIds.delete(player.id);
       else expandedPlayerIds.add(player.id);
@@ -453,7 +456,7 @@ function renderPlayersTable() {
 
     // pgPower computed once up front (not inline during sort) so a sort by
     // that column doesn't re-look-it-up on every comparison.
-    const deckRows = player.decks.map(deck => ({ deck, pgPower: findPlaygroupPowerLevel(player.name, deck) }));
+    const deckRows = activeDecks.map(deck => ({ deck, pgPower: findPlaygroupPowerLevel(player.name, deck) }));
 
     const sortState = playerDeckSortState.get(player.id) || { column: null, direction: "asc" };
     if (sortState.column) {
@@ -597,15 +600,18 @@ function renderPodSlots() {
       deckSelect.appendChild(blank);
       deckSelect.disabled = !player;
       if (player) {
+        // Archived on playgroup.gg means retired -- not offered here at all,
+        // same reasoning as Players & Decks below.
+        const activeDecks = player.decks.filter(d => !d.archived);
         // A slot the last check flagged as over the pod's range only offers
         // decks that would actually bring it back in range, so re-picking
         // can't just land on another incompatible deck. Falls back to the
         // full list if nothing qualifies (e.g. this player has no deck that
         // low) rather than leaving the select with nothing pickable at all.
         const restricted = slot.outOfRange && lastCeiling !== null
-          ? player.decks.filter(d => d.power <= lastCeiling)
+          ? activeDecks.filter(d => d.power <= lastCeiling)
           : null;
-        const decks = restricted && restricted.length > 0 ? restricted : player.decks;
+        const decks = restricted && restricted.length > 0 ? restricted : activeDecks;
         for (const d of decks) {
           const opt = document.createElement("option");
           opt.value = d.id;

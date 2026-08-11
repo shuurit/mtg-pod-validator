@@ -831,6 +831,34 @@ async function handleDebugGame(request, env) {
 
 // ---------- GET /roster-diff : who/what is on playgroup.gg but not yet tracked ----------
 
+// computeRosterDiff already fetches every tracked player's full deck list
+// (including archived status) fresh from playgroup.gg on every call -- the
+// cheapest possible way to keep decks.archived from drifting stale is to
+// piggyback on that instead of a separate sync job. Fire-and-forget via
+// ctx.waitUntil (same pattern as handleGamesWrite's post-discord dispatch):
+// this is a GET endpoint, so a slow or failed write here should never
+// affect the response app.js is waiting on. Only writes rows that actually
+// changed, not a blind rewrite of every tracked deck on every request.
+async function syncArchivedStatus(env, decksByUsername) {
+  const { results: tracked } = await env.DB.prepare(
+    "SELECT id, playgroup_deck_id, archived FROM decks WHERE playgroup_deck_id IS NOT NULL"
+  ).all();
+  const byPgId = new Map(tracked.map(d => [d.playgroup_deck_id, d]));
+
+  const stmts = [];
+  for (const decks of Object.values(decksByUsername)) {
+    for (const d of decks) {
+      const row = byPgId.get(String(d.id));
+      if (!row) continue;
+      const liveArchived = d.archived ? 1 : 0;
+      if (row.archived !== liveArchived) {
+        stmts.push(env.DB.prepare("UPDATE decks SET archived = ? WHERE id = ?").bind(liveArchived, row.id));
+      }
+    }
+  }
+  if (stmts.length) await env.DB.batch(stmts);
+}
+
 // Returns the raw "world according to playgroup.gg" -- every member (not
 // just tracked ones, so the app can preview what a brand-new player would
 // bring in) and every member's full deck list, independent of games played.
@@ -838,7 +866,7 @@ async function handleDebugGame(request, env) {
 // responsibility as /playgroup-games: Worker supplies the raw playgroup.gg
 // data, app.js compares it against what's already in D1 (fetched via
 // GET /players).
-async function computeRosterDiff(env) {
+async function computeRosterDiff(env, ctx) {
   const userIdToPlayer = await getUserIdToPlayerMap(env);
 
   const membersRes = await pgFetch(`/playgroups/${PLAYGROUP_ID}/members`, env);
@@ -869,6 +897,10 @@ async function computeRosterDiff(env) {
     }));
   }));
 
+  const syncPromise = syncArchivedStatus(env, decksByUsername)
+    .catch(err => console.error("decks.archived sync failed:", err));
+  if (ctx) ctx.waitUntil(syncPromise); else await syncPromise;
+
   return {
     generated_at: new Date().toISOString(),
     known_players: [...new Set(Object.values(userIdToPlayer))],
@@ -886,7 +918,7 @@ async function computeRosterDiff(env) {
 async function handleRosterDiff(env, ctx) {
   let data;
   try {
-    data = await computeRosterDiff(env);
+    data = await computeRosterDiff(env, ctx);
   } catch (err) {
     return jsonResponse({ error: "Failed to read playgroup.gg roster", detail: err.message }, 502);
   }
@@ -911,7 +943,7 @@ async function computePlayersData(env) {
   ).all();
 
   const { results: deckRows } = await env.DB.prepare(`
-    SELECT d.id, d.player_id, d.name, d.playgroup_deck_id,
+    SELECT d.id, d.player_id, d.name, d.playgroup_deck_id, d.archived,
            COALESCE(
              (SELECT gr.game_calculated_deck_strength
               FROM game_results gr JOIN games g ON g.id = gr.game_id
@@ -930,6 +962,7 @@ async function computePlayersData(env) {
       name: d.name,
       power: d.power,
       playgroupId: d.playgroup_deck_id,
+      archived: !!d.archived,
     });
   }
 
