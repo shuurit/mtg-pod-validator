@@ -29,11 +29,14 @@
  *   change over time in a way league membership never does.
  *
  *   "Which playgroup.gg accounts map to which tracked player" is read live
- *   from D1's players.playgroup_username column (getUsernameToPlayerMap) --
- *   a player written via POST /roster is picked up on the very next
- *   request here, no separate manual step or redeploy needed. The
- *   response's known_players field carries that out to app.js, so nothing
- *   else needs a matching code change.
+ *   from D1's players.playgroup_user_id column (getUserIdToPlayerMap) --
+ *   keyed by playgroup.gg's numeric user id, not username, since a
+ *   username can change (confirmed the hard way -- a real rename broke
+ *   every username-keyed lookup silently). A player written via
+ *   POST /roster is picked up on the very next request here, no separate
+ *   manual step or redeploy needed. The response's known_players field
+ *   carries that out to app.js, so nothing else needs a matching code
+ *   change.
  *
  * - GET  /roster-diff -> PLAYGROUP_API_KEY: returns every playgroup member
  *   (not just tracked ones) and every member's full deck list, independent
@@ -525,8 +528,8 @@ async function handleRosterWrite(request, env) {
     if (existing) {
       return jsonResponse({ error: `A player named "${p.displayName}" already exists.` }, 409);
     }
-    const insertPlayer = await env.DB.prepare("INSERT INTO players (name, playgroup_username) VALUES (?, ?)")
-      .bind(p.displayName, p.username).run();
+    const insertPlayer = await env.DB.prepare("INSERT INTO players (name, playgroup_username, playgroup_user_id) VALUES (?, ?, ?)")
+      .bind(p.displayName, p.username, p.userId ?? null).run();
     const playerId = insertPlayer.meta.last_row_id;
     createdPlayers.push({ id: playerId, name: p.displayName, username: p.username });
 
@@ -605,15 +608,24 @@ function deckIdsInGame(game) {
 // from D1 instead of a hardcoded constant, so a player written via
 // POST /roster is picked up immediately, no redeploy needed. Uncached and
 // cheap, same reasoning as computePlayersData/handleRosterDiff already
-// querying D1 fresh on every request. Participants whose username isn't
+// querying D1 fresh on every request. Participants whose user id isn't
 // in this map (guests, other accounts) get dropped from the output, same
 // as the old hardcoded map used to do.
-async function getUsernameToPlayerMap(env) {
+//
+// Keyed by playgroup_user_id (a stable numeric id), not
+// playgroup_username -- confirmed the hard way that a username is NOT
+// stable: a real player renamed their playgroup.gg account mid-session,
+// which silently broke every username-keyed lookup (they stopped
+// showing as tracked, and their decks disappeared from matching)
+// without erroring anywhere. user_id is available both on roster-diff's
+// member objects and on raw game participations, so this same map now
+// covers both call sites below.
+async function getUserIdToPlayerMap(env) {
   const { results } = await env.DB.prepare(
-    "SELECT name, playgroup_username FROM players WHERE playgroup_username IS NOT NULL"
+    "SELECT name, playgroup_user_id FROM players WHERE playgroup_user_id IS NOT NULL"
   ).all();
   const map = {};
-  for (const row of results) map[row.playgroup_username] = row.name;
+  for (const row of results) map[row.playgroup_user_id] = row.name;
   return map;
 }
 
@@ -622,7 +634,7 @@ async function computePlaygroupGames(env, forceRecheckGameId) {
     throw new Error("DECK_CACHE KV namespace is not bound to this Worker (Settings -> Bindings)");
   }
 
-  const usernameToPlayer = await getUsernameToPlayerMap(env);
+  const userIdToPlayer = await getUserIdToPlayerMap(env);
   const activeLeague = await getActiveLeagueId(env);
 
   const gamesRes = await pgFetch(`/playgroups/${PLAYGROUP_ID}/games?limit=100`, env);
@@ -727,7 +739,7 @@ async function computePlaygroupGames(env, forceRecheckGameId) {
     const participants = [];
     let untracked = 0;
     for (const p of g.participations) {
-      const player = p.user_name ? usernameToPlayer[p.user_name] : null;
+      const player = p.user_id ? userIdToPlayer[p.user_id] : null;
       if (!player) { untracked++; continue; }
       const cachedCommander = commanderCache[p.deck_id];
       participants.push({
@@ -754,12 +766,12 @@ async function computePlaygroupGames(env, forceRecheckGameId) {
     generated_at: new Date().toISOString(),
     league: activeLeague.name,
     note: "pod_size counts only tracked spreadsheet players (matches how the Game Log formulas treat pod size -- every slot needs a Commander Strength value). See per-game \"note\" if untracked participants were excluded.",
-    // D1's players.playgroup_username is the one place a new playgroup.gg
+    // D1's players.playgroup_user_id is the one place a new playgroup.gg
     // member gets added (via POST /roster) -- everything downstream
     // (app.js's Pod Validator player list, this games list, commander
     // lookups) picks it up from here rather than keeping a second
     // hardcoded copy of "who's tracked."
-    known_players: [...new Set(Object.values(usernameToPlayer))],
+    known_players: [...new Set(Object.values(userIdToPlayer))],
     games,
     debug: {
       all_time_games: allGames.length,
@@ -827,7 +839,7 @@ async function handleDebugGame(request, env) {
 // data, app.js compares it against what's already in D1 (fetched via
 // GET /players).
 async function computeRosterDiff(env) {
-  const usernameToPlayer = await getUsernameToPlayerMap(env);
+  const userIdToPlayer = await getUserIdToPlayerMap(env);
 
   const membersRes = await pgFetch(`/playgroups/${PLAYGROUP_ID}/members`, env);
   if (!membersRes.ok) throw new Error(`playgroup members failed: HTTP ${membersRes.status}`);
@@ -836,8 +848,8 @@ async function computeRosterDiff(env) {
   const members = rawMembers.map(m => ({
     user_id: m.user_id,
     username: m.username,
-    tracked: m.username in usernameToPlayer,
-    mapped_player: usernameToPlayer[m.username] || null,
+    tracked: m.user_id in userIdToPlayer,
+    mapped_player: userIdToPlayer[m.user_id] || null,
     joined_at: m.joined_at,
   }));
 
@@ -859,7 +871,7 @@ async function computeRosterDiff(env) {
 
   return {
     generated_at: new Date().toISOString(),
-    known_players: [...new Set(Object.values(usernameToPlayer))],
+    known_players: [...new Set(Object.values(userIdToPlayer))],
     members,
     decks_by_username: decksByUsername,
     debug: {

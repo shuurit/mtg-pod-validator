@@ -1731,7 +1731,7 @@ async function loadRosterDiff() {
 // below has no way to know a submitted new player isn't "new" anymore
 // other than this: member.tracked (and mapped_player) come straight from
 // rosterDiffData, which is read fresh from D1 on every request (see
-// relay.js's getUsernameToPlayerMap) -- correct almost immediately after
+// relay.js's getUserIdToPlayerMap) -- correct almost immediately after
 // POST /roster's write completes, but "almost immediately" still leaves
 // a brief window, between that write finishing and refreshEverything's
 // own subsequent GET /roster-diff landing, where a stale response could
@@ -1750,7 +1750,7 @@ function computeRosterDiff(data) {
     if (allDecks.length === 0) continue;
 
     if (!member.tracked) {
-      newPlayers.push({ username: member.username, suggestedDisplayName: member.username, decks: allDecks });
+      newPlayers.push({ username: member.username, userId: member.user_id, suggestedDisplayName: member.username, decks: allDecks });
       continue;
     }
 
@@ -2096,7 +2096,7 @@ function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
           submittedDeckIds.push(String(d.id));
         });
         if (displayName && decks.length > 0) {
-          payload.newPlayers.push({ username: p.username, displayName, decks });
+          payload.newPlayers.push({ username: p.username, userId: p.userId, displayName, decks });
           submittedUsernames.push(p.username);
         }
       });

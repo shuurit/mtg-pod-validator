@@ -26,8 +26,19 @@ CREATE UNIQUE INDEX idx_seasons_league ON seasons(playgroup_league_id);
 CREATE TABLE players (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL UNIQUE,
-  playgroup_username TEXT UNIQUE  -- null for a player with no playgroup.gg account
+  playgroup_username TEXT UNIQUE,  -- null for a player with no playgroup.gg account
+  -- playgroup.gg's stable numeric user id -- the actual identity key used
+  -- for matching (getUserIdToPlayerMap), not playgroup_username above.
+  -- Confirmed the hard way that a username is NOT stable: a real player
+  -- renamed their playgroup.gg account mid-session, which silently broke
+  -- every username-keyed lookup (stopped showing as tracked, decks
+  -- disappeared from matching) with no error anywhere. playgroup_username
+  -- is kept for display/lookup convenience, not identity. Added via
+  -- ALTER TABLE + a separate unique index, same reason as
+  -- seasons.playgroup_league_id -- SQLite rejects UNIQUE on ADD COLUMN.
+  playgroup_user_id INTEGER
 );
+CREATE UNIQUE INDEX idx_players_pg_user_id ON players(playgroup_user_id);
 
 CREATE TABLE decks (
   id INTEGER PRIMARY KEY,
