@@ -1,0 +1,25 @@
+name: Post Achievement Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  post-achievement-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install matplotlib requests
+
+      - name: Post achievement badge prototype
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.SEASON_STAT_WEBHOOK }}
+        run: python scripts/post_achievement_test.py
