@@ -32,6 +32,13 @@ PLAYERS_URL = f"{RELAY_BASE_URL}/players"
 GAMES_URL = f"{RELAY_BASE_URL}/games"
 DECK_WIN_RATES_URL = f"{RELAY_BASE_URL}/deck-win-rates"
 
+# Excluded from every table image posted to Discord -- Kristy and Joseph
+# have gone inactive and will drop off the roster soon. Filtered here
+# rather than at the relay, since GET /players etc. still need to return
+# everyone for the app's own UI and D1 write paths; this only affects what
+# shows up in the screenshots posted to Discord.
+EXCLUDED_FROM_REPORTS = {"Kristy", "Joseph"}
+
 HEADER_BG = "#2b2d31"  # Discord's own dark blurple-gray, so the header reads native
 HEADER_FG = "white"
 SECTION_BG = "#e7e9ee"
@@ -88,12 +95,16 @@ def fetch_report_data():
     games_data = fetch_json(GAMES_URL)
     deck_win_rates_data = fetch_json(DECK_WIN_RATES_URL)
 
-    all_players = players_data["players"]
+    all_players = [p for p in players_data["players"] if p["name"] not in EXCLUDED_FROM_REPORTS]
     all_player_names = [p["name"] for p in all_players]
+    deck_win_rates_data = {
+        **deck_win_rates_data,
+        "players": [p for p in deck_win_rates_data["players"] if p["player"] not in EXCLUDED_FROM_REPORTS],
+    }
     season_games = current_season_games(games_data["games"])
     if not season_games:
         raise RuntimeError("No games logged yet in the current season -- nothing to report.")
-    log_rows = to_pawr_rows(season_games)
+    log_rows = [r for r in to_pawr_rows(season_games) if r["player"] not in EXCLUDED_FROM_REPORTS]
 
     return {
         "all_players": all_players,
