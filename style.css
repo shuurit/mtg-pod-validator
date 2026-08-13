@@ -497,6 +497,23 @@ td.num {
   gap: 6px;
 }
 
+/* De-emphasized on purpose (vs. the bolder .icon-btn buttons elsewhere) --
+   still fully visible/tappable, just not competing with the power chip on
+   every row of a long deck list. */
+.deck-edit-btn {
+  border: none;
+  background: transparent;
+  padding: 2px 4px;
+  font-size: 0.75rem;
+  color: var(--muted);
+  opacity: 0.6;
+  cursor: pointer;
+}
+.deck-edit-btn:hover {
+  opacity: 1;
+  color: var(--accent);
+}
+
 .bracket-edit select {
   font-size: 0.85rem;
   padding: 4px 6px;

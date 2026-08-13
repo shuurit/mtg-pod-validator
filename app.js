@@ -125,7 +125,11 @@ let podSelections = []; // { playerId, deckId, outOfRange } per slot
 // player count changes, and a slot's outOfRange flag (carried over the same
 // way playerId/deckId already are) would be meaningless without it.
 let lastCeiling = null;
-let expandedPlayerIds = new Set(); // player blocks currently showing their deck table
+// Only one player's deck table shown at a time -- expanding one auto-
+// collapses whichever other player was open, so the card's height stays
+// bounded regardless of how many players get tracked over time. null means
+// everyone's collapsed.
+let expandedPlayerId = null;
 let rosterDiffData = null; // raw playgroup.gg roster/decks from loadRosterDiff, used for the Playgroup Power comparison column too
 let bracketEditingDeckIds = new Set(); // deck ids currently showing the inline "set new bracket" form instead of their power chip
 
@@ -381,7 +385,9 @@ function buildPowerChip(power) {
 // Power cell in its normal (non-editing) state: the chip, flagged with a
 // dashed border + tooltip when it's a manual bracket declaration not yet
 // backed by a logged game (see computePlayersData's bracketPending), plus
-// a pencil button that switches this cell into buildBracketEditRow below.
+// a de-emphasized pencil button that switches this cell into
+// buildBracketEditRow below. Playgroup Power stays its own table column
+// (see PLAYER_DECK_COLUMNS), not folded in here.
 function buildPowerCell(deck) {
   const cell = document.createElement("span");
   cell.className = "power-cell";
@@ -390,15 +396,18 @@ function buildPowerCell(deck) {
     chip.classList.add("power-chip-pending");
     chip.title = `Manually set to Bracket ${deck.bracket} — not yet confirmed by a logged game.`;
   }
+  cell.appendChild(chip);
+
   const editBtn = document.createElement("button");
-  editBtn.className = "icon-btn";
+  editBtn.className = "deck-edit-btn";
   editBtn.textContent = "✎";
   editBtn.setAttribute("aria-label", `Set ${deck.name}'s bracket`);
   editBtn.addEventListener("click", () => {
     bracketEditingDeckIds.add(deck.id);
     renderPlayersTable();
   });
-  cell.append(chip, editBtn);
+  cell.appendChild(editBtn);
+
   return cell;
 }
 
@@ -506,7 +515,7 @@ function renderPlayersTable() {
   }
 
   for (const player of podPlayers) {
-    const isExpanded = expandedPlayerIds.has(player.id);
+    const isExpanded = expandedPlayerId === player.id;
     // Archived on playgroup.gg means retired -- not shown here, and not
     // offered in Set Up Pod either (see renderPodSlots).
     const activeDecks = player.decks.filter(d => !d.archived);
@@ -522,8 +531,7 @@ function renderPlayersTable() {
     toggleBtn.textContent = isExpanded ? "▾" : "▸";
     toggleBtn.setAttribute("aria-label", isExpanded ? "Collapse" : "Expand");
     toggleBtn.addEventListener("click", () => {
-      if (isExpanded) expandedPlayerIds.delete(player.id);
-      else expandedPlayerIds.add(player.id);
+      expandedPlayerId = isExpanded ? null : player.id;
       renderPlayersTable();
     });
 
@@ -535,8 +543,7 @@ function renderPlayersTable() {
     deckCount.className = "deck-count";
     deckCount.textContent = `${activeDecks.length} deck${activeDecks.length === 1 ? "" : "s"}`;
     deckCount.addEventListener("click", () => {
-      if (isExpanded) expandedPlayerIds.delete(player.id);
-      else expandedPlayerIds.add(player.id);
+      expandedPlayerId = isExpanded ? null : player.id;
       renderPlayersTable();
     });
 
