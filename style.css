@@ -484,6 +484,29 @@ td.num {
 .power-chip-high { background: var(--warn-bg); color: var(--warn); }
 .power-chip-max { background: var(--bad-bg); color: var(--bad); }
 
+/* Power currently reflects a manual bracket declaration (POST
+   /decks/bracket), not yet confirmed by a logged game -- see
+   buildPowerCell/bracketPending in app.js. */
+.power-chip-pending {
+  border: 1px dashed var(--warn);
+}
+
+.power-cell, .bracket-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bracket-edit select {
+  font-size: 0.85rem;
+  padding: 4px 6px;
+}
+
+.bracket-edit-error {
+  margin: 0;
+  color: var(--bad);
+}
+
 .slot {
   display: grid;
   grid-template-columns: 90px 1fr 1fr;

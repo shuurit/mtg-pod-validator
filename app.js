@@ -20,6 +20,7 @@ const GAME_SUBMIT_RELAY_URL = RELAY_BASE_URL + "/games";
 const PLAYGROUP_GAMES_RELAY_URL = RELAY_BASE_URL + "/playgroup-games";
 const ROSTER_DIFF_RELAY_URL = RELAY_BASE_URL + "/roster-diff";
 const ROSTER_UPDATE_RELAY_URL = RELAY_BASE_URL + "/roster";
+const DECK_BRACKET_RELAY_URL = RELAY_BASE_URL + "/decks/bracket";
 
 // Fallback for knownPlaygroupPlayers below, used only until the Worker's
 // first response arrives. relay.js's USERNAME_TO_PLAYER is the real source
@@ -126,6 +127,7 @@ let podSelections = []; // { playerId, deckId, outOfRange } per slot
 let lastCeiling = null;
 let expandedPlayerIds = new Set(); // player blocks currently showing their deck table
 let rosterDiffData = null; // raw playgroup.gg roster/decks from loadRosterDiff, used for the Playgroup Power comparison column too
+let bracketEditingDeckIds = new Set(); // deck ids currently showing the inline "set new bracket" form instead of their power chip
 
 // player.id -> { column, direction }. Deliberately per-player rather than
 // one shared sort like winRatesSortColumn -- sorting Becca's 5 decks by
@@ -197,7 +199,10 @@ function applyPlayersFromD1(data) {
   setPlayers(data.players.map(p => ({
     id: p.id,
     name: p.name,
-    decks: p.decks.map(d => ({ id: d.id, name: d.name, power: d.power, playgroupId: d.playgroupId, archived: !!d.archived })),
+    decks: p.decks.map(d => ({
+      id: d.id, name: d.name, power: d.power, playgroupId: d.playgroupId, archived: !!d.archived,
+      bracket: d.bracket ?? null, bracketPending: !!d.bracketPending,
+    })),
   })));
 }
 
@@ -373,6 +378,101 @@ function buildPowerChip(power) {
   return chip;
 }
 
+// Power cell in its normal (non-editing) state: the chip, flagged with a
+// dashed border + tooltip when it's a manual bracket declaration not yet
+// backed by a logged game (see computePlayersData's bracketPending), plus
+// a pencil button that switches this cell into buildBracketEditRow below.
+function buildPowerCell(deck) {
+  const cell = document.createElement("span");
+  cell.className = "power-cell";
+  const chip = buildPowerChip(deck.power);
+  if (deck.bracketPending) {
+    chip.classList.add("power-chip-pending");
+    chip.title = `Manually set to Bracket ${deck.bracket} — not yet confirmed by a logged game.`;
+  }
+  const editBtn = document.createElement("button");
+  editBtn.className = "icon-btn";
+  editBtn.textContent = "✎";
+  editBtn.setAttribute("aria-label", `Set ${deck.name}'s bracket`);
+  editBtn.addEventListener("click", () => {
+    bracketEditingDeckIds.add(deck.id);
+    renderPlayersTable();
+  });
+  cell.append(chip, editBtn);
+  return cell;
+}
+
+// Inline "declare a new bracket" form, swapped in for buildPowerCell while
+// a deck is in bracketEditingDeckIds -- see POST /decks/bracket in
+// relay.js. "No override" (bracket: null) clears a previous declaration
+// and falls back to whatever's actually been logged.
+function buildBracketEditRow(deck) {
+  const wrap = document.createElement("span");
+  wrap.className = "bracket-edit";
+
+  const select = document.createElement("select");
+  const blankOpt = document.createElement("option");
+  blankOpt.value = "";
+  blankOpt.textContent = "No override";
+  select.appendChild(blankOpt);
+  for (let b = 1; b <= 5; b++) {
+    const opt = document.createElement("option");
+    opt.value = String(b);
+    opt.textContent = `Bracket ${b}`;
+    select.appendChild(opt);
+  }
+  select.value = deck.bracket != null ? String(deck.bracket) : "";
+
+  const saveBtn = document.createElement("button");
+  saveBtn.className = "icon-btn";
+  saveBtn.textContent = "✓";
+  saveBtn.setAttribute("aria-label", "Save bracket");
+
+  const cancelBtn = document.createElement("button");
+  cancelBtn.className = "icon-btn";
+  cancelBtn.textContent = "✕";
+  cancelBtn.setAttribute("aria-label", "Cancel");
+
+  const errEl = document.createElement("span");
+  errEl.className = "hint bracket-edit-error";
+
+  cancelBtn.addEventListener("click", () => {
+    bracketEditingDeckIds.delete(deck.id);
+    renderPlayersTable();
+  });
+
+  saveBtn.addEventListener("click", async () => {
+    const bracket = select.value === "" ? null : parseInt(select.value, 10);
+    if (!DECK_BRACKET_RELAY_URL) {
+      errEl.textContent = "Not configured.";
+      return;
+    }
+    saveBtn.disabled = true;
+    cancelBtn.disabled = true;
+    select.disabled = true;
+    errEl.textContent = "";
+    try {
+      const res = await fetch(DECK_BRACKET_RELAY_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ deckId: deck.id, bracket }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      bracketEditingDeckIds.delete(deck.id);
+      await refreshEverything();
+    } catch (err) {
+      errEl.textContent = `Failed: ${err.message}`;
+      saveBtn.disabled = false;
+      cancelBtn.disabled = false;
+      select.disabled = false;
+    }
+  });
+
+  wrap.append(select, saveBtn, cancelBtn, errEl);
+  return wrap;
+}
+
 // Looks up a deck's power_level as playgroup.gg itself has it rated, for
 // comparison against our own tracked Power column. Matches by playgroup
 // deck ID first (backfilled onto most rows via deck-strength.xlsx column
@@ -506,7 +606,7 @@ function renderPlayersTable() {
       nameTd.textContent = deck.name;
       const powerTd = document.createElement("td");
       powerTd.className = "num";
-      powerTd.appendChild(buildPowerChip(deck.power));
+      powerTd.appendChild(bracketEditingDeckIds.has(deck.id) ? buildBracketEditRow(deck) : buildPowerCell(deck));
       const pgTd = document.createElement("td");
       pgTd.className = "num";
       pgTd.textContent = pgPower === null ? "—" : formatPower(pgPower);
@@ -1195,6 +1295,26 @@ function findDefaultStrength(playerName, commanderName) {
 // player+commander, on the idea that a deck's bracket doesn't usually
 // change game to game. Still editable in the form.
 function findDefaultBracket(playerName, commanderName) {
+  // A still-pending manual bracket declaration (the ✎ editor in Players &
+  // Decks) wins over game history -- the whole point of setting one ahead
+  // of a game is so the very next submission defaults to it, instead of
+  // silently re-defaulting to the deck's old bracket and needing a manual
+  // correction every time (which defeats the point of setting it early).
+  // Once a game actually gets logged at that bracket it's no longer
+  // "pending" (see bracketPending in applyPlayersFromD1) and this falls
+  // through to the game-history lookup below like normal.
+  const player = players.find(p => p.name === playerName);
+  if (player) {
+    const target = normalizeCommanderName(commanderName);
+    let deck = player.decks.find(d => normalizeCommanderName(d.name) === target);
+    if (!deck) {
+      deck = player.decks.find(d =>
+        normalizeCommanderName(d.name).startsWith(target) || target.startsWith(normalizeCommanderName(d.name))
+      );
+    }
+    if (deck && deck.bracketPending) return deck.bracket;
+  }
+
   const matches = gameLogSeason3Rows.filter(
     r => r.player === playerName && r.commander === commanderName && typeof r.bracket === "number"
   );

@@ -270,6 +270,12 @@ function isValidRosterUpdatePayload(payload) {
   return newPlayers.every(validNewPlayer) && newDecks.every(validExistingDeck);
 }
 
+function isValidBracketPayload(payload) {
+  return !!payload && typeof payload === "object" &&
+    typeof payload.deckId === "number" &&
+    (payload.bracket === null || (Number.isInteger(payload.bracket) && payload.bracket >= 1 && payload.bracket <= 5));
+}
+
 // ---------- POST /games, POST /roster : D1 writes ----------
 // app.js's actual submit paths (Games to Update / Update the App) --
 // POST / and POST /apply-roster-update above still exist but nothing
@@ -386,7 +392,22 @@ async function handleGamesWrite(request, env, ctx) {
     if (matches.length > 1) {
       return jsonResponse({ error: `Ambiguous deck match for ${p.player} / "${p.commander}" (${matches.length} candidates) -- can't resolve safely.` }, 400);
     }
-    resolved.push({ ...p, playerId: player.id, deckId: matches[0].id });
+    // Most recent bracket this deck was actually logged at, across all
+    // seasons (same all-time scope "current power" itself already uses --
+    // see computePlayersData's COALESCE query) -- null for a deck's first
+    // logged game ever. Used below to detect a bracket change and reset
+    // that game's calculated deck strength to the new bracket's floor
+    // instead of carrying over a performance fraction earned in the old
+    // bracket (e.g. a deck at 2.9 moving to bracket 3 should land at 3.0,
+    // not 3.9).
+    const prevBracketRow = await env.DB.prepare(`
+      SELECT gr.bracket FROM game_results gr JOIN games g ON g.id = gr.game_id
+      WHERE gr.deck_id = ? ORDER BY g.id DESC LIMIT 1
+    `).bind(matches[0].id).first();
+    resolved.push({
+      ...p, playerId: player.id, deckId: matches[0].id,
+      previousBracket: prevBracketRow ? prevBracketRow.bracket : null,
+    });
   }
 
   const nextRow = await env.DB.prepare("SELECT COALESCE(MAX(game_num), 0) + 1 AS next FROM games WHERE season_id = ?")
@@ -455,7 +476,16 @@ async function handleGamesWrite(request, env, ctx) {
       gamesClearlyBehind: p.gamesClearlyBehind,
       bracket: p.bracket,
     });
-    responseResults.push({ player: p.player, commander: p.commander, result: p.result, gameCalculatedDeckStrength: f.X });
+    // A bracket change (either direction) resets this game's calculated
+    // deck strength to the new bracket's floor, discarding the performance
+    // fraction f.X would otherwise carry over from a game that may have
+    // been played at a different bracket entirely. J/K/L/M/N/O/Q/U are
+    // untouched -- they're this game's real performance data, used by
+    // Player Adjusted Win Rate/rankings (never by X), so a bracket reset
+    // has no effect on those.
+    const bracketChanged = p.previousBracket != null && p.previousBracket !== p.bracket;
+    const X = bracketChanged ? p.bracket : f.X;
+    responseResults.push({ player: p.player, commander: p.commander, result: p.result, gameCalculatedDeckStrength: X });
     return env.DB.prepare(`
       INSERT INTO game_results (
         game_id, player_id, deck_id, commander_strength, result, place, knockouts, tov,
@@ -467,7 +497,7 @@ async function handleGamesWrite(request, env, ctx) {
     `).bind(
       gameId, p.playerId, p.deckId, p.strength, result, p.place, p.knockouts, p.tov,
       p.popOff, p.disruptions, p.recoveries, p.gamesClearlyBehind, p.bracket,
-      f.J, f.K, f.L, f.M, f.N, f.O, f.Q, f.U, f.X
+      f.J, f.K, f.L, f.M, f.N, f.O, f.Q, f.U, X
     );
   });
   await env.DB.batch(gameResultStmts);
@@ -554,6 +584,32 @@ async function handleRosterWrite(request, env) {
   }
 
   return jsonResponse({ ok: true, createdPlayers, createdDecks }, 201);
+}
+
+// Manually declares a deck's new bracket ahead of any game being logged
+// there -- for a player who's upgraded a deck and wants Set Up Pod's power
+// spread validation to reflect the new bracket's floor immediately, rather
+// than waiting for the next real game to be logged (see computePlayersData
+// for how this is applied). bracket: null clears a previously-set
+// declaration. Deliberately only touches decks.bracket -- never writes
+// game_results or baseline_power -- so it can't retroactively change any
+// already-logged game's numbers.
+async function handleDeckBracketWrite(request, env) {
+  let payload;
+  try {
+    payload = await request.json();
+  } catch {
+    return jsonResponse({ error: "Invalid JSON" }, 400);
+  }
+  if (!isValidBracketPayload(payload)) {
+    return jsonResponse({ error: "Payload must include deckId (number) and bracket (integer 1-5, or null to clear)" }, 400);
+  }
+  const deck = await env.DB.prepare("SELECT id FROM decks WHERE id = ?").bind(payload.deckId).first();
+  if (!deck) {
+    return jsonResponse({ error: `Unknown deck: ${payload.deckId}` }, 400);
+  }
+  await env.DB.prepare("UPDATE decks SET bracket = ? WHERE id = ?").bind(payload.bracket, payload.deckId).run();
+  return jsonResponse({ ok: true, deckId: payload.deckId, bracket: payload.bracket });
 }
 
 // ---------- GET /playgroup-games : live playgroup.gg read ----------
@@ -937,30 +993,46 @@ async function handleRosterDiff(env, ctx) {
 // Current Deck Strength's own IFERROR(LOOKUP(...), baseline) formula.
 // "Most recent" is g.id DESC (insertion order), not game_num DESC, since
 // game_num resets per season and isn't comparable across seasons.
+//
+// decks.bracket is a manual "this deck is now bracket N" declaration (set
+// via POST /decks/bracket -- see handleDeckBracketWrite), for a deck that's
+// moved brackets before any game has been logged there yet. It only takes
+// over "power" while it disagrees with the most recently *logged* game's
+// bracket -- the same reset-to-the-new-bracket's-floor rule
+// handleGamesWrite already applies when a submitted game's bracket differs
+// from the deck's previous one (see the comment there), just triggered
+// here by a manual declaration instead of a new game. The moment a real
+// game gets logged at that bracket, the two agree and the override quietly
+// stops mattering -- real game data always wins over a manual guess.
 async function computePlayersData(env) {
   const { results: playerRows } = await env.DB.prepare(
     "SELECT id, name, playgroup_username FROM players ORDER BY id"
   ).all();
 
   const { results: deckRows } = await env.DB.prepare(`
-    SELECT d.id, d.player_id, d.name, d.playgroup_deck_id, d.archived,
+    SELECT d.id, d.player_id, d.name, d.playgroup_deck_id, d.archived, d.bracket AS bracket_override,
+           (SELECT gr.bracket FROM game_results gr JOIN games g ON g.id = gr.game_id
+            WHERE gr.deck_id = d.id ORDER BY g.id DESC LIMIT 1) AS last_logged_bracket,
            COALESCE(
              (SELECT gr.game_calculated_deck_strength
               FROM game_results gr JOIN games g ON g.id = gr.game_id
               WHERE gr.deck_id = d.id
               ORDER BY g.id DESC LIMIT 1),
              d.baseline_power
-           ) AS power
+           ) AS computed_power
     FROM decks d
     ORDER BY d.id
   `).all();
 
   const decksByPlayer = {};
   for (const d of deckRows) {
+    const bracketPending = d.bracket_override != null && d.bracket_override !== d.last_logged_bracket;
     (decksByPlayer[d.player_id] ||= []).push({
       id: d.id,
       name: d.name,
-      power: d.power,
+      power: bracketPending ? d.bracket_override : d.computed_power,
+      bracket: d.bracket_override,
+      bracketPending,
       playgroupId: d.playgroup_deck_id,
       archived: !!d.archived,
     });
@@ -1229,6 +1301,10 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/roster") {
       return handleRosterWrite(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/decks/bracket") {
+      return handleDeckBracketWrite(request, env);
     }
 
     return new Response("Not found", { status: 404, headers: corsHeaders() });
