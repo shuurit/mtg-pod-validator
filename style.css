@@ -559,6 +559,9 @@ td.num {
 
 .banner.good { background: var(--good-bg); color: var(--good); border-color: var(--good-border); }
 .banner.bad { background: var(--bad-bg); color: var(--bad); border-color: var(--bad-border); }
+/* Nothing failed, but nothing was actually validated either -- e.g. every
+   selected deck is new (see evaluatePod's neverPlayed exemption). */
+.banner.warn { background: var(--warn-bg); color: var(--warn); border-color: var(--warn-border); }
 
 .result-row {
   display: flex;
@@ -581,8 +584,26 @@ td.num {
 }
 .result-row.pending-recheck .power { color: var(--warn); }
 
+/* A deck with zero logged games -- exempt from the power-spread check
+   entirely (see evaluatePod's neverPlayed exemption), not just "not yet
+   rechecked" like pending-recheck above. Same warn/orange language,
+   deliberately a separate class so it doesn't share pending-recheck's
+   own toggle logic. */
+.result-row.exempt {
+  background: var(--warn-bg);
+  border-color: var(--warn-border);
+}
+.result-row.exempt .power { color: var(--warn); }
+
 .result-row .name {
   font-weight: 600;
+}
+
+/* Revealed only once the whole pod passes -- see runValidation's allInRange
+   check. Muted/regular weight so it reads as secondary to the player name. */
+.result-row .result-deck-name {
+  color: var(--muted);
+  font-weight: 400;
 }
 
 .result-row .power {

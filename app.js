@@ -201,7 +201,7 @@ function applyPlayersFromD1(data) {
     name: p.name,
     decks: p.decks.map(d => ({
       id: d.id, name: d.name, power: d.power, playgroupId: d.playgroupId, archived: !!d.archived,
-      bracket: d.bracket ?? null, bracketPending: !!d.bracketPending,
+      bracket: d.bracket ?? null, bracketPending: !!d.bracketPending, neverPlayed: !!d.neverPlayed,
     })),
   })));
 }
@@ -766,18 +766,34 @@ function renderPodSlots() {
 // ---------- validation ----------
 
 function evaluatePod(entries) {
-  // entries: [{ playerId, playerName, deckId, power }]
-  // The weakest deck in the pod sets the floor; anything more than
+  // entries: [{ playerId, playerName, deckId, power, neverPlayed }]
+  // A deck with zero logged games (neverPlayed) is exempt -- its power is
+  // only baseline_power, an unconfirmed estimate, so it never enters the
+  // floor/ceiling math and can't drag an otherwise-fine pod out of range
+  // (or hide a real mismatch among everyone else behind its own pass).
+  // Exempt entries are always compatible, regardless of their power value.
+  const judged = entries.filter(e => !e.neverPlayed);
+
+  // Nobody here has a confirmed power yet -- nothing to compare, so
+  // there's nothing to validate. Every slot is exempt.
+  if (judged.length === 0) {
+    return entries.map(entry => ({ ...entry, compatible: true, overBy: 0, exempt: true }));
+  }
+
+  // The weakest judged deck sets the floor; anything more than
   // RANGE_TOLERANCE above it needs to come down. The weakest deck itself
   // is always compatible — it's never asked to get even weaker.
-  const powers = entries.map(e => e.power);
-  const floor = Math.min(...powers);
+  const floor = Math.min(...judged.map(e => e.power));
   const ceiling = floor + RANGE_TOLERANCE;
-  return entries.map(entry => ({
-    ...entry,
-    compatible: entry.power <= ceiling,
-    overBy: +Math.max(0, entry.power - ceiling).toFixed(2),
-  }));
+  return entries.map(entry => {
+    if (entry.neverPlayed) return { ...entry, compatible: true, overBy: 0, exempt: true };
+    return {
+      ...entry,
+      compatible: entry.power <= ceiling,
+      overBy: +Math.max(0, entry.power - ceiling).toFixed(2),
+      exempt: false,
+    };
+  });
 }
 
 function runValidation() {
@@ -803,52 +819,84 @@ function runValidation() {
       playerId: player.id,
       playerName: player.name,
       deckId: deck.id,
+      deckName: deck.name,
       power: deck.power,
+      neverPlayed: !!deck.neverPlayed,
     };
   });
 
-  const powers = entries.map(e => e.power);
-  const max = Math.max(...powers);
-  const min = Math.min(...powers);
-  const spread = +(max - min).toFixed(2);
-  const allInRange = spread <= RANGE_TOLERANCE;
+  // Decks with zero logged games are exempt from the power-spread check --
+  // see evaluatePod. The spread/floor/ceiling banner below is scoped to
+  // "judged" (non-exempt) entries only; exempt ones are reported on
+  // separately and never affect whether the pod passes.
+  const judged = entries.filter(e => !e.neverPlayed);
+  const exemptCount = entries.length - judged.length;
+  const exemptNote = exemptCount > 0
+    ? ` (${exemptCount} new deck${exemptCount === 1 ? "" : "s"} exempt — no games logged yet.)`
+    : "";
 
-  const banner = document.createElement("div");
-  banner.className = "banner " + (allInRange ? "good" : "bad");
-  banner.textContent = allInRange
-    ? `All decks are within range (spread: ${formatPower(spread)}).`
-    : `Spread is ${formatPower(spread)} — outside the ±${RANGE_TOLERANCE} target. Some decks need to change.`;
-  resultsDiv.appendChild(banner);
+  let allInRange;
+  if (judged.length === 0) {
+    allInRange = true;
+    lastCeiling = null;
+    const banner = document.createElement("div");
+    banner.className = "banner warn";
+    banner.textContent = "Every deck here is new — nothing to validate yet. Go ahead and play!";
+    resultsDiv.appendChild(banner);
+  } else {
+    const powers = judged.map(e => e.power);
+    const max = Math.max(...powers);
+    const min = Math.min(...powers);
+    const spread = +(max - min).toFixed(2);
+    allInRange = spread <= RANGE_TOLERANCE;
+
+    const banner = document.createElement("div");
+    banner.className = "banner " + (allInRange ? "good" : "bad");
+    banner.textContent = (allInRange
+      ? `All decks are within range (spread: ${formatPower(spread)}).`
+      : `Spread is ${formatPower(spread)} — outside the ±${RANGE_TOLERANCE} target. Some decks need to change.`) + exemptNote;
+    resultsDiv.appendChild(banner);
+
+    // Feeds refreshDeckOptions in renderPodSlots: a slot flagged here only
+    // offers decks at or under this ceiling the next time its picker reopens.
+    lastCeiling = min + RANGE_TOLERANCE;
+  }
 
   const evaluated = evaluatePod(entries);
-
-  // Feeds refreshDeckOptions in renderPodSlots: a slot flagged here only
-  // offers decks at or under this ceiling the next time its picker reopens.
-  lastCeiling = min + RANGE_TOLERANCE;
   evaluated.forEach((entry, i) => { podSelections[i].outOfRange = !entry.compatible; });
 
   for (const entry of evaluated) {
     const row = document.createElement("div");
-    row.className = "result-row " + (entry.compatible ? "ok" : "out");
+    row.className = "result-row " + (entry.exempt ? "exempt" : (entry.compatible ? "ok" : "out"));
     row.dataset.playerId = entry.playerId;
 
-    // Deck identity is never shown here either -- only who it belongs to
-    // and whether their (unnamed) pick is in range.
+    // Deck identity stays hidden while the pod might still change -- only
+    // who it belongs to and whether their (unnamed) pick is in range. Once
+    // the whole pod passes (allInRange), there's nothing left to hide:
+    // everyone's committed, so the actual matchup is revealed here.
     const name = document.createElement("span");
     name.className = "name";
     name.textContent = entry.playerName;
+    if (allInRange) {
+      const deckNameSpan = document.createElement("span");
+      deckNameSpan.className = "result-deck-name";
+      deckNameSpan.textContent = ` — ${entry.deckName}`;
+      name.appendChild(deckNameSpan);
+    }
 
     // Power itself stays masked here too -- only the amount a deck is
     // over the pod's range is ever shown, never the raw power value.
     const power = document.createElement("span");
     power.className = "power";
-    power.textContent = entry.compatible ? "✓ In range" : `⚠ Over by ${formatPower(entry.overBy)}`;
+    power.textContent = entry.exempt
+      ? "🆕 New deck — exempt this game"
+      : (entry.compatible ? "✓ In range" : `⚠ Over by ${formatPower(entry.overBy)}`);
 
     row.appendChild(name);
     row.appendChild(power);
     resultsDiv.appendChild(row);
 
-    if (!entry.compatible) {
+    if (!entry.compatible && !entry.exempt) {
       const box = document.createElement("div");
       box.className = "suggestions";
       box.textContent = `Select a new deck for ${entry.playerName} above, then check the spread again.`;

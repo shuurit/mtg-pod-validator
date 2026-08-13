@@ -1033,6 +1033,14 @@ async function computePlayersData(env) {
       power: bracketPending ? d.bracket_override : d.computed_power,
       bracket: d.bracket_override,
       bracketPending,
+      // last_logged_bracket is NULL exactly when no game_results row exists
+      // for this deck (bracket is NOT NULL on every real row) -- reused
+      // here, not a new query, to flag a deck that's never actually been
+      // played. Set Up Pod exempts these from the power-spread check (see
+      // evaluatePod in app.js): a brand-new deck's power is baseline_power,
+      // an estimate nobody's confirmed with a real game yet, so it
+      // shouldn't be able to fail (or pass) a pod on that guess alone.
+      neverPlayed: d.last_logged_bracket == null,
       playgroupId: d.playgroup_deck_id,
       archived: !!d.archived,
     });
