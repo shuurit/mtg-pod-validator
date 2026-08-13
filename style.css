@@ -560,7 +560,7 @@ td.num {
 .banner.good { background: var(--good-bg); color: var(--good); border-color: var(--good-border); }
 .banner.bad { background: var(--bad-bg); color: var(--bad); border-color: var(--bad-border); }
 /* Nothing failed, but nothing was actually validated either -- e.g. every
-   selected deck is new (see evaluatePod's neverPlayed exemption). */
+   selected deck is new (see evaluatePod's newDeck exemption). */
 .banner.warn { background: var(--warn-bg); color: var(--warn); border-color: var(--warn-border); }
 
 .result-row {
@@ -584,11 +584,10 @@ td.num {
 }
 .result-row.pending-recheck .power { color: var(--warn); }
 
-/* A deck with zero logged games -- exempt from the power-spread check
-   entirely (see evaluatePod's neverPlayed exemption), not just "not yet
-   rechecked" like pending-recheck above. Same warn/orange language,
-   deliberately a separate class so it doesn't share pending-recheck's
-   own toggle logic. */
+/* A deck flagged newDeck -- exempt from the power-spread check entirely
+   (see evaluatePod's newDeck exemption), not just "not yet rechecked"
+   like pending-recheck above. Same warn/orange language, deliberately a
+   separate class so it doesn't share pending-recheck's own toggle logic. */
 .result-row.exempt {
   background: var(--warn-bg);
   border-color: var(--warn-border);

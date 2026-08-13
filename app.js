@@ -201,7 +201,7 @@ function applyPlayersFromD1(data) {
     name: p.name,
     decks: p.decks.map(d => ({
       id: d.id, name: d.name, power: d.power, playgroupId: d.playgroupId, archived: !!d.archived,
-      bracket: d.bracket ?? null, bracketPending: !!d.bracketPending, neverPlayed: !!d.neverPlayed,
+      bracket: d.bracket ?? null, bracketPending: !!d.bracketPending, newDeck: !!d.newDeck,
     })),
   })));
 }
@@ -766,13 +766,15 @@ function renderPodSlots() {
 // ---------- validation ----------
 
 function evaluatePod(entries) {
-  // entries: [{ playerId, playerName, deckId, power, neverPlayed }]
-  // A deck with zero logged games (neverPlayed) is exempt -- its power is
-  // only baseline_power, an unconfirmed estimate, so it never enters the
-  // floor/ceiling math and can't drag an otherwise-fine pod out of range
-  // (or hide a real mismatch among everyone else behind its own pass).
-  // Exempt entries are always compatible, regardless of their power value.
-  const judged = entries.filter(e => !e.neverPlayed);
+  // entries: [{ playerId, playerName, deckId, power, newDeck }]
+  // A deck flagged newDeck (decks.new_deck, set when it's pulled in via
+  // Update the App, cleared the moment it's actually played -- see
+  // handleRosterWrite/handleGamesWrite in relay.js) is exempt: its power
+  // is only baseline_power, an unconfirmed estimate, so it never enters
+  // the floor/ceiling math and can't drag an otherwise-fine pod out of
+  // range (or hide a real mismatch among everyone else behind its own
+  // pass). Exempt entries are always compatible, regardless of power.
+  const judged = entries.filter(e => !e.newDeck);
 
   // Nobody here has a confirmed power yet -- nothing to compare, so
   // there's nothing to validate. Every slot is exempt.
@@ -786,7 +788,7 @@ function evaluatePod(entries) {
   const floor = Math.min(...judged.map(e => e.power));
   const ceiling = floor + RANGE_TOLERANCE;
   return entries.map(entry => {
-    if (entry.neverPlayed) return { ...entry, compatible: true, overBy: 0, exempt: true };
+    if (entry.newDeck) return { ...entry, compatible: true, overBy: 0, exempt: true };
     return {
       ...entry,
       compatible: entry.power <= ceiling,
@@ -821,15 +823,15 @@ function runValidation() {
       deckId: deck.id,
       deckName: deck.name,
       power: deck.power,
-      neverPlayed: !!deck.neverPlayed,
+      newDeck: !!deck.newDeck,
     };
   });
 
-  // Decks with zero logged games are exempt from the power-spread check --
-  // see evaluatePod. The spread/floor/ceiling banner below is scoped to
+  // Decks flagged newDeck are exempt from the power-spread check -- see
+  // evaluatePod. The spread/floor/ceiling banner below is scoped to
   // "judged" (non-exempt) entries only; exempt ones are reported on
   // separately and never affect whether the pod passes.
-  const judged = entries.filter(e => !e.neverPlayed);
+  const judged = entries.filter(e => !e.newDeck);
   const exemptCount = entries.length - judged.length;
   const exemptNote = exemptCount > 0
     ? ` (${exemptCount} new deck${exemptCount === 1 ? "" : "s"} exempt — no games logged yet.)`

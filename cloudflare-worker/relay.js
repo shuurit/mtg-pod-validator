@@ -500,7 +500,15 @@ async function handleGamesWrite(request, env, ctx) {
       f.J, f.K, f.L, f.M, f.N, f.O, f.Q, f.U, X
     );
   });
-  await env.DB.batch(gameResultStmts);
+
+  // A deck stops being "new" the moment it's actually played, regardless
+  // of what its new_deck flag was before this -- idempotent (no-op if
+  // already 0), so no need to check first.
+  const clearNewDeckStmts = resolved.map(p =>
+    env.DB.prepare("UPDATE decks SET new_deck = 0 WHERE id = ? AND new_deck = 1").bind(p.deckId)
+  );
+
+  await env.DB.batch([...gameResultStmts, ...clearNewDeckStmts]);
 
   // Fires post-discord-live.yml, which reads the just-written game back
   // out of D1 (via GET /players, /games, /deck-win-rates -- see
@@ -565,7 +573,7 @@ async function handleRosterWrite(request, env) {
 
     if (p.decks.length) {
       const deckStmts = p.decks.map(d =>
-        env.DB.prepare("INSERT INTO decks (player_id, name, baseline_power, playgroup_deck_id, playgroup_deck_name) VALUES (?, ?, ?, ?, ?)")
+        env.DB.prepare("INSERT INTO decks (player_id, name, baseline_power, playgroup_deck_id, playgroup_deck_name, new_deck) VALUES (?, ?, ?, ?, ?, 1)")
           .bind(playerId, d.name, d.power, d.playgroupDeckId != null ? String(d.playgroupDeckId) : null, d.playgroupDeckName ?? null)
       );
       await env.DB.batch(deckStmts);
@@ -578,7 +586,7 @@ async function handleRosterWrite(request, env) {
     if (!player) {
       return jsonResponse({ error: `Unknown player: ${d.player}` }, 400);
     }
-    await env.DB.prepare("INSERT INTO decks (player_id, name, baseline_power, playgroup_deck_id, playgroup_deck_name) VALUES (?, ?, ?, ?, ?)")
+    await env.DB.prepare("INSERT INTO decks (player_id, name, baseline_power, playgroup_deck_id, playgroup_deck_name, new_deck) VALUES (?, ?, ?, ?, ?, 1)")
       .bind(player.id, d.name, d.power, d.playgroupDeckId != null ? String(d.playgroupDeckId) : null, d.playgroupDeckName ?? null).run();
     createdDecks.push({ player: d.player, name: d.name });
   }
@@ -1010,7 +1018,8 @@ async function computePlayersData(env) {
   ).all();
 
   const { results: deckRows } = await env.DB.prepare(`
-    SELECT d.id, d.player_id, d.name, d.playgroup_deck_id, d.archived, d.bracket AS bracket_override,
+    SELECT d.id, d.player_id, d.name, d.playgroup_deck_id, d.archived, d.new_deck,
+           d.bracket AS bracket_override,
            (SELECT gr.bracket FROM game_results gr JOIN games g ON g.id = gr.game_id
             WHERE gr.deck_id = d.id ORDER BY g.id DESC LIMIT 1) AS last_logged_bracket,
            COALESCE(
@@ -1033,14 +1042,11 @@ async function computePlayersData(env) {
       power: bracketPending ? d.bracket_override : d.computed_power,
       bracket: d.bracket_override,
       bracketPending,
-      // last_logged_bracket is NULL exactly when no game_results row exists
-      // for this deck (bracket is NOT NULL on every real row) -- reused
-      // here, not a new query, to flag a deck that's never actually been
-      // played. Set Up Pod exempts these from the power-spread check (see
-      // evaluatePod in app.js): a brand-new deck's power is baseline_power,
-      // an estimate nobody's confirmed with a real game yet, so it
-      // shouldn't be able to fail (or pass) a pod on that guess alone.
-      neverPlayed: d.last_logged_bracket == null,
+      // Explicitly maintained (decks.new_deck), not inferred from
+      // game_results -- see schema.sql. Set Up Pod exempts these from the
+      // power-spread check (see evaluatePod in app.js): baseline_power is
+      // an unconfirmed estimate until this deck's first game is logged.
+      newDeck: !!d.new_deck,
       playgroupId: d.playgroup_deck_id,
       archived: !!d.archived,
     });

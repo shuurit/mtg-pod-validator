@@ -54,7 +54,17 @@ CREATE TABLE decks (
   -- Leonardo/Michelangelo case this column exists because of).
   playgroup_deck_name TEXT,
   bracket INTEGER,
-  archived INTEGER NOT NULL DEFAULT 0
+  archived INTEGER NOT NULL DEFAULT 0,
+  -- Explicitly maintained, not inferred from game_results -- a deck with no
+  -- logged games isn't reliably "brand new" (older decks' full history
+  -- isn't guaranteed to be captured in D1), so this is asserted directly
+  -- instead of guessed. Set to 1 by handleRosterWrite when a deck is
+  -- pulled in via Update the App, cleared back to 0 by handleGamesWrite
+  -- the moment any game actually gets logged for it. Set Up Pod exempts
+  -- decks where this is 1 from the power-spread check (see
+  -- computePlayersData/evaluatePod) -- baseline_power is an unconfirmed
+  -- estimate until then.
+  new_deck INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE games (
