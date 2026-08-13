@@ -770,6 +770,140 @@ function renderPodSlots() {
   }
 }
 
+// ---------- reveal modal (Scryfall commander art) ----------
+
+const SCRYFALL_NAMED_URL = "https://api.scryfall.com/cards/named";
+// cardName -> { imageUrl } | null (lookup failed) -- so re-opening the
+// modal for the same commanders across pods/checks doesn't re-hit
+// Scryfall every time.
+const commanderArtCache = new Map();
+
+// Our own disambiguation suffix for two players tracking the same
+// commander (e.g. "Eshki, Temur's Roar (Manny's)") isn't part of the real
+// card name and would break a Scryfall lookup -- strip it first.
+function stripDeckDisambiguation(name) {
+  return name.replace(/\s*\([^()]*'s\)\s*$/i, "").trim();
+}
+
+// Partner/background commanders are tracked as one deck name joined with
+// "/" (e.g. "Leonardo, the Balance/Michelangelo, the Heart") -- split into
+// the individual real card names Scryfall actually knows.
+function splitCommanderNames(deckName) {
+  return stripDeckDisambiguation(deckName).split("/").map(s => s.trim()).filter(Boolean);
+}
+
+// fuzzy= tolerates the kind of near-miss a hand-typed deck name is prone
+// to (accents, minor punctuation) far better than an exact-name lookup.
+async function fetchCommanderArt(cardName) {
+  if (commanderArtCache.has(cardName)) return commanderArtCache.get(cardName);
+  let result = null;
+  try {
+    const res = await fetch(`${SCRYFALL_NAMED_URL}?fuzzy=${encodeURIComponent(cardName)}`);
+    if (res.ok) {
+      const card = await res.json();
+      // Double-faced/split cards have no top-level image_uris -- the front
+      // face's is under card_faces[0] instead.
+      const imageUrl = card.image_uris?.art_crop || card.card_faces?.[0]?.image_uris?.art_crop || null;
+      if (imageUrl) result = { imageUrl };
+    }
+  } catch {
+    // Network hiccup or Scryfall down -- falls through to the text
+    // fallback in showRevealModal, never breaks the popup over one lookup.
+  }
+  commanderArtCache.set(cardName, result);
+  return result;
+}
+
+// Popped open automatically once runValidation finds the whole pod in
+// range. Each tile's art loads independently (no shared loading gate) so
+// one slow or failed lookup never holds up the rest of the reveal.
+function showRevealModal(evaluated) {
+  const modal = document.getElementById("reveal-modal");
+  const grid = document.getElementById("reveal-modal-grid");
+  const goBtn = document.getElementById("reveal-modal-to-game");
+  if (!modal || !grid || !goBtn) return;
+
+  goBtn.href = PLAYGROUP_URL;
+  grid.innerHTML = "";
+
+  // Sized so the whole popup fits the viewport with no scrolling, for any
+  // pod size 1-8 -- capped at 4 columns (wraps to a 2nd row past 4
+  // players), image height computed from whatever's left after the
+  // title/button/padding chrome and however many rows that produces.
+  const n = evaluated.length;
+  const columns = Math.min(4, n) || 1;
+  const rows = Math.ceil(n / columns);
+  const modalMaxHeight = Math.min(window.innerHeight * 0.9, 640);
+  const chromeHeight = 150; // title + button + padding, roughly
+  const textHeight = 44;    // player name + deck name lines, per row
+  const gapHeight = 12;
+  const availableForImages = modalMaxHeight - chromeHeight - (rows * textHeight) - ((rows - 1) * gapHeight);
+  // Capped at 260 -- a small pod (1-3 players, few rows) has plenty of
+  // vertical room to spare, but a single giant image looks disproportionate
+  // even though it'd technically still fit without scrolling.
+  const imageHeight = Math.min(260, Math.max(70, Math.floor(availableForImages / rows)));
+
+  grid.style.gridTemplateColumns = `repeat(${columns}, 1fr)`;
+  grid.style.setProperty("--reveal-img-height", `${imageHeight}px`);
+
+  for (const entry of evaluated) {
+    const tile = document.createElement("div");
+    tile.className = "reveal-tile";
+
+    const artSlot = document.createElement("div");
+    artSlot.className = "reveal-tile-art-fallback";
+    artSlot.textContent = "Loading art…";
+    tile.appendChild(artSlot);
+
+    const playerLine = document.createElement("div");
+    playerLine.className = "reveal-tile-player";
+    playerLine.textContent = entry.playerName;
+    tile.appendChild(playerLine);
+
+    const deckLine = document.createElement("div");
+    deckLine.className = "reveal-tile-deck";
+    deckLine.textContent = entry.deckName;
+    tile.appendChild(deckLine);
+
+    grid.appendChild(tile);
+
+    const cardNames = splitCommanderNames(entry.deckName);
+    Promise.all(cardNames.map(fetchCommanderArt)).then(arts => {
+      const found = arts.filter(Boolean);
+      if (found.length === 0) {
+        artSlot.textContent = "No card art found";
+        return;
+      }
+      const pair = document.createElement("div");
+      pair.className = "reveal-tile-art-pair";
+      for (const art of found) {
+        const img = document.createElement("img");
+        img.className = "reveal-tile-art";
+        img.src = art.imageUrl;
+        img.alt = "";
+        img.loading = "lazy";
+        pair.appendChild(img);
+      }
+      artSlot.replaceWith(pair);
+    });
+  }
+
+  modal.hidden = false;
+}
+
+function hideRevealModal() {
+  const modal = document.getElementById("reveal-modal");
+  if (modal) modal.hidden = true;
+}
+
+document.getElementById("reveal-modal-close")?.addEventListener("click", hideRevealModal);
+document.getElementById("reveal-modal")?.addEventListener("click", e => {
+  if (e.target.id === "reveal-modal") hideRevealModal();
+});
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") hideRevealModal();
+});
+
 // ---------- validation ----------
 
 function evaluatePod(entries) {
@@ -914,13 +1048,9 @@ function runValidation() {
   }
 
   if (allInRange) {
-    const goBtn = document.createElement("a");
-    goBtn.className = "primary to-game-btn";
-    goBtn.textContent = "To the Game!";
-    goBtn.href = PLAYGROUP_URL;
-    goBtn.target = "_blank";
-    goBtn.rel = "noopener";
-    resultsDiv.appendChild(goBtn);
+    // "To the Game!" lives only in the reveal popup now, not duplicated
+    // here inline -- see showRevealModal.
+    showRevealModal(evaluated);
   }
 }
 

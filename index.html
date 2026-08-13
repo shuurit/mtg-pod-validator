@@ -103,6 +103,18 @@
   </div>
 </div>
 
+<!-- Shown once a pod fully passes the power-spread check -- see
+     showRevealModal in app.js. Hidden by default, one persistent node
+     regardless of which tab is active. -->
+<div id="reveal-modal" class="modal-overlay" hidden>
+  <div class="modal-card">
+    <button id="reveal-modal-close" class="icon-btn modal-close" aria-label="Close">&#10005;</button>
+    <h2>Ready to Play!</h2>
+    <div id="reveal-modal-grid" class="reveal-grid"></div>
+    <a id="reveal-modal-to-game" class="primary to-game-btn" target="_blank" rel="noopener">To the Game!</a>
+  </div>
+</div>
+
 <script src="app.js"></script>
 </body>
 </html>
