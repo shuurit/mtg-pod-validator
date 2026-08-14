@@ -21,9 +21,9 @@ small Cloudflare Worker relay backed by a Cloudflare D1 database. Works great
   pre-fills Place/KOs/TOV straight from its own event log (still fully
   editable) — deck strength, pop-off, disruptions, recoveries, and "clearly
   behind" are the only real manual entry left.
-- **Update the App** — new playgroup.gg members and new decks for existing
+- **New Players/Decks** — new playgroup.gg members and new decks for existing
   players, detected live and independent of whether a game's been played
-  with them yet. Review, set a starting power for anything new, and submit
+  with them yet. Review, pick a bracket (1–5) for anything new, and submit
   once to add it all. The tab button shows a badge when something's pending.
 - **Player Win Rates** — playgroup.gg's tracked win rate side-by-side with
   the app's own calculated Player Adjusted Win Rate.

@@ -2126,7 +2126,7 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
 // rows, by playgroup.gg username for a new player's display name. These
 // are the actual source of truth for what gets submitted -- rendering just
 // reflects them, it never invents the checked/power values on its own.
-const rosterUpdateDeckState = new Map(); // deckId (string) -> { checked, power }
+const rosterUpdateDeckState = new Map(); // deckId (string) -> { checked, bracket }
 const rosterUpdateNameState = new Map(); // username -> displayName
 let rosterUpdateSelectedGroupKey = null; // which player's group the dropdown is showing, preserved across renders too
 let rosterUpdateSubmitConfirmation = null; // message to show once, right after a successful submit -- see renderRosterUpdateConfirmationBanner
@@ -2145,10 +2145,15 @@ let rosterUpdateSubmitConfirmation = null; // message to show once, right after 
 function ensureRosterUpdateDeckStateDefault(deck) {
   const key = String(deck.id);
   if (!rosterUpdateDeckState.has(key)) {
-    rosterUpdateDeckState.set(key, {
-      checked: false,
-      power: typeof deck.power_level === "number" ? deck.power_level.toFixed(1) : "",
-    });
+    // Nearest whole bracket to playgroup.gg's own rating, clamped to our
+    // 1-5 range, as a starting suggestion -- still fully editable. The
+    // deck's actual baseline is the bracket itself once picked (e.g.
+    // Bracket 3 -> baseline_power 3.0), not this rating directly; see
+    // the submit handler in renderRosterUpdateSubmit.
+    const suggested = typeof deck.power_level === "number"
+      ? String(Math.min(5, Math.max(1, Math.round(deck.power_level))))
+      : "";
+    rosterUpdateDeckState.set(key, { checked: false, bracket: suggested });
   }
 }
 
@@ -2261,17 +2266,22 @@ function deckTableRow(deck) {
     nameCell.appendChild(aside);
   }
 
-  const powerInput = document.createElement("input");
-  powerInput.type = "number";
-  powerInput.className = "uta-deck-power";
-  powerInput.dataset.deckId = deck.id;
-  powerInput.step = "0.1";
-  powerInput.min = "0";
-  powerInput.max = "5";
-  powerInput.value = state.power;
-  powerInput.placeholder = "power";
+  const bracketSelect = document.createElement("select");
+  bracketSelect.className = "uta-deck-bracket";
+  bracketSelect.dataset.deckId = deck.id;
+  const blankOpt = document.createElement("option");
+  blankOpt.value = "";
+  blankOpt.textContent = "Select bracket…";
+  bracketSelect.appendChild(blankOpt);
+  for (let b = 1; b <= 5; b++) {
+    const opt = document.createElement("option");
+    opt.value = String(b);
+    opt.textContent = `Bracket ${b}`;
+    bracketSelect.appendChild(opt);
+  }
+  bracketSelect.value = state.bracket;
 
-  return [{ node: checkbox }, { node: nameCell }, { node: powerInput }];
+  return [{ node: checkbox }, { node: nameCell }, { node: bracketSelect }];
 }
 
 // Wires up live state-capture on a just-rendered group's inputs, so every
@@ -2286,9 +2296,9 @@ function wireRosterUpdateGroupInputs(container) {
       refreshRosterUpdateSubmitSummary();
     });
   });
-  container.querySelectorAll(".uta-deck-power").forEach(el => {
-    el.addEventListener("input", () => {
-      rosterUpdateDeckState.set(el.dataset.deckId, { ...rosterUpdateDeckState.get(el.dataset.deckId), power: el.value });
+  container.querySelectorAll(".uta-deck-bracket").forEach(el => {
+    el.addEventListener("change", () => {
+      rosterUpdateDeckState.set(el.dataset.deckId, { ...rosterUpdateDeckState.get(el.dataset.deckId), bracket: el.value });
     });
   });
   const nameInput = container.querySelector(".uta-display-name");
@@ -2327,7 +2337,7 @@ function renderRosterUpdateGroup(group) {
     header.appendChild(label);
     box.appendChild(header);
 
-    const { table } = buildTable("uta-deck-table", ["", "Deck", "Starting power"], p.decks.map(deckTableRow));
+    const { table } = buildTable("uta-deck-table", ["", "Deck", "Bracket"], p.decks.map(deckTableRow));
     box.appendChild(table);
   } else {
     const g = group.data;
@@ -2337,7 +2347,7 @@ function renderRosterUpdateGroup(group) {
     header.appendChild(document.createTextNode(` — ${g.decks.length} new deck(s)`));
     box.appendChild(header);
 
-    const { table } = buildTable("uta-deck-table", ["", "Deck", "Starting power"], g.decks.map(deckTableRow));
+    const { table } = buildTable("uta-deck-table", ["", "Deck", "Bracket"], g.decks.map(deckTableRow));
     box.appendChild(table);
   }
 
@@ -2557,9 +2567,16 @@ function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
         p.decks.forEach(d => {
           const state = rosterUpdateDeckState.get(String(d.id));
           if (!state || !state.checked) return;
-          const power = parseFloat(state.power);
-          if (!Number.isFinite(power)) return;
-          decks.push({ name: d.commander_name, power, playgroupDeckId: d.id, playgroupDeckName: d.name });
+          // The bracket itself is the baseline (e.g. Bracket 3 -> 3.0) --
+          // same reset-to-the-floor rule as everywhere else a deck's
+          // bracket is set, applied here since a brand-new deck has no
+          // game history to earn a fraction from yet. Sent as `power` to
+          // match handleRosterWrite's existing baseline_power column --
+          // no relay.js change needed, an integer is just as valid a
+          // number there as the decimal it replaces.
+          const bracket = parseInt(state.bracket, 10);
+          if (!Number.isInteger(bracket) || bracket < 1 || bracket > 5) return;
+          decks.push({ name: d.commander_name, power: bracket, playgroupDeckId: d.id, playgroupDeckName: d.name });
           submittedDeckIds.push(String(d.id));
         });
         if (displayName && decks.length > 0) {
@@ -2572,9 +2589,9 @@ function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
         g.decks.forEach(d => {
           const state = rosterUpdateDeckState.get(String(d.id));
           if (!state || !state.checked) return;
-          const power = parseFloat(state.power);
-          if (!Number.isFinite(power)) return;
-          payload.newDecksForExisting.push({ player: g.player, name: d.commander_name, power, playgroupDeckId: d.id, playgroupDeckName: d.name });
+          const bracket = parseInt(state.bracket, 10);
+          if (!Number.isInteger(bracket) || bracket < 1 || bracket > 5) return;
+          payload.newDecksForExisting.push({ player: g.player, name: d.commander_name, power: bracket, playgroupDeckId: d.id, playgroupDeckName: d.name });
           submittedDeckIds.push(String(d.id));
         });
       });
@@ -2582,7 +2599,7 @@ function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
       if (payload.newPlayers.length === 0 && payload.newDecksForExisting.length === 0) {
         submitBtn.disabled = false;
         submitBtn.textContent = "Add Player/Decks";
-        statusEl.textContent = "Nothing selected (or missing a starting power) — check the boxes and power fields above.";
+        statusEl.textContent = "Nothing selected (or missing a bracket) — check the boxes and pick a bracket above.";
         return;
       }
 
