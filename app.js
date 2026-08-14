@@ -2150,7 +2150,7 @@ function ensureRosterUpdateDeckStateDefault(deck) {
     // itself once picked (e.g. Bracket 3 -> baseline_power 3.0), so this
     // is a deliberate choice, not a suggestion, and shouldn't default to
     // one; see the submit handler in renderRosterUpdateSubmit.
-    rosterUpdateDeckState.set(key, { checked: false, bracket: "" });
+    rosterUpdateDeckState.set(key, { checked: false, bracket: "", potentialBracket4: false });
   }
 }
 
@@ -2225,12 +2225,29 @@ function computeRosterDiff(data) {
 
     const player = players.find(p => p.name === member.mapped_player);
     const existingDecks = player ? player.decks : [];
-    const existingIds = new Set(existingDecks.map(d => d.playgroupId).filter(Boolean));
+    const existingById = new Map(existingDecks.filter(d => d.playgroupId).map(d => [String(d.playgroupId), d]));
     const existingNames = new Set(existingDecks.map(d => normalizeCommanderName(d.name)));
 
-    const newDecks = allDecks.filter(deck =>
-      !existingIds.has(String(deck.id)) && !existingNames.has(normalizeCommanderName(deck.commander_name))
-    );
+    const newDecks = [];
+    for (const deck of allDecks) {
+      const trackedAtSameId = existingById.get(String(deck.id));
+      if (trackedAtSameId) {
+        // Same playgroup.gg deck id, but its commander no longer matches
+        // what we have on file -- a commander swap for the same physical
+        // deck. Not an edit to the old deck's own numbers (its baseline/
+        // history stay attached to the old commander) -- surfaced as a
+        // new deck needing its own bracket placement, same as any other.
+        // See playgroup_deck_name's comment in schema.sql for the
+        // Leonardo/Michelangelo case this mirrors.
+        if (normalizeCommanderName(trackedAtSameId.name) !== normalizeCommanderName(deck.commander_name)) {
+          newDecks.push({ ...deck, replacesCommanderName: trackedAtSameId.name });
+        }
+        continue;
+      }
+      if (!existingNames.has(normalizeCommanderName(deck.commander_name))) {
+        newDecks.push(deck);
+      }
+    }
     if (newDecks.length > 0) {
       newDecksForExisting.push({ player: member.mapped_player, decks: newDecks });
     }
@@ -2262,6 +2279,12 @@ function deckTableRow(deck) {
     aside.textContent = `(${deck.name})`;
     nameCell.appendChild(aside);
   }
+  if (deck.replacesCommanderName) {
+    const swapHint = document.createElement("span");
+    swapHint.className = "hint";
+    swapHint.textContent = ` — commander swap, was ${deck.replacesCommanderName}`;
+    nameCell.appendChild(swapHint);
+  }
 
   const bracketSelect = document.createElement("select");
   bracketSelect.className = "uta-deck-bracket";
@@ -2278,7 +2301,20 @@ function deckTableRow(deck) {
   }
   bracketSelect.value = state.bracket;
 
-  return [{ node: checkbox }, { node: nameCell }, { node: bracketSelect }];
+  const b4Btn = document.createElement("button");
+  b4Btn.type = "button";
+  b4Btn.className = "deck-edit-btn uta-deck-b4" + (state.potentialBracket4 ? " deck-edit-btn-active" : "");
+  b4Btn.textContent = "🔥";
+  b4Btn.title = "Flag this deck as a potential Bracket 4 (early two-card combo) from its very first game";
+  b4Btn.setAttribute("aria-label", `Flag ${deck.commander_name} as potential Bracket 4`);
+  b4Btn.dataset.deckId = deck.id;
+  // Only meaningful for a deck actually being placed at Bracket 3 -- the
+  // flag exists to catch a Bracket-3 deck that's secretly playing like a
+  // 4. Kept in sync as the bracket choice changes by the bracket select's
+  // own change listener below, not re-derived here on every render.
+  b4Btn.hidden = state.bracket !== "3";
+
+  return [{ node: checkbox }, { node: nameCell }, { node: bracketSelect }, { node: b4Btn }];
 }
 
 // Wires up live state-capture on a just-rendered group's inputs, so every
@@ -2295,7 +2331,33 @@ function wireRosterUpdateGroupInputs(container) {
   });
   container.querySelectorAll(".uta-deck-bracket").forEach(el => {
     el.addEventListener("change", () => {
-      rosterUpdateDeckState.set(el.dataset.deckId, { ...rosterUpdateDeckState.get(el.dataset.deckId), bracket: el.value });
+      const deckId = el.dataset.deckId;
+      let next = { ...rosterUpdateDeckState.get(deckId), bracket: el.value };
+      const b4Btn = el.closest("tr")?.querySelector(".uta-deck-b4");
+      if (b4Btn) {
+        const eligible = el.value === "3";
+        b4Btn.hidden = !eligible;
+        // Switching away from Bracket 3 clears any flag already set --
+        // the flag shouldn't survive attached to a bracket it no longer
+        // applies to.
+        if (!eligible && next.potentialBracket4) {
+          next = { ...next, potentialBracket4: false };
+          b4Btn.classList.remove("deck-edit-btn-active");
+        }
+      }
+      rosterUpdateDeckState.set(deckId, next);
+    });
+  });
+  // A plain local toggle, not a live write like togglePotentialBracket4 --
+  // this deck doesn't exist yet, so there's nothing to write to until the
+  // whole row is submitted. No confirm modal either; picking a bracket and
+  // hitting submit is already the deliberate, reviewed action here.
+  container.querySelectorAll(".uta-deck-b4").forEach(el => {
+    el.addEventListener("click", () => {
+      const current = rosterUpdateDeckState.get(el.dataset.deckId);
+      const next = !current?.potentialBracket4;
+      rosterUpdateDeckState.set(el.dataset.deckId, { ...current, potentialBracket4: next });
+      el.classList.toggle("deck-edit-btn-active", next);
     });
   });
   const nameInput = container.querySelector(".uta-display-name");
@@ -2334,7 +2396,7 @@ function renderRosterUpdateGroup(group) {
     header.appendChild(label);
     box.appendChild(header);
 
-    const { table } = buildTable("uta-deck-table", ["", "Deck", "Bracket"], p.decks.map(deckTableRow));
+    const { table } = buildTable("uta-deck-table", ["", "Deck", "Bracket", "Bracket 4?"], p.decks.map(deckTableRow));
     box.appendChild(table);
   } else {
     const g = group.data;
@@ -2344,7 +2406,7 @@ function renderRosterUpdateGroup(group) {
     header.appendChild(document.createTextNode(` — ${g.decks.length} new deck(s)`));
     box.appendChild(header);
 
-    const { table } = buildTable("uta-deck-table", ["", "Deck", "Bracket"], g.decks.map(deckTableRow));
+    const { table } = buildTable("uta-deck-table", ["", "Deck", "Bracket", "Bracket 4?"], g.decks.map(deckTableRow));
     box.appendChild(table);
   }
 
@@ -2573,7 +2635,7 @@ function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
           // number there as the decimal it replaces.
           const bracket = parseInt(state.bracket, 10);
           if (!Number.isInteger(bracket) || bracket < 1 || bracket > 5) return;
-          decks.push({ name: d.commander_name, power: bracket, playgroupDeckId: d.id, playgroupDeckName: d.name });
+          decks.push({ name: d.commander_name, power: bracket, playgroupDeckId: d.id, playgroupDeckName: d.name, potentialBracket4: !!state.potentialBracket4 });
           submittedDeckIds.push(String(d.id));
         });
         if (displayName && decks.length > 0) {
@@ -2588,7 +2650,7 @@ function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
           if (!state || !state.checked) return;
           const bracket = parseInt(state.bracket, 10);
           if (!Number.isInteger(bracket) || bracket < 1 || bracket > 5) return;
-          payload.newDecksForExisting.push({ player: g.player, name: d.commander_name, power: bracket, playgroupDeckId: d.id, playgroupDeckName: d.name });
+          payload.newDecksForExisting.push({ player: g.player, name: d.commander_name, power: bracket, playgroupDeckId: d.id, playgroupDeckName: d.name, potentialBracket4: !!state.potentialBracket4 });
           submittedDeckIds.push(String(d.id));
         });
       });

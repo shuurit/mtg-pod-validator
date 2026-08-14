@@ -256,7 +256,8 @@ function isValidRosterUpdatePayload(payload) {
   if (newPlayers.length === 0 && newDecks.length === 0) return false;
 
   const validDeck = d =>
-    d && typeof d === "object" && typeof d.name === "string" && d.name && typeof d.power === "number";
+    d && typeof d === "object" && typeof d.name === "string" && d.name && typeof d.power === "number" &&
+    (d.potentialBracket4 === undefined || typeof d.potentialBracket4 === "boolean");
 
   const validNewPlayer = p =>
     p && typeof p === "object" &&
@@ -582,8 +583,8 @@ async function handleRosterWrite(request, env) {
 
     if (p.decks.length) {
       const deckStmts = p.decks.map(d =>
-        env.DB.prepare("INSERT INTO decks (player_id, name, baseline_power, playgroup_deck_id, playgroup_deck_name, new_deck) VALUES (?, ?, ?, ?, ?, 1)")
-          .bind(playerId, d.name, d.power, d.playgroupDeckId != null ? String(d.playgroupDeckId) : null, d.playgroupDeckName ?? null)
+        env.DB.prepare("INSERT INTO decks (player_id, name, baseline_power, playgroup_deck_id, playgroup_deck_name, new_deck, potential_bracket_4) VALUES (?, ?, ?, ?, ?, 1, ?)")
+          .bind(playerId, d.name, d.power, d.playgroupDeckId != null ? String(d.playgroupDeckId) : null, d.playgroupDeckName ?? null, d.potentialBracket4 ? 1 : 0)
       );
       await env.DB.batch(deckStmts);
     }
@@ -595,8 +596,8 @@ async function handleRosterWrite(request, env) {
     if (!player) {
       return jsonResponse({ error: `Unknown player: ${d.player}` }, 400);
     }
-    await env.DB.prepare("INSERT INTO decks (player_id, name, baseline_power, playgroup_deck_id, playgroup_deck_name, new_deck) VALUES (?, ?, ?, ?, ?, 1)")
-      .bind(player.id, d.name, d.power, d.playgroupDeckId != null ? String(d.playgroupDeckId) : null, d.playgroupDeckName ?? null).run();
+    await env.DB.prepare("INSERT INTO decks (player_id, name, baseline_power, playgroup_deck_id, playgroup_deck_name, new_deck, potential_bracket_4) VALUES (?, ?, ?, ?, ?, 1, ?)")
+      .bind(player.id, d.name, d.power, d.playgroupDeckId != null ? String(d.playgroupDeckId) : null, d.playgroupDeckName ?? null, d.potentialBracket4 ? 1 : 0).run();
     createdDecks.push({ player: d.player, name: d.name });
   }
 
