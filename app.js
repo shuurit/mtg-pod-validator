@@ -21,6 +21,7 @@ const PLAYGROUP_GAMES_RELAY_URL = RELAY_BASE_URL + "/playgroup-games";
 const ROSTER_DIFF_RELAY_URL = RELAY_BASE_URL + "/roster-diff";
 const ROSTER_UPDATE_RELAY_URL = RELAY_BASE_URL + "/roster";
 const DECK_BRACKET_RELAY_URL = RELAY_BASE_URL + "/decks/bracket";
+const DECK_POTENTIAL_BRACKET4_RELAY_URL = RELAY_BASE_URL + "/decks/potential-bracket-4";
 
 // Fallback for knownPlaygroupPlayers below, used only until the Worker's
 // first response arrives. relay.js's USERNAME_TO_PLAYER is the real source
@@ -176,9 +177,28 @@ function rowsToPlayers(rows) {
 
 // Shared tail of applying a freshly-built players array, regardless of
 // where it came from (DEFAULT_ROSTER fallback, or a real D1 read).
+// Same pattern as updateGamesToUpdateTabBadge/updateRosterUpdateTabBadge --
+// hidden entirely at 0 so absence means "nothing flagged," not "not loaded
+// yet." Scoped to podPlayers (playgroup-linked, tracked players), matching
+// what Players & Decks itself shows.
+function updateDeckStrengthValidatorTabBadge(count) {
+  const badge = document.getElementById("dsv-tab-badge");
+  if (!badge) return;
+  if (count > 0) {
+    badge.textContent = String(count);
+    badge.hidden = false;
+  } else {
+    badge.hidden = true;
+  }
+}
+
 function setPlayers(newPlayers) {
   players = newPlayers;
   podPlayers = players.filter(p => knownPlaygroupPlayers.has(p.name));
+  const comboFlaggedCount = podPlayers.reduce(
+    (n, p) => n + p.decks.filter(d => !d.archived && d.comboFlagged).length, 0
+  );
+  updateDeckStrengthValidatorTabBadge(comboFlaggedCount);
   renderPlayersTable();
   renderPodSlots();
 }
@@ -206,6 +226,8 @@ function applyPlayersFromD1(data) {
     decks: p.decks.map(d => ({
       id: d.id, name: d.name, power: d.power, playgroupId: d.playgroupId, archived: !!d.archived,
       bracket: d.bracket ?? null, bracketPending: !!d.bracketPending, newDeck: !!d.newDeck,
+      potentialBracket4: !!d.potentialBracket4, comboFlagged: !!d.comboFlagged,
+      comboFlaggedCount: d.comboFlaggedCount ?? 0, comboWindowSize: d.comboWindowSize ?? 0,
     })),
   })));
 }
@@ -382,12 +404,33 @@ function buildPowerChip(power) {
   return chip;
 }
 
+// POSTs decks.potential_bracket_4 (see schema.sql) and refreshes -- the
+// curated flag that decides whether Games to Update ever shows this deck's
+// early-combo checkbox at all. A rare, deliberate toggle, not a per-game
+// input, so no confirm step beyond the click itself.
+async function togglePotentialBracket4(deck) {
+  if (!DECK_POTENTIAL_BRACKET4_RELAY_URL) return;
+  try {
+    const res = await fetch(DECK_POTENTIAL_BRACKET4_RELAY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deckId: deck.id, potentialBracket4: !deck.potentialBracket4 }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    await refreshEverything();
+  } catch (err) {
+    console.error(`Failed to toggle combo tracking for ${deck.name}:`, err);
+  }
+}
+
 // Power cell in its normal (non-editing) state: the chip, flagged with a
 // dashed border + tooltip when it's a manual bracket declaration not yet
-// backed by a logged game (see computePlayersData's bracketPending), plus
-// a de-emphasized pencil button that switches this cell into
-// buildBracketEditRow below. Playgroup Power stays its own table column
-// (see PLAYER_DECK_COLUMNS), not folded in here.
+// backed by a logged game (see computePlayersData's bracketPending), an
+// optional flame badge when the deck has hit the 3-of-5 combo pattern (see
+// computePlayersData's comboFlagged), plus two de-emphasized buttons: the
+// bracket-edit pencil (switches this cell into buildBracketEditRow below)
+// and a flame toggle for decks.potential_bracket_4. Playgroup Power stays
+// its own table column (see PLAYER_DECK_COLUMNS), not folded in here.
 function buildPowerCell(deck) {
   const cell = document.createElement("span");
   cell.className = "power-cell";
@@ -398,6 +441,14 @@ function buildPowerCell(deck) {
   }
   cell.appendChild(chip);
 
+  if (deck.comboFlagged) {
+    const comboBadge = document.createElement("span");
+    comboBadge.className = "combo-badge";
+    comboBadge.textContent = `🔥 ${deck.comboFlaggedCount}/${deck.comboWindowSize}`;
+    comboBadge.title = `${deck.comboFlaggedCount} of this deck's last ${deck.comboWindowSize} logged games showed the early combo — consider marking Bracket 4.`;
+    cell.appendChild(comboBadge);
+  }
+
   const editBtn = document.createElement("button");
   editBtn.className = "deck-edit-btn";
   editBtn.textContent = "✎";
@@ -407,6 +458,16 @@ function buildPowerCell(deck) {
     renderPlayersTable();
   });
   cell.appendChild(editBtn);
+
+  const comboToggleBtn = document.createElement("button");
+  comboToggleBtn.className = "deck-edit-btn" + (deck.potentialBracket4 ? " deck-edit-btn-active" : "");
+  comboToggleBtn.textContent = "🔥";
+  comboToggleBtn.title = deck.potentialBracket4
+    ? "Combo-tracked — click to stop asking about this deck's early combo each game"
+    : "Not combo-tracked — click to start asking about this deck's early combo each game";
+  comboToggleBtn.setAttribute("aria-label", `Toggle combo tracking for ${deck.name}`);
+  comboToggleBtn.addEventListener("click", () => togglePotentialBracket4(deck));
+  cell.appendChild(comboToggleBtn);
 
   return cell;
 }
@@ -551,6 +612,19 @@ function renderPlayersTable() {
     headerLeft.className = "player-block-header-left";
     headerLeft.appendChild(toggleBtn);
     headerLeft.appendChild(nameSpan);
+
+    // Shown collapsed or expanded (header always renders) so a flagged
+    // deck is noticeable without expanding every player to check -- same
+    // pattern as the Games to Update / Update the App tab badges.
+    const comboCount = activeDecks.filter(d => d.comboFlagged).length;
+    if (comboCount > 0) {
+      const comboBadge = document.createElement("span");
+      comboBadge.className = "tab-badge";
+      comboBadge.textContent = String(comboCount);
+      comboBadge.title = `${comboCount} deck${comboCount === 1 ? "" : "s"} showing the Bracket 4 combo pattern — expand to see which.`;
+      headerLeft.appendChild(comboBadge);
+    }
+
     headerLeft.appendChild(deckCount);
 
     header.appendChild(headerLeft);
@@ -1510,6 +1584,22 @@ function findDefaultBracket(playerName, commanderName) {
   return matches[0].bracket;
 }
 
+// Whether openGameForm should even show the early-combo checkbox for this
+// participant -- most decks never would be (see decks.potential_bracket_4
+// in schema.sql). Same player+commander deck-matching as findDefaultBracket.
+function findDeckPotentialBracket4(playerName, commanderName) {
+  const player = players.find(p => p.name === playerName);
+  if (!player) return false;
+  const target = normalizeCommanderName(commanderName);
+  let deck = player.decks.find(d => normalizeCommanderName(d.name) === target);
+  if (!deck) {
+    deck = player.decks.find(d =>
+      normalizeCommanderName(d.name).startsWith(target) || target.startsWith(normalizeCommanderName(d.name))
+    );
+  }
+  return !!(deck && deck.potentialBracket4);
+}
+
 // Mirrors updateRosterUpdateTabBadge's "Update the App" badge -- a count of
 // games missing from the Game Log on the "Games to Update" tab button
 // itself, hidden entirely at 0 so absence means "nothing to log," not "not
@@ -1733,6 +1823,9 @@ function openGameForm(pgGame) {
     const defaultStrength = findDefaultStrength(p.player, p.commander);
     const defaultPlace = p.result === "win" ? 1 : "";
     const defaultBracket = findDefaultBracket(p.player, p.commander);
+    // Only decks flagged potential_bracket_4 even get asked -- everyone
+    // else just shows a dash, no checkbox to accidentally check.
+    const comboEligible = findDeckPotentialBracket4(p.player, p.commander);
     return [
       p.player,
       p.commander,
@@ -1746,11 +1839,12 @@ function openGameForm(pgGame) {
       { node: makeGtuInput("number", "gtu-recoveries", i, { min: "0", value: 0 }) },
       { node: makeGtuInput("checkbox", "gtu-behind", i) },
       { node: makeGtuInput("number", "gtu-bracket", i, { min: "1", max: "5", value: defaultBracket }) },
+      comboEligible ? { node: makeGtuInput("checkbox", "gtu-combo", i) } : "—",
     ];
   });
   const { table } = buildTable(
     "gtu-input-table",
-    ["Player", "Commander", "Result", "Cmdr Strength", "Place", "KOs", "TOV", "Pop-Off", "Disruptions", "Recoveries", "Behind", "Bracket"],
+    ["Player", "Commander", "Result", "Cmdr Strength", "Place", "KOs", "TOV", "Pop-Off", "Disruptions", "Recoveries", "Behind", "Bracket", "Combo?"],
     rows
   );
   // 12 columns of real content don't fit a phone (or even a narrower
@@ -1825,6 +1919,10 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
     recoveries: parseInt(box.querySelector(`.gtu-recoveries[data-i="${i}"]`).value, 10) || 0,
     behind: box.querySelector(`.gtu-behind[data-i="${i}"]`).checked ? 1 : 0,
     bracket: parseInt(box.querySelector(`.gtu-bracket[data-i="${i}"]`).value, 10),
+    // No checkbox exists at all for a deck that isn't potentialBracket4 --
+    // querySelector returns null, optional-chained to 0 (never asked, not
+    // a real "no"). See findDeckPotentialBracket4 in openGameForm.
+    earlyTwoCardCombo: box.querySelector(`.gtu-combo[data-i="${i}"]`)?.checked ? 1 : 0,
   });
 
   // stripAccents here (not just in normalizeCommanderName) matters: this
@@ -1920,6 +2018,7 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
           recoveries: row.recoveries,
           gamesClearlyBehind: row.behind,
           bracket: row.bracket,
+          earlyTwoCardCombo: row.earlyTwoCardCombo,
         })),
       };
       try {

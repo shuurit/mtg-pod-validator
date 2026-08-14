@@ -64,7 +64,12 @@ CREATE TABLE decks (
   -- decks where this is 1 from the power-spread check (see
   -- computePlayersData/evaluatePod) -- baseline_power is an unconfirmed
   -- estimate until then.
-  new_deck INTEGER NOT NULL DEFAULT 0
+  new_deck INTEGER NOT NULL DEFAULT 0,
+  -- Manually curated, not inferred -- most decks could never have an early
+  -- two-card combo, so this gates whether Games to Update even asks about
+  -- it for a given deck (see game_results.early_two_card_combo below)
+  -- rather than showing that checkbox for every deck in every game.
+  potential_bracket_4 INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE games (
@@ -114,6 +119,15 @@ CREATE TABLE game_results (
   normalized_tov REAL NOT NULL,               -- Q: Normalized TOV
   deck_resilience_score REAL NOT NULL,        -- U: Deck Resilience Score
   game_calculated_deck_strength REAL NOT NULL, -- X: Game Calculated Deck Strength
+  -- Only ever asked about (and meaningful) for a deck flagged
+  -- decks.potential_bracket_4 -- 0 for every other deck's games, not a real
+  -- "no" so much as "never asked". computePlayersData looks at each deck's
+  -- 5 most recent games; 3+ with this set surfaces a "Bracket 4 pattern"
+  -- badge (see app.js's buildComboBadge) -- read-time only, never writes
+  -- decks.bracket and never resets power (see relay.js's comment on
+  -- bracketChanged for why that reset exists and why this deliberately
+  -- doesn't use it).
+  early_two_card_combo INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (game_id, player_id)
 );
 

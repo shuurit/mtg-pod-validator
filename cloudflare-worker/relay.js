@@ -276,6 +276,11 @@ function isValidBracketPayload(payload) {
     (payload.bracket === null || (Number.isInteger(payload.bracket) && payload.bracket >= 1 && payload.bracket <= 5));
 }
 
+function isValidPotentialBracket4Payload(payload) {
+  return !!payload && typeof payload === "object" &&
+    typeof payload.deckId === "number" && typeof payload.potentialBracket4 === "boolean";
+}
+
 // ---------- POST /games, POST /roster : D1 writes ----------
 // app.js's actual submit paths (Games to Update / Update the App) --
 // POST / and POST /apply-roster-update above still exist but nothing
@@ -486,18 +491,22 @@ async function handleGamesWrite(request, env, ctx) {
     const bracketChanged = p.previousBracket != null && p.previousBracket !== p.bracket;
     const X = bracketChanged ? p.bracket : f.X;
     responseResults.push({ player: p.player, commander: p.commander, result: p.result, gameCalculatedDeckStrength: X });
+    // Only ever meaningful (and only ever shown as a checkbox in Games to
+    // Update) for a deck flagged decks.potential_bracket_4 -- 0/false for
+    // every other deck's games, not a real "no" so much as "never asked".
+    const earlyTwoCardCombo = p.earlyTwoCardCombo ? 1 : 0;
     return env.DB.prepare(`
       INSERT INTO game_results (
         game_id, player_id, deck_id, commander_strength, result, place, knockouts, tov,
         pop_off, disruptions, recoveries, games_clearly_behind, bracket,
         adjusted_pod_size_score, knockout_score, deck_strength_differential, win_probability,
         player_score, normalized_player_score, normalized_tov, deck_resilience_score,
-        game_calculated_deck_strength
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        game_calculated_deck_strength, early_two_card_combo
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       gameId, p.playerId, p.deckId, p.strength, result, p.place, p.knockouts, p.tov,
       p.popOff, p.disruptions, p.recoveries, p.gamesClearlyBehind, p.bracket,
-      f.J, f.K, f.L, f.M, f.N, f.O, f.Q, f.U, X
+      f.J, f.K, f.L, f.M, f.N, f.O, f.Q, f.U, X, earlyTwoCardCombo
     );
   });
 
@@ -618,6 +627,29 @@ async function handleDeckBracketWrite(request, env) {
   }
   await env.DB.prepare("UPDATE decks SET bracket = ? WHERE id = ?").bind(payload.bracket, payload.deckId).run();
   return jsonResponse({ ok: true, deckId: payload.deckId, bracket: payload.bracket });
+}
+
+// Curates which decks are even eligible for the early-two-card-combo
+// checkbox in Games to Update (see isValidGamePayload/handleGamesWrite) --
+// most decks never would be. Purely a manual flag, never touched by any
+// other write path.
+async function handleDeckPotentialBracket4Write(request, env) {
+  let payload;
+  try {
+    payload = await request.json();
+  } catch {
+    return jsonResponse({ error: "Invalid JSON" }, 400);
+  }
+  if (!isValidPotentialBracket4Payload(payload)) {
+    return jsonResponse({ error: "Payload must include deckId (number) and potentialBracket4 (boolean)" }, 400);
+  }
+  const deck = await env.DB.prepare("SELECT id FROM decks WHERE id = ?").bind(payload.deckId).first();
+  if (!deck) {
+    return jsonResponse({ error: `Unknown deck: ${payload.deckId}` }, 400);
+  }
+  await env.DB.prepare("UPDATE decks SET potential_bracket_4 = ? WHERE id = ?")
+    .bind(payload.potentialBracket4 ? 1 : 0, payload.deckId).run();
+  return jsonResponse({ ok: true, deckId: payload.deckId, potentialBracket4: payload.potentialBracket4 });
 }
 
 // ---------- GET /playgroup-games : live playgroup.gg read ----------
@@ -1019,7 +1051,7 @@ async function computePlayersData(env) {
 
   const { results: deckRows } = await env.DB.prepare(`
     SELECT d.id, d.player_id, d.name, d.playgroup_deck_id, d.archived, d.new_deck,
-           d.bracket AS bracket_override,
+           d.potential_bracket_4, d.bracket AS bracket_override,
            (SELECT gr.bracket FROM game_results gr JOIN games g ON g.id = gr.game_id
             WHERE gr.deck_id = d.id ORDER BY g.id DESC LIMIT 1) AS last_logged_bracket,
            COALESCE(
@@ -1028,7 +1060,17 @@ async function computePlayersData(env) {
               WHERE gr.deck_id = d.id
               ORDER BY g.id DESC LIMIT 1),
              d.baseline_power
-           ) AS computed_power
+           ) AS computed_power,
+           -- Last 5 logged games (any season), most recent first -- see the
+           -- comboFlagged comment below for what this feeds.
+           (SELECT COUNT(*) FROM (
+              SELECT gr.early_two_card_combo AS c FROM game_results gr JOIN games g ON g.id = gr.game_id
+              WHERE gr.deck_id = d.id ORDER BY g.id DESC LIMIT 5
+            )) AS combo_window_size,
+           (SELECT COUNT(*) FROM (
+              SELECT gr.early_two_card_combo AS c FROM game_results gr JOIN games g ON g.id = gr.game_id
+              WHERE gr.deck_id = d.id ORDER BY g.id DESC LIMIT 5
+            ) WHERE c = 1) AS combo_flagged_count
     FROM decks d
     ORDER BY d.id
   `).all();
@@ -1047,6 +1089,19 @@ async function computePlayersData(env) {
       // power-spread check (see evaluatePod in app.js): baseline_power is
       // an unconfirmed estimate until this deck's first game is logged.
       newDeck: !!d.new_deck,
+      // Curated list of decks even eligible for the combo checkbox in
+      // Games to Update (see isValidGamePayload/handleGamesWrite) -- most
+      // decks never would be.
+      potentialBracket4: !!d.potential_bracket_4,
+      // Read-time-only signal, never written back to decks.bracket and
+      // never resets power (see the reset-to-floor comment on
+      // bracketChanged in handleGamesWrite for why that's deliberate) --
+      // 3+ of the last 5 logged games flagged early_two_card_combo just
+      // surfaces a badge in app.js. comboWindowSize lets the UI show "3/3"
+      // honestly instead of "3/5" for a deck with fewer than 5 games yet.
+      comboFlagged: d.combo_flagged_count >= 3,
+      comboFlaggedCount: d.combo_flagged_count,
+      comboWindowSize: d.combo_window_size,
       playgroupId: d.playgroup_deck_id,
       archived: !!d.archived,
     });
@@ -1319,6 +1374,10 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/decks/bracket") {
       return handleDeckBracketWrite(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/decks/potential-bracket-4") {
+      return handleDeckPotentialBracket4Write(request, env);
     }
 
     return new Response("Not found", { status: 404, headers: corsHeaders() });

@@ -514,6 +514,29 @@ td.num {
   color: var(--accent);
 }
 
+/* decks.potential_bracket_4 is currently on for this deck (the flame
+   toggle in buildPowerCell) -- full opacity + warn tint so it reads as an
+   active state, not just another de-emphasized icon. */
+.deck-edit-btn-active {
+  opacity: 1;
+  color: var(--warn);
+}
+.deck-edit-btn-active:hover {
+  color: var(--warn);
+}
+
+/* 3+ of a deck's last 5 (or fewer, if it doesn't have 5 yet) logged games
+   flagged early_two_card_combo -- see computePlayersData's comboFlagged. */
+.combo-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--warn-bg);
+  color: var(--warn);
+  border: 1px dashed var(--warn-border);
+}
+
 .bracket-edit select {
   font-size: 0.85rem;
   padding: 4px 6px;
