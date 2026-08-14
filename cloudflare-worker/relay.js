@@ -168,10 +168,23 @@ function pgFetch(path, env) {
 // but neither matters for what this defends against: it only needs to
 // notice "way more requests than any real usage pattern, from one IP,
 // fast" and start returning 429s, not enforce an exact global count.
+//
+// The cache key includes the current time bucket (Date.now() divided into
+// RATE_LIMIT_WINDOW_SECONDS-wide slots), not just the IP -- an earlier
+// version keyed on IP alone and refreshed that single entry's max-age on
+// every write, which meant a real, continuously-active client (a person
+// actually using the app, or the app's own background refreshes) kept
+// re-arming its own TTL faster than it could ever expire, turning a
+// 15-second window into an effectively permanent lockout the moment
+// traffic ever crossed the threshold once (confirmed the hard way: this
+// tripped for a normal deck submission, not a burst). Bucketing by time
+// guarantees every IP's count actually returns to 0 at each window
+// boundary regardless of how much traffic keeps arriving.
 async function isRateLimited(request, ctx) {
   const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+  const bucket = Math.floor(Date.now() / 1000 / RATE_LIMIT_WINDOW_SECONDS);
   const cache = caches.default;
-  const cacheKey = new Request(`https://rate-limit.internal/${ip}`);
+  const cacheKey = new Request(`https://rate-limit.internal/${ip}/${bucket}`);
 
   const cached = await cache.match(cacheKey);
   const count = cached ? (await cached.json()).count : 0;
