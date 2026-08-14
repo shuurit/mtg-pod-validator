@@ -2145,15 +2145,12 @@ let rosterUpdateSubmitConfirmation = null; // message to show once, right after 
 function ensureRosterUpdateDeckStateDefault(deck) {
   const key = String(deck.id);
   if (!rosterUpdateDeckState.has(key)) {
-    // Nearest whole bracket to playgroup.gg's own rating, clamped to our
-    // 1-5 range, as a starting suggestion -- still fully editable. The
-    // deck's actual baseline is the bracket itself once picked (e.g.
-    // Bracket 3 -> baseline_power 3.0), not this rating directly; see
-    // the submit handler in renderRosterUpdateSubmit.
-    const suggested = typeof deck.power_level === "number"
-      ? String(Math.min(5, Math.max(1, Math.round(deck.power_level))))
-      : "";
-    rosterUpdateDeckState.set(key, { checked: false, bracket: suggested });
+    // Left blank ("Select bracket…") rather than pre-filled from
+    // playgroup.gg's rating -- the deck's actual baseline is the bracket
+    // itself once picked (e.g. Bracket 3 -> baseline_power 3.0), so this
+    // is a deliberate choice, not a suggestion, and shouldn't default to
+    // one; see the submit handler in renderRosterUpdateSubmit.
+    rosterUpdateDeckState.set(key, { checked: false, bracket: "" });
   }
 }
 
