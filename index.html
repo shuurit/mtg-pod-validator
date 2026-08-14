@@ -115,6 +115,20 @@
   </div>
 </div>
 
+<!-- Shown when the flame toggle is clicked to turn ON tracking for a deck
+     (never for turning it off) -- see showComboTrackConfirm in app.js. -->
+<div id="combo-track-modal" class="modal-overlay" hidden>
+  <div class="modal-card">
+    <button id="combo-track-modal-close" class="icon-btn modal-close" aria-label="Close">&#10005;</button>
+    <h2>🔥 Put this deck on combo watch?</h2>
+    <p id="combo-track-modal-body" class="hint"></p>
+    <div class="row">
+      <button id="combo-track-modal-confirm" class="primary">Start the watch</button>
+      <button id="combo-track-modal-cancel" type="button">Never mind</button>
+    </div>
+  </div>
+</div>
+
 <script src="app.js"></script>
 </body>
 </html>

@@ -423,14 +423,15 @@ async function togglePotentialBracket4(deck) {
   }
 }
 
-// Power cell in its normal (non-editing) state: the chip, flagged with a
-// dashed border + tooltip when it's a manual bracket declaration not yet
-// backed by a logged game (see computePlayersData's bracketPending), an
-// optional flame badge when the deck has hit the 3-of-5 combo pattern (see
-// computePlayersData's comboFlagged), plus two de-emphasized buttons: the
-// bracket-edit pencil (switches this cell into buildBracketEditRow below)
-// and a flame toggle for decks.potential_bracket_4. Playgroup Power stays
-// its own table column (see PLAYER_DECK_COLUMNS), not folded in here.
+// Power cell in its normal (non-editing) state, left to right: the chip
+// (flagged with a dashed border + tooltip when it's a manual bracket
+// declaration not yet backed by a logged game -- see computePlayersData's
+// bracketPending), two de-emphasized buttons -- the bracket-edit pencil
+// (switches this cell into buildBracketEditRow below) and a flame toggle
+// for decks.potential_bracket_4 -- and, rightmost, an optional flame badge
+// when the deck has hit the 3-of-5 combo pattern (see computePlayersData's
+// comboFlagged). Playgroup Power stays its own table column (see
+// PLAYER_DECK_COLUMNS), not folded in here.
 function buildPowerCell(deck) {
   const cell = document.createElement("span");
   cell.className = "power-cell";
@@ -440,14 +441,6 @@ function buildPowerCell(deck) {
     chip.title = `Manually set to Bracket ${deck.bracket} — not yet confirmed by a logged game.`;
   }
   cell.appendChild(chip);
-
-  if (deck.comboFlagged) {
-    const comboBadge = document.createElement("span");
-    comboBadge.className = "combo-badge";
-    comboBadge.textContent = `🔥 ${deck.comboFlaggedCount}/${deck.comboWindowSize}`;
-    comboBadge.title = `${deck.comboFlaggedCount} of this deck's last ${deck.comboWindowSize} logged games showed the early combo — consider marking Bracket 4.`;
-    cell.appendChild(comboBadge);
-  }
 
   const editBtn = document.createElement("button");
   editBtn.className = "deck-edit-btn";
@@ -466,8 +459,21 @@ function buildPowerCell(deck) {
     ? "Combo-tracked — click to stop asking about this deck's early combo each game"
     : "Not combo-tracked — click to start asking about this deck's early combo each game";
   comboToggleBtn.setAttribute("aria-label", `Toggle combo tracking for ${deck.name}`);
-  comboToggleBtn.addEventListener("click", () => togglePotentialBracket4(deck));
+  // Turning tracking ON asks for confirmation first (see
+  // showComboTrackConfirm); turning it back OFF stays instant.
+  comboToggleBtn.addEventListener("click", () => {
+    if (deck.potentialBracket4) togglePotentialBracket4(deck);
+    else showComboTrackConfirm(deck);
+  });
   cell.appendChild(comboToggleBtn);
+
+  if (deck.comboFlagged) {
+    const comboBadge = document.createElement("span");
+    comboBadge.className = "combo-badge";
+    comboBadge.textContent = `🔥 ${deck.comboFlaggedCount}/${deck.comboWindowSize}`;
+    comboBadge.title = `${deck.comboFlaggedCount} of this deck's last ${deck.comboWindowSize} logged games showed the early combo — consider marking Bracket 4.`;
+    cell.appendChild(comboBadge);
+  }
 
   return cell;
 }
@@ -974,8 +980,46 @@ document.getElementById("reveal-modal-close")?.addEventListener("click", hideRev
 document.getElementById("reveal-modal")?.addEventListener("click", e => {
   if (e.target.id === "reveal-modal") hideRevealModal();
 });
+
+function hideComboTrackModal() {
+  const modal = document.getElementById("combo-track-modal");
+  if (modal) modal.hidden = true;
+}
+
+// Only shown for turning tracking ON (see the flame toggle's click handler
+// in buildPowerCell) -- turning it back off stays a plain, instant toggle,
+// no confirmation needed.
+function showComboTrackConfirm(deck) {
+  const modal = document.getElementById("combo-track-modal");
+  const body = document.getElementById("combo-track-modal-body");
+  const confirmBtn = document.getElementById("combo-track-modal-confirm");
+  if (!modal || !body || !confirmBtn) return;
+
+  body.textContent = `From here on, every logged game for ${deck.name} asks one more question: did the early combo come online? Land it in 3 of its last 5 games and the deck earns the flame badge — a heads-up it might be playing more like Bracket 4 than Bracket 3. Pull it off watch anytime from the same flame icon.`;
+
+  // Reassigning .onclick (not addEventListener) guarantees exactly one
+  // handler is ever live, bound to whichever deck's confirm is currently
+  // open -- addEventListener here would stack a new listener every time
+  // the modal opens, firing every previously-confirmed deck's toggle too.
+  confirmBtn.onclick = () => {
+    hideComboTrackModal();
+    togglePotentialBracket4(deck);
+  };
+
+  modal.hidden = false;
+}
+
+document.getElementById("combo-track-modal-close")?.addEventListener("click", hideComboTrackModal);
+document.getElementById("combo-track-modal-cancel")?.addEventListener("click", hideComboTrackModal);
+document.getElementById("combo-track-modal")?.addEventListener("click", e => {
+  if (e.target.id === "combo-track-modal") hideComboTrackModal();
+});
+
 document.addEventListener("keydown", e => {
-  if (e.key === "Escape") hideRevealModal();
+  if (e.key === "Escape") {
+    hideRevealModal();
+    hideComboTrackModal();
+  }
 });
 
 // ---------- validation ----------
