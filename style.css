@@ -239,6 +239,18 @@ header h1 {
 .winrates-table th.sortable.num {
   text-align: right;
 }
+
+/* Players & Decks' Power column ends in a fixed-width pencil (see
+   .deck-edit-btn), not the chip -- flush-right would land "Power" over
+   that pencil instead. Pulls the header in by exactly the pencil's own
+   width (24px) plus the gap before it (6px), on top of the cell's base
+   10px right padding, so it lands over the chip instead regardless of
+   whether a combo badge/flame toggle are also present (they only affect
+   how far the row extends to the left, never the chip's distance from the
+   pencil -- see buildPowerCell in app.js). */
+.winrates-table th.power-header {
+  padding-right: 40px;
+}
 .winrates-table th.sortable:hover {
   color: var(--accent);
 }
@@ -499,12 +511,16 @@ td.num {
 
 /* De-emphasized on purpose (vs. the bolder .icon-btn buttons elsewhere) --
    still fully visible/tappable, just not competing with the power chip on
-   every row of a long deck list. */
+   every row of a long deck list. Fixed width (not just padding) so the
+   pencil's position is a known constant -- .power-header below depends on
+   it to line up with the chip, which sits just to this button's left. */
 .deck-edit-btn {
   border: none;
   background: transparent;
-  padding: 2px 4px;
+  width: 24px;
+  padding: 2px 0;
   font-size: 0.75rem;
+  text-align: center;
   color: var(--muted);
   opacity: 0.6;
   cursor: pointer;

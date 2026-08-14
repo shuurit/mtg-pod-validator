@@ -423,24 +423,22 @@ async function togglePotentialBracket4(deck) {
   }
 }
 
-// Power cell in its normal (non-editing) state, left to right: the chip
-// (flagged with a dashed border + tooltip when it's a manual bracket
-// declaration not yet backed by a logged game -- see computePlayersData's
-// bracketPending), two de-emphasized buttons -- the bracket-edit pencil
-// (switches this cell into buildBracketEditRow below) and a flame toggle
-// for decks.potential_bracket_4 -- and, rightmost, an optional flame badge
+// Power cell in its normal (non-editing) state. Elements are built first,
+// then appended in this exact left-to-right order (a deliberate design
+// call, not derived from the "Power" column header's alignment): combo
+// badge, flame toggle, chip, pencil.
+//
+// The chip is flagged with a dashed border + tooltip when it's a manual
+// bracket declaration not yet backed by a logged game (see
+// computePlayersData's bracketPending). The two de-emphasized buttons are
+// the bracket-edit pencil (switches this cell into buildBracketEditRow
+// below) and a flame toggle for decks.potential_bracket_4. The badge shows
 // when the deck has hit the 3-of-5 combo pattern (see computePlayersData's
 // comboFlagged). Playgroup Power stays its own table column (see
 // PLAYER_DECK_COLUMNS), not folded in here.
 function buildPowerCell(deck) {
   const cell = document.createElement("span");
   cell.className = "power-cell";
-  const chip = buildPowerChip(deck.power);
-  if (deck.bracketPending) {
-    chip.classList.add("power-chip-pending");
-    chip.title = `Manually set to Bracket ${deck.bracket} — not yet confirmed by a logged game.`;
-  }
-  cell.appendChild(chip);
 
   const editBtn = document.createElement("button");
   editBtn.className = "deck-edit-btn";
@@ -450,7 +448,6 @@ function buildPowerCell(deck) {
     bracketEditingDeckIds.add(deck.id);
     renderPlayersTable();
   });
-  cell.appendChild(editBtn);
 
   const comboToggleBtn = document.createElement("button");
   comboToggleBtn.className = "deck-edit-btn" + (deck.potentialBracket4 ? " deck-edit-btn-active" : "");
@@ -465,15 +462,25 @@ function buildPowerCell(deck) {
     if (deck.potentialBracket4) togglePotentialBracket4(deck);
     else showComboTrackConfirm(deck);
   });
-  cell.appendChild(comboToggleBtn);
 
+  let comboBadge = null;
   if (deck.comboFlagged) {
-    const comboBadge = document.createElement("span");
+    comboBadge = document.createElement("span");
     comboBadge.className = "combo-badge";
     comboBadge.textContent = `🔥 ${deck.comboFlaggedCount}/${deck.comboWindowSize}`;
     comboBadge.title = `${deck.comboFlaggedCount} of this deck's last ${deck.comboWindowSize} logged games showed the early combo — consider marking Bracket 4.`;
-    cell.appendChild(comboBadge);
   }
+
+  const chip = buildPowerChip(deck.power);
+  if (deck.bracketPending) {
+    chip.classList.add("power-chip-pending");
+    chip.title = `Manually set to Bracket ${deck.bracket} — not yet confirmed by a logged game.`;
+  }
+
+  if (comboBadge) cell.appendChild(comboBadge);
+  cell.appendChild(comboToggleBtn);
+  cell.appendChild(chip);
+  cell.appendChild(editBtn);
 
   return cell;
 }
@@ -670,6 +677,10 @@ function renderPlayersTable() {
     for (const col of PLAYER_DECK_COLUMNS) {
       const th = document.createElement("th");
       th.className = col.numeric ? "sortable num" : "sortable";
+      // The Power cell ends in a fixed-width pencil (see .deck-edit-btn),
+      // not the chip -- power-header pulls the header text in to sit over
+      // the chip instead of the flush-right pencil. See style.css.
+      if (col.key === "power") th.classList.add("power-header");
       const isActive = sortState.column === col.key;
       th.textContent = col.label + (isActive ? (sortState.direction === "desc" ? " ▾" : " ▴") : "");
       if (isActive) th.classList.add("sorted");
