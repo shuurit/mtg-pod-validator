@@ -411,22 +411,7 @@ async function handleGamesWrite(request, env, ctx) {
     if (matches.length > 1) {
       return jsonResponse({ error: `Ambiguous deck match for ${p.player} / "${p.commander}" (${matches.length} candidates) -- can't resolve safely.` }, 400);
     }
-    // Most recent bracket this deck was actually logged at, across all
-    // seasons (same all-time scope "current power" itself already uses --
-    // see computePlayersData's COALESCE query) -- null for a deck's first
-    // logged game ever. Used below to detect a bracket change and reset
-    // that game's calculated deck strength to the new bracket's floor
-    // instead of carrying over a performance fraction earned in the old
-    // bracket (e.g. a deck at 2.9 moving to bracket 3 should land at 3.0,
-    // not 3.9).
-    const prevBracketRow = await env.DB.prepare(`
-      SELECT gr.bracket FROM game_results gr JOIN games g ON g.id = gr.game_id
-      WHERE gr.deck_id = ? ORDER BY g.id DESC LIMIT 1
-    `).bind(matches[0].id).first();
-    resolved.push({
-      ...p, playerId: player.id, deckId: matches[0].id,
-      previousBracket: prevBracketRow ? prevBracketRow.bracket : null,
-    });
+    resolved.push({ ...p, playerId: player.id, deckId: matches[0].id });
   }
 
   const nextRow = await env.DB.prepare("SELECT COALESCE(MAX(game_num), 0) + 1 AS next FROM games WHERE season_id = ?")
@@ -495,15 +480,16 @@ async function handleGamesWrite(request, env, ctx) {
       gamesClearlyBehind: p.gamesClearlyBehind,
       bracket: p.bracket,
     });
-    // A bracket change (either direction) resets this game's calculated
-    // deck strength to the new bracket's floor, discarding the performance
-    // fraction f.X would otherwise carry over from a game that may have
-    // been played at a different bracket entirely. J/K/L/M/N/O/Q/U are
-    // untouched -- they're this game's real performance data, used by
-    // Player Adjusted Win Rate/rankings (never by X), so a bracket reset
-    // has no effect on those.
-    const bracketChanged = p.previousBracket != null && p.previousBracket !== p.bracket;
-    const X = bracketChanged ? p.bracket : f.X;
+    // A bracket change is only ever "unconfirmed" BEFORE it's actually
+    // played -- that's what decks.bracket's manual override + bracketPending
+    // (computePlayersData) already show as a dashed floor value ahead of
+    // time. Once a game is actually logged at the new bracket, it's real
+    // data and gets trusted like any other game's result: full f.X,
+    // performance fraction included, never floored. (This game's X used to
+    // be clamped to the bare bracket number here too, discarding a real
+    // win/loss's performance -- see the fix for Manny's Kruphix deck after
+    // game 17, where a win still read as flat 3.0.)
+    const X = f.X;
     responseResults.push({ player: p.player, commander: p.commander, result: p.result, gameCalculatedDeckStrength: X });
     // Only ever meaningful (and only ever shown as a checkbox in Games to
     // Update) for a deck flagged decks.potential_bracket_4 -- 0/false for
