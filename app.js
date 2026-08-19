@@ -22,6 +22,30 @@ const ROSTER_DIFF_RELAY_URL = RELAY_BASE_URL + "/roster-diff";
 const ROSTER_UPDATE_RELAY_URL = RELAY_BASE_URL + "/roster";
 const DECK_BRACKET_RELAY_URL = RELAY_BASE_URL + "/decks/bracket";
 const DECK_POTENTIAL_BRACKET4_RELAY_URL = RELAY_BASE_URL + "/decks/potential-bracket-4";
+const AUTH_ME_RELAY_URL = RELAY_BASE_URL + "/auth/me";
+const AUTH_LOGOUT_RELAY_URL = RELAY_BASE_URL + "/auth/logout";
+
+// Discord OAuth sign-in. Client ID is public (it's part of the login URL
+// below), matches the constant of the same name in relay.js -- the Client
+// Secret never appears anywhere client-side, only on the relay. Sending
+// the browser here needs no relay involvement at all; Discord redirects
+// back to the relay's own /auth/discord/callback (not this app directly),
+// which is what actually mints the session -- see relay.js.
+const DISCORD_CLIENT_ID = "1539751888294256721";
+const DISCORD_AUTHORIZE_URL = "https://discord.com/oauth2/authorize"
+  + `?client_id=${DISCORD_CLIENT_ID}`
+  + `&redirect_uri=${encodeURIComponent(RELAY_BASE_URL + "/auth/discord/callback")}`
+  + "&response_type=code&scope=identify";
+
+// Every write request's headers -- adds Authorization only when actually
+// signed in, so a signed-out submit still reaches the relay and gets back
+// its real {error: "Sign in required"} (surfaced via each form's existing
+// body.error handling) rather than app.js guessing at that message itself.
+function authHeaders() {
+  const headers = { "Content-Type": "application/json" };
+  if (sessionToken) headers.Authorization = `Bearer ${sessionToken}`;
+  return headers;
+}
 
 // Fallback for knownPlaygroupPlayers below, used only until the Worker's
 // first response arrives. relay.js's USERNAME_TO_PLAYER is the real source
@@ -113,6 +137,13 @@ const DEFAULT_ROSTER = [
 // known_players once it does, so relay.js's USERNAME_TO_PLAYER is the only
 // place a new member needs adding.
 let knownPlaygroupPlayers = new Set(PLAYERS_WITH_PLAYGROUP_ACCOUNT);
+
+// Discord sign-in. sessionToken persists across reloads (localStorage);
+// currentUser doesn't -- it's re-derived from the token via GET /auth/me
+// on every load (see checkAuthSession) so a revoked/expired token is
+// caught immediately rather than trusting a stale cached identity.
+let sessionToken = localStorage.getItem("sessionToken");
+let currentUser = null; // { playerId, username } once confirmed, else null
 
 let players = []; // everyone in Current Deck Strength, unfiltered
 let podPlayers = []; // players filtered to knownPlaygroupPlayers -- used by Deck Strength Validator and Player Win Rates
@@ -413,9 +444,17 @@ async function togglePotentialBracket4(deck) {
   try {
     const res = await fetch(DECK_POTENTIAL_BRACKET4_RELAY_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders(),
       body: JSON.stringify({ deckId: deck.id, potentialBracket4: !deck.potentialBracket4 }),
     });
+    // This button has no status element of its own (it's a quick toggle in
+    // a table row, not a form) -- a 401 specifically gets a visible nudge
+    // via the fixed auth control instead of vanishing into the console
+    // like every other failure here does.
+    if (res.status === 401) {
+      showAuthStatusHint("Sign in with Discord to do this.");
+      return;
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     await refreshEverything();
   } catch (err) {
@@ -537,7 +576,7 @@ function buildBracketEditRow(deck) {
     try {
       const res = await fetch(DECK_BRACKET_RELAY_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ deckId: deck.id, bracket }),
       });
       const body = await res.json().catch(() => ({}));
@@ -2079,7 +2118,7 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
       try {
         const res = await fetch(GAME_SUBMIT_RELAY_URL, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: authHeaders(),
           body: JSON.stringify(payload),
         });
         const body = await res.json().catch(() => ({}));
@@ -2665,7 +2704,7 @@ function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
       try {
         const res = await fetch(ROSTER_UPDATE_RELAY_URL, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: authHeaders(),
           body: JSON.stringify(payload),
         });
         const body = await res.json().catch(() => ({}));
@@ -2720,12 +2759,127 @@ function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
   formAreaEl.appendChild(statusEl);
 }
 
+// ---------- Discord sign-in ----------
+
+// Discord redirects back here with #session=<token> or #auth_error=<code>
+// in the URL fragment, never a query string -- a fragment never gets sent
+// to any server on a later request, so the token can't end up in a server
+// access log the way a ?session=... param would (see relay.js's
+// handleDiscordCallback). Must run before anything else touches
+// sessionToken, and strips the hash immediately after reading it so a
+// page refresh doesn't try to "consume" it a second time.
+function consumeAuthRedirect() {
+  const hash = location.hash.startsWith("#") ? location.hash.slice(1) : "";
+  if (!hash) return;
+  const params = new URLSearchParams(hash);
+  const token = params.get("session");
+  const error = params.get("auth_error");
+  if (token) {
+    sessionToken = token;
+    localStorage.setItem("sessionToken", token);
+  } else if (error) {
+    const messages = {
+      not_linked: "That Discord account isn't linked to a player yet — ask an admin to link it.",
+      no_code: "Sign-in was cancelled or didn't complete.",
+      discord_token_exchange_failed: "Discord sign-in failed — please try again.",
+      discord_profile_lookup_failed: "Discord sign-in failed — please try again.",
+    };
+    showAuthStatusHint(messages[error] || `Sign-in failed (${error}).`);
+  }
+  if (token || error) {
+    history.replaceState(null, "", location.pathname + location.search);
+  }
+}
+
+function showAuthStatusHint(message) {
+  const el = document.getElementById("auth-status");
+  if (!el) return;
+  el.textContent = message;
+  el.hidden = false;
+}
+
+// Confirms a stored token is still good and fetches the signed-in player's
+// display name -- re-derived from the token on every load rather than
+// trusted from a stale cached value, so a revoked/expired session (or one
+// signed out from another device) is caught immediately instead of
+// showing a name that's no longer actually valid.
+async function checkAuthSession() {
+  if (!sessionToken) {
+    renderAuthControl();
+    return;
+  }
+  try {
+    const res = await fetch(AUTH_ME_RELAY_URL, { headers: authHeaders() });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    currentUser = await res.json();
+  } catch {
+    sessionToken = null;
+    currentUser = null;
+    localStorage.removeItem("sessionToken");
+  }
+  renderAuthControl();
+}
+
+function renderAuthControl() {
+  const signinBtn = document.getElementById("auth-signin-btn");
+  const signedInEl = document.getElementById("auth-signed-in");
+  const usernameEl = document.getElementById("auth-username");
+  if (!signinBtn || !signedInEl || !usernameEl) return;
+  if (currentUser) {
+    signinBtn.hidden = true;
+    signedInEl.hidden = false;
+    usernameEl.textContent = currentUser.username;
+  } else {
+    signinBtn.hidden = false;
+    signedInEl.hidden = true;
+  }
+}
+
+function wireAuthControl() {
+  const signinBtn = document.getElementById("auth-signin-btn");
+  const signoutBtn = document.getElementById("auth-signout-btn");
+  if (signinBtn) {
+    // A full-page redirect, not a fetch -- Discord's authorize page has to
+    // be top-level navigation (it can't be loaded in an iframe/XHR), and
+    // client_id/redirect_uri are both public so no relay round trip is
+    // needed just to send the browser there. See DISCORD_AUTHORIZE_URL.
+    signinBtn.addEventListener("click", () => {
+      window.location.href = DISCORD_AUTHORIZE_URL;
+    });
+  }
+  if (signoutBtn) {
+    signoutBtn.addEventListener("click", async () => {
+      if (sessionToken) {
+        try {
+          await fetch(AUTH_LOGOUT_RELAY_URL, { method: "POST", headers: authHeaders() });
+        } catch {
+          // Best-effort -- the token still gets forgotten locally below
+          // regardless of whether the relay's own delete succeeded.
+        }
+      }
+      sessionToken = null;
+      currentUser = null;
+      localStorage.removeItem("sessionToken");
+      const statusEl = document.getElementById("auth-status");
+      if (statusEl) statusEl.hidden = true;
+      renderAuthControl();
+    });
+  }
+}
+
 // ---------- init ----------
 
 const gtuIntroEl = document.getElementById("gtu-intro");
 if (gtuIntroEl) {
   gtuIntroEl.textContent = "Games from playgroup.gg that aren't logged yet. Fill in what playgroup.gg can't supply, then submit.";
 }
+
+// Must run before checkAuthSession -- consumes a just-completed Discord
+// redirect (if any) so sessionToken is set before the very first /auth/me
+// check uses it.
+consumeAuthRedirect();
+wireAuthControl();
+checkAuthSession();
 
 initPlayerCountSelect();
 syncFromD1();

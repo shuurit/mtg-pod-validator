@@ -30,6 +30,14 @@
 <div class="tab-bg" id="bg-update-app"></div>
 <div class="tab-bg" id="bg-winrates"></div>
 <button id="global-refresh-btn" aria-label="Refresh live data" title="Refresh live data">&#8635;</button>
+<div id="auth-control" class="auth-control">
+  <button id="auth-signin-btn" type="button" class="auth-signin-btn">Sign in with Discord</button>
+  <span id="auth-signed-in" class="auth-signed-in" hidden>
+    Signed in as <strong id="auth-username"></strong>
+    <button id="auth-signout-btn" type="button" class="icon-btn">Sign out</button>
+  </span>
+  <span id="auth-status" class="hint" hidden></span>
+</div>
 <div class="wrap">
   <header>
     <h1>Amass a Gathering - App Edition</h1>

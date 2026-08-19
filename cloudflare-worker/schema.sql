@@ -36,9 +36,17 @@ CREATE TABLE players (
   -- is kept for display/lookup convenience, not identity. Added via
   -- ALTER TABLE + a separate unique index, same reason as
   -- seasons.playgroup_league_id -- SQLite rejects UNIQUE on ADD COLUMN.
-  playgroup_user_id INTEGER
+  playgroup_user_id INTEGER,
+  -- Discord's stable numeric user id -- the identity key for sign-in (see
+  -- requireSession in relay.js). Linked manually, one UPDATE per player, not
+  -- self-serve -- the group is small and stable enough that a "claim your
+  -- account" flow isn't worth building. Same ALTER TABLE + separate unique
+  -- index pattern as playgroup_user_id above, for the same reason (SQLite
+  -- rejects UNIQUE on ADD COLUMN).
+  discord_user_id TEXT
 );
 CREATE UNIQUE INDEX idx_players_pg_user_id ON players(playgroup_user_id);
+CREATE UNIQUE INDEX idx_players_discord_user_id ON players(discord_user_id);
 
 CREATE TABLE decks (
   id INTEGER PRIMARY KEY,
@@ -87,6 +95,11 @@ CREATE TABLE games (
   -- REAL back to a clean integer on write, so this can't recur regardless
   -- of how a future write path binds the value.
   playgroup_game_id INTEGER UNIQUE,
+  -- Who was actually signed in when this game was submitted -- nullable so
+  -- games logged before sign-in existed (or a session that's since expired)
+  -- aren't a problem. Purely for accountability now that writes require
+  -- auth; nothing reads this back into any calculation.
+  submitted_by_player_id INTEGER REFERENCES players(id),
   UNIQUE(season_id, game_num)
 );
 
@@ -124,9 +137,7 @@ CREATE TABLE game_results (
   -- "no" so much as "never asked". computePlayersData looks at each deck's
   -- 5 most recent games; 3+ with this set surfaces a "Bracket 4 pattern"
   -- badge (see app.js's buildComboBadge) -- read-time only, never writes
-  -- decks.bracket and never resets power (see relay.js's comment on
-  -- bracketChanged for why that reset exists and why this deliberately
-  -- doesn't use it).
+  -- decks.bracket and never resets power.
   early_two_card_combo INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (game_id, player_id)
 );

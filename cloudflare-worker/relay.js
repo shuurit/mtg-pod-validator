@@ -76,9 +76,22 @@
  *   D1 and posts the rankings/deck-strength/win-rate screenshots -- see
  *   scripts/discord_report.py.
  *
+ * - POST /games, POST /roster, POST /decks/bracket,
+ *   POST /decks/potential-bracket-4 all require a valid session (see
+ *   requireSession) -- a signed-in pod member can write any of these for
+ *   any deck/player, not just their own; there's no per-owner restriction
+ *   in v1. GET /auth/discord/callback -> DISCORD_CLIENT_SECRET: completes
+ *   the OAuth handshake app.js starts by sending the browser to Discord's
+ *   own /oauth2/authorize (see DISCORD_CLIENT_ID) -- exchanges the
+ *   returned code for a Discord identity, matches it against
+ *   players.discord_user_id (linked manually per player, not self-serve),
+ *   and mints a session token in DECK_CACHE. POST /auth/logout invalidates
+ *   one; GET /auth/me lets app.js confirm a stored token's still good.
+ *
  * Deploy with: wrangler deploy
  * Secrets:     wrangler secret put GITHUB_TOKEN
  *              wrangler secret put PLAYGROUP_API_KEY
+ *              wrangler secret put DISCORD_CLIENT_SECRET
  * Bindings:    KV namespace bound as DECK_CACHE
  *              D1 database bound as DB
  */
@@ -136,6 +149,22 @@ const MAX_MEMBER_DECK_LOOKUPS_PER_RUN = 40;
 // endpoint that calls getActiveLeagueId until this was caught).
 const ACTIVE_LEAGUE_CACHE_KEY = "active_league";
 const ACTIVE_LEAGUE_CACHE_TTL_SECONDS = 60;
+
+// Discord OAuth sign-in -- see requireSession below. Client ID is public
+// (it's part of the login URL app.js sends users to), so it's a plain
+// constant here same as PLAYGROUP_ID; the Client Secret never appears in
+// this file, only as the DISCORD_CLIENT_SECRET Worker secret, since only
+// the token-exchange step (handleDiscordCallback) needs it.
+const DISCORD_CLIENT_ID = "1539751888294256721";
+const DISCORD_REDIRECT_URI = "https://mtg-pod-validator-relay.mattdomi18.workers.dev/auth/discord/callback";
+const APP_URL = "https://shuurit.github.io/mtg-pod-validator/";
+// Long-lived on purpose -- this is a small trusted playgroup signing in on
+// their own devices, not a public app; the tradeoff is convenience (no
+// re-auth every few days) against a stolen/leaked token staying valid
+// longer, which is an acceptable trade here. Stored in the same DECK_CACHE
+// KV namespace as everything else (see requireSession), just a different
+// key prefix -- no new binding needed.
+const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
 
 function corsHeaders() {
   return {
@@ -209,6 +238,20 @@ async function kvGetJson(env, key, fallback) {
   } catch {
     return fallback;
   }
+}
+
+// Every write endpoint's identity check -- reads `Authorization: Bearer
+// <token>`, looks up `session:<token>` in the same DECK_CACHE KV namespace
+// handleDiscordCallback wrote it into, and returns the stored
+// {playerId, discordUserId, username}, or null if the header's missing or
+// the token doesn't resolve to anything (never set, or expired past
+// SESSION_TTL_SECONDS -- KV's own expirationTtl handles that, nothing here
+// needs to check an expiry itself).
+async function requireSession(request, env) {
+  const auth = request.headers.get("Authorization") || "";
+  const match = auth.match(/^Bearer\s+(.+)$/);
+  if (!match) return null;
+  return kvGetJson(env, `session:${match[1]}`, null);
 }
 
 // Fires a GitHub repository_dispatch event. Only one caller now
@@ -295,6 +338,96 @@ function isValidPotentialBracket4Payload(payload) {
     typeof payload.deckId === "number" && typeof payload.potentialBracket4 === "boolean";
 }
 
+// ---------- GET /auth/discord/callback, POST /auth/logout, GET /auth/me ----------
+// See requireSession above for how every write endpoint consumes the
+// session this mints. app.js never talks to Discord directly beyond
+// sending the user to Discord's own /oauth2/authorize URL (public
+// client_id, no secret needed for that step) -- everything below is what
+// happens when Discord redirects back here with a one-time code.
+
+// Exchanges the one-time `code` Discord just redirected back with for an
+// access token (needs DISCORD_CLIENT_SECRET, so this has to happen here,
+// never in the browser), looks up that Discord account's id in `players`,
+// and either mints a session or reports that no player is linked yet.
+// Always redirects back to the app -- there's no useful JSON response to
+// give a browser mid-OAuth-redirect, and app.js reads the outcome out of
+// the URL fragment on load either way.
+async function handleDiscordCallback(request, env) {
+  const url = new URL(request.url);
+  const code = url.searchParams.get("code");
+  if (!code) {
+    return Response.redirect(`${APP_URL}#auth_error=no_code`, 302);
+  }
+
+  const tokenRes = await fetch("https://discord.com/api/oauth2/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: DISCORD_CLIENT_ID,
+      client_secret: env.DISCORD_CLIENT_SECRET,
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: DISCORD_REDIRECT_URI,
+    }),
+  });
+  if (!tokenRes.ok) {
+    return Response.redirect(`${APP_URL}#auth_error=discord_token_exchange_failed`, 302);
+  }
+  const { access_token } = await tokenRes.json();
+
+  const meRes = await fetch("https://discord.com/api/users/@me", {
+    headers: { "Authorization": `Bearer ${access_token}` },
+  });
+  if (!meRes.ok) {
+    return Response.redirect(`${APP_URL}#auth_error=discord_profile_lookup_failed`, 302);
+  }
+  const discordUser = await meRes.json();
+
+  const player = await env.DB.prepare("SELECT id, name FROM players WHERE discord_user_id = ?")
+    .bind(discordUser.id).first();
+  if (!player) {
+    // Deliberately not auto-created -- see schema.sql's discord_user_id
+    // comment: linking is a manual one-time step for this small, stable
+    // group, not self-serve. Someone whose Discord isn't linked yet sees a
+    // clear "not linked" state in the app rather than a confusing failure.
+    return Response.redirect(`${APP_URL}#auth_error=not_linked`, 302);
+  }
+
+  const token = crypto.randomUUID();
+  await env.DECK_CACHE.put(
+    `session:${token}`,
+    JSON.stringify({ playerId: player.id, discordUserId: discordUser.id, username: player.name }),
+    { expirationTtl: SESSION_TTL_SECONDS }
+  );
+
+  // The fragment (#...), not a query string -- a browser never sends the
+  // URL fragment back to any server on subsequent requests, so the session
+  // token never ends up in a server access log (GitHub Pages' or anyone
+  // else's) the way a ?session=... query param would. app.js reads
+  // location.hash once on load and immediately strips it.
+  return Response.redirect(`${APP_URL}#session=${token}`, 302);
+}
+
+async function handleAuthLogout(request, env) {
+  const auth = request.headers.get("Authorization") || "";
+  const match = auth.match(/^Bearer\s+(.+)$/);
+  if (match) {
+    await env.DECK_CACHE.delete(`session:${match[1]}`);
+  }
+  return jsonResponse({ ok: true }, 200);
+}
+
+// Lets app.js confirm a token from localStorage is still good (and show
+// "Signed in as X") on load, without waiting for a write to fail with a
+// 401 first.
+async function handleAuthMe(request, env) {
+  const session = await requireSession(request, env);
+  if (!session) {
+    return jsonResponse({ error: "Not signed in" }, 401);
+  }
+  return jsonResponse({ playerId: session.playerId, username: session.username }, 200);
+}
+
 // ---------- POST /games, POST /roster : D1 writes ----------
 // app.js's actual submit paths (Games to Update / Update the App) --
 // POST / and POST /apply-roster-update above still exist but nothing
@@ -372,6 +505,11 @@ async function resolveSeasonId(env) {
 }
 
 async function handleGamesWrite(request, env, ctx) {
+  const session = await requireSession(request, env);
+  if (!session) {
+    return jsonResponse({ error: "Sign in required" }, 401);
+  }
+
   let payload;
   try {
     payload = await request.json();
@@ -433,8 +571,8 @@ async function handleGamesWrite(request, env, ctx) {
   for (let attempt = 1; ; attempt++) {
     try {
       const insertResult = await env.DB.prepare(
-        "INSERT INTO games (season_id, game_num, played_at, pod_size, playgroup_game_id) VALUES (?, ?, ?, ?, ?)"
-      ).bind(seasonId, gameNum, payload.date, payload.podSize, payload.playgroupGameId ?? null).run();
+        "INSERT INTO games (season_id, game_num, played_at, pod_size, playgroup_game_id, submitted_by_player_id) VALUES (?, ?, ?, ?, ?, ?)"
+      ).bind(seasonId, gameNum, payload.date, payload.podSize, payload.playgroupGameId ?? null, session.playerId).run();
       gameId = insertResult.meta.last_row_id;
       break;
     } catch (err) {
@@ -557,6 +695,10 @@ async function handleGamesWrite(request, env, ctx) {
 // submits at high enough frequency or low enough supervision for that gap
 // to matter in practice. Worth a real constraint if that ever changes.
 async function handleRosterWrite(request, env) {
+  if (!(await requireSession(request, env))) {
+    return jsonResponse({ error: "Sign in required" }, 401);
+  }
+
   let payload;
   try {
     payload = await request.json();
@@ -612,6 +754,10 @@ async function handleRosterWrite(request, env) {
 // game_results or baseline_power -- so it can't retroactively change any
 // already-logged game's numbers.
 async function handleDeckBracketWrite(request, env) {
+  if (!(await requireSession(request, env))) {
+    return jsonResponse({ error: "Sign in required" }, 401);
+  }
+
   let payload;
   try {
     payload = await request.json();
@@ -634,6 +780,10 @@ async function handleDeckBracketWrite(request, env) {
 // most decks never would be. Purely a manual flag, never touched by any
 // other write path.
 async function handleDeckPotentialBracket4Write(request, env) {
+  if (!(await requireSession(request, env))) {
+    return jsonResponse({ error: "Sign in required" }, 401);
+  }
+
   let payload;
   try {
     payload = await request.json();
@@ -1378,6 +1528,18 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/decks/potential-bracket-4") {
       return handleDeckPotentialBracket4Write(request, env);
+    }
+
+    if (request.method === "GET" && url.pathname === "/auth/discord/callback") {
+      return handleDiscordCallback(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/auth/logout") {
+      return handleAuthLogout(request, env);
+    }
+
+    if (request.method === "GET" && url.pathname === "/auth/me") {
+      return handleAuthMe(request, env);
     }
 
     return new Response("Not found", { status: 404, headers: corsHeaders() });

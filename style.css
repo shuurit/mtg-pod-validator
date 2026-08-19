@@ -144,6 +144,56 @@ body {
   to { transform: rotate(360deg); }
 }
 
+/* Fixed opposite #global-refresh-btn, same reasoning -- reachable
+   regardless of scroll position or which tab is active. */
+.auth-control {
+  position: fixed;
+  top: max(14px, env(safe-area-inset-top));
+  left: max(14px, env(safe-area-inset-left));
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--card-bg-translucent);
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 0.8rem;
+  box-shadow: var(--shadow-sm);
+  max-width: calc(100vw - 80px);
+}
+
+.auth-signin-btn {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-weight: 600;
+  padding: 0;
+  font-size: 0.8rem;
+}
+.auth-signin-btn:hover { color: var(--accent-strong); background: transparent; }
+
+.auth-signed-in {
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.auth-signed-in strong {
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#auth-status.hint {
+  margin: 0;
+  color: var(--bad);
+}
+
 header h1 {
   margin: 0 0 6px;
   font-size: 1.85rem;
