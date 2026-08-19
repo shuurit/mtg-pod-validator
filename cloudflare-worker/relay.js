@@ -170,7 +170,13 @@ function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    // Authorization added alongside Content-Type once write requests
+    // started carrying a session bearer token (see requireSession) -- a
+    // browser's CORS preflight rejects any request header not explicitly
+    // listed here, silently blocking every authenticated write client-side
+    // even though the exact same request works fine via curl (which skips
+    // CORS preflight entirely -- confirmed the hard way testing this).
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
   };
 }
 
