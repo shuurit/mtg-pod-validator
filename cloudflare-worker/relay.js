@@ -252,7 +252,9 @@ async function kvGetJson(env, key, fallback) {
 // {playerId, discordUserId, username}, or null if the header's missing or
 // the token doesn't resolve to anything (never set, or expired past
 // SESSION_TTL_SECONDS -- KV's own expirationTtl handles that, nothing here
-// needs to check an expiry itself).
+// needs to check an expiry itself). username here is the Discord display
+// name captured at sign-in time (see handleDiscordCallback), not
+// players.name -- only playerId is ever used to attribute a write.
 async function requireSession(request, env) {
   const auth = request.headers.get("Authorization") || "";
   const match = auth.match(/^Bearer\s+(.+)$/);
@@ -402,7 +404,17 @@ async function handleDiscordCallback(request, env) {
   const token = crypto.randomUUID();
   await env.DECK_CACHE.put(
     `session:${token}`,
-    JSON.stringify({ playerId: player.id, discordUserId: discordUser.id, username: player.name }),
+    JSON.stringify({
+      playerId: player.id,
+      discordUserId: discordUser.id,
+      // The Discord identity, not the tracked app name (player.name) --
+      // "Signed in as X" should read as "it's really you," which a Discord
+      // display name confirms more directly than the roster name someone
+      // else could just as easily be signed in under. global_name is
+      // Discord's newer display name, null for accounts that never set
+      // one; username (the unique handle) always exists as a fallback.
+      username: discordUser.global_name || discordUser.username,
+    }),
     { expirationTtl: SESSION_TTL_SECONDS }
   );
 

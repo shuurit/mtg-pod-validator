@@ -113,12 +113,34 @@ body {
   padding: 40px 20px 90px;
 }
 
-/* Fixed so it's always reachable regardless of scroll position -- mainly
-   for a home-screen "Add to Home Screen" install, which can lack a
-   browser reload button or reliable pull-to-refresh. */
-#global-refresh-btn {
+/* Both fixed top-right, stacked -- reachable regardless of scroll position
+   or which tab is active, mainly for a home-screen "Add to Home Screen"
+   install, which can lack a browser reload button or reliable
+   pull-to-refresh. .auth-control sits on top; the refresh button's top
+   offset adds its own height (~44px) plus a gap on top of the shared base
+   offset, so they never overlap. */
+.auth-control {
   position: fixed;
   top: max(14px, env(safe-area-inset-top));
+  right: max(14px, env(safe-area-inset-right));
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--card-bg-translucent);
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 0.8rem;
+  box-shadow: var(--shadow-sm);
+  max-width: calc(100vw - 80px);
+}
+
+#global-refresh-btn {
+  position: fixed;
+  top: calc(max(14px, env(safe-area-inset-top)) + 50px);
   right: max(14px, env(safe-area-inset-right));
   z-index: 100;
   width: 40px;
@@ -144,27 +166,6 @@ body {
   to { transform: rotate(360deg); }
 }
 
-/* Fixed opposite #global-refresh-btn, same reasoning -- reachable
-   regardless of scroll position or which tab is active. */
-.auth-control {
-  position: fixed;
-  top: max(14px, env(safe-area-inset-top));
-  left: max(14px, env(safe-area-inset-left));
-  z-index: 100;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: var(--card-bg-translucent);
-  backdrop-filter: blur(30px);
-  -webkit-backdrop-filter: blur(30px);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 8px 14px;
-  font-size: 0.8rem;
-  box-shadow: var(--shadow-sm);
-  max-width: calc(100vw - 80px);
-}
-
 .auth-signin-btn {
   border: none;
   background: transparent;
@@ -184,6 +185,7 @@ body {
 }
 .auth-signed-in strong {
   color: var(--ink);
+  max-width: 160px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -971,10 +973,27 @@ td.num {
 
   header h1 {
     font-size: 1.5rem;
-    /* Leaves room for the fixed refresh button pinned to the top-right
-       corner, so wrapped title text doesn't run under it. */
-    padding-right: 60px;
+    /* Leaves room for the fixed auth-control pill (now the widest thing
+       in that corner, wider than the refresh button stacked below it --
+       see .auth-control's shrink rules right below) pinned to the
+       top-right, so wrapped title text doesn't run under either of them.
+       Confirmed the hard way: a long Discord display name pushed the
+       pill's rendered width well past the smaller reservation this used
+       to need for the refresh button alone. */
+    padding-right: 190px;
   }
+
+  /* Same breakpoint as the h1 reservation above, on purpose -- one
+     source of truth for "how wide can this corner get," not two
+     independently-tuned thresholds that could drift apart. */
+  .auth-signed-in-label { display: none; }
+  .auth-signed-in strong { max-width: 90px; }
+  .auth-control { padding: 6px 10px; gap: 6px; font-size: 0.75rem; }
+  /* Has its own explicit font-size normally (see the base rule), which
+     would otherwise win over .auth-control's shrink above by source
+     order alone regardless of specificity -- needs its own override
+     here for the same reason .auth-signed-in's children needed theirs. */
+  .auth-signin-btn { font-size: 0.7rem; }
 
   .card {
     padding: 18px 16px 20px;
