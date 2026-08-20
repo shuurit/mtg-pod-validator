@@ -110,7 +110,17 @@ body {
 .wrap {
   max-width: 880px;
   margin: 0 auto;
-  padding: 40px 20px 90px;
+  /* Top padding accounts for env(safe-area-inset-top) -- the notch/
+     Dynamic Island's real height on iOS, same as .auth-control/
+     #global-refresh-btn's own top offsets just below (see viewport-fit=
+     cover + apple-mobile-web-app-status-bar-style=black-translucent in
+     index.html, which makes the status bar overlay page content rather
+     than reserve its own space). Without this, the header title renders
+     starting from a flat 40px regardless of how tall the real safe area
+     is, landing it partly behind the status bar on an installed
+     home-screen app -- confirmed the hard way from a real iPhone
+     screenshot, not just simulated in a browser without a real notch. */
+  padding: max(40px, calc(env(safe-area-inset-top) + 24px)) 20px 90px;
 }
 
 /* Both fixed top-right, stacked -- reachable regardless of scroll position
@@ -1040,7 +1050,9 @@ td.num {
 /* ---------- phone / tablet ---------- */
 @media (max-width: 640px) {
   .wrap {
-    padding: 22px 14px 60px;
+    /* Same env(safe-area-inset-top) reasoning as the base .wrap rule --
+       this breakpoint's own smaller flat value had the identical bug. */
+    padding: max(22px, calc(env(safe-area-inset-top) + 20px)) 14px 60px;
   }
 
   header h1 {
