@@ -167,22 +167,35 @@ body {
   flex: 0 1 auto;
 }
 
-/* No longer fixed/positioned on its own -- it's a normal flex child of
-   .header-row now, specifically so it aligns with the title instead of
-   floating independently in a corner regardless of where the title
-   actually renders. */
+/* Touch default: a normal flex child of .header-row, aligned with the
+   title -- confirmed working well on a real iPhone. Overridden back to
+   a fixed viewport corner on desktop just below, since "the corner"
+   turned out to mean the actual browser window there, not the content
+   card's own edge (confirmed via a real desktop screenshot -- the
+   in-header version left it looking disconnected from everything else
+   fixed to that corner, namely the refresh button). */
 .auth-control {
   flex: 0 0 auto;
 }
 
+@media (pointer: fine) {
+  .auth-control {
+    position: fixed;
+    top: max(14px, env(safe-area-inset-top));
+    right: max(14px, env(safe-area-inset-right));
+    z-index: 100;
+    -webkit-transform: translateZ(0);
+    transform: translateZ(0);
+  }
+}
+
 /* Desktop-only fallback -- (pointer: coarse) below hides this on touch,
-   where the pull-to-refresh gesture (#pull-refresh) replaces it. Kept
-   fixed/top-right since desktop has no equivalent "aligned with the
-   title" concern the avatar's move solved; this is a distinct utility
-   control, not an identity badge. */
+   where the pull-to-refresh gesture (#pull-refresh) replaces it. Stacked
+   directly below the avatar (both fixed, same corner, only ever shown
+   together on a fine-pointer device) rather than side by side. */
 #global-refresh-btn {
   position: fixed;
-  top: max(14px, env(safe-area-inset-top));
+  top: calc(max(14px, env(safe-area-inset-top)) + 50px);
   right: max(14px, env(safe-area-inset-right));
   z-index: 100;
   width: 40px;
