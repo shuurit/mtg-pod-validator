@@ -327,8 +327,8 @@ async function syncFromD1() {
   const statusEl = document.getElementById("sync-status");
   try {
     const [playersRes, gamesRes] = await Promise.all([
-      fetch(PLAYERS_RELAY_URL, { cache: "no-store" }),
-      fetch(GAMES_RELAY_URL, { cache: "no-store" }),
+      fetch(PLAYERS_RELAY_URL, { cache: "no-store", headers: authHeaders() }),
+      fetch(GAMES_RELAY_URL, { cache: "no-store", headers: authHeaders() }),
     ]);
     if (!playersRes.ok) throw new Error(`/players failed: HTTP ${playersRes.status}`);
     if (!gamesRes.ok) throw new Error(`/games failed: HTTP ${gamesRes.status}`);
@@ -1492,7 +1492,7 @@ async function refreshPlaygroupGames() {
     return;
   }
   try {
-    const res = await fetch(PLAYGROUP_GAMES_RELAY_URL, { cache: "no-store" });
+    const res = await fetch(PLAYGROUP_GAMES_RELAY_URL, { cache: "no-store", headers: authHeaders() });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.detail || body.error || `HTTP ${res.status}`);
@@ -2216,7 +2216,7 @@ async function loadRosterDiff() {
     return;
   }
   try {
-    const res = await fetch(ROSTER_DIFF_RELAY_URL, { cache: "no-store" });
+    const res = await fetch(ROSTER_DIFF_RELAY_URL, { cache: "no-store", headers: authHeaders() });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.detail || body.error || `HTTP ${res.status}`);
