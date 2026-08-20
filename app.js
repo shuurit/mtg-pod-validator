@@ -2791,11 +2791,20 @@ function consumeAuthRedirect() {
   }
 }
 
+// Writes to whichever status element is actually visible right now --
+// #auth-status lives in the corner control (shown once signed in),
+// #signin-gate-status lives in the full-page gate (shown until then). An
+// auth error can happen in either state (e.g. "not_linked" comes back
+// while still gated, mid sign-in attempt), so both get the message;
+// only the one that's actually on screen is ever seen.
 function showAuthStatusHint(message) {
-  const el = document.getElementById("auth-status");
-  if (!el) return;
-  el.textContent = message;
-  el.hidden = false;
+  for (const id of ["auth-status", "signin-gate-status"]) {
+    const el = document.getElementById(id);
+    if (el) {
+      el.textContent = message;
+      el.hidden = false;
+    }
+  }
 }
 
 // Confirms a stored token is still good and fetches the signed-in player's
@@ -2806,6 +2815,7 @@ function showAuthStatusHint(message) {
 async function checkAuthSession() {
   if (!sessionToken) {
     renderAuthControl();
+    renderAuthGate();
     return;
   }
   try {
@@ -2818,6 +2828,7 @@ async function checkAuthSession() {
     localStorage.removeItem("sessionToken");
   }
   renderAuthControl();
+  renderAuthGate();
 }
 
 function renderAuthControl() {
@@ -2835,18 +2846,40 @@ function renderAuthControl() {
   }
 }
 
+// The whole-app gate -- nothing else on the page is shown, and no live
+// data is fetched (see the init section below), until this confirms
+// currentUser. Every relay route except the three /auth/* ones now
+// requires a session server-side too (see relay.js's dispatcher), so
+// this is real access control, not just a client-side nicety -- but
+// gating the UI here still matters on its own, so a signed-out visitor
+// never even sees a flash of stale/empty tables before every fetch
+// comes back 401.
+function renderAuthGate() {
+  const gate = document.getElementById("signin-gate");
+  const wrap = document.querySelector(".wrap");
+  const authControl = document.getElementById("auth-control");
+  const refreshBtn = document.getElementById("global-refresh-btn");
+  const signedIn = !!currentUser;
+  if (gate) gate.hidden = signedIn;
+  if (wrap) wrap.hidden = !signedIn;
+  if (authControl) authControl.hidden = !signedIn;
+  if (refreshBtn) refreshBtn.hidden = !signedIn;
+}
+
 function wireAuthControl() {
-  const signinBtn = document.getElementById("auth-signin-btn");
-  const signoutBtn = document.getElementById("auth-signout-btn");
-  if (signinBtn) {
-    // A full-page redirect, not a fetch -- Discord's authorize page has to
-    // be top-level navigation (it can't be loaded in an iframe/XHR), and
-    // client_id/redirect_uri are both public so no relay round trip is
-    // needed just to send the browser there. See DISCORD_AUTHORIZE_URL.
-    signinBtn.addEventListener("click", () => {
-      window.location.href = DISCORD_AUTHORIZE_URL;
-    });
+  // A full-page redirect, not a fetch -- Discord's authorize page has to
+  // be top-level navigation (it can't be loaded in an iframe/XHR), and
+  // client_id/redirect_uri are both public so no relay round trip is
+  // needed just to send the browser there. See DISCORD_AUTHORIZE_URL.
+  // Both buttons do the same thing -- the corner one only exists once
+  // already signed in (for re-auth after an expired session), the gate's
+  // is the one anyone actually starts from.
+  for (const id of ["auth-signin-btn", "signin-gate-btn"]) {
+    const btn = document.getElementById(id);
+    if (btn) btn.addEventListener("click", () => { window.location.href = DISCORD_AUTHORIZE_URL; });
   }
+
+  const signoutBtn = document.getElementById("auth-signout-btn");
   if (signoutBtn) {
     signoutBtn.addEventListener("click", async () => {
       if (sessionToken) {
@@ -2863,6 +2896,7 @@ function wireAuthControl() {
       const statusEl = document.getElementById("auth-status");
       if (statusEl) statusEl.hidden = true;
       renderAuthControl();
+      renderAuthGate();
     });
   }
 }
@@ -2879,13 +2913,22 @@ if (gtuIntroEl) {
 // check uses it.
 consumeAuthRedirect();
 wireAuthControl();
-checkAuthSession();
 
-initPlayerCountSelect();
-syncFromD1();
-initTabs();
-refreshPlaygroupGames();
-loadRosterDiff();
+// Every relay route except sign-in itself now requires a session (see
+// relay.js), so there's no point calling any of these -- let alone
+// showing the tables/forms they populate -- until checkAuthSession
+// actually confirms one. initTabs() is just wiring click listeners on
+// elements that exist either way, harmless to run regardless, but the
+// live-data fetches would only come back 401 while gated.
+checkAuthSession().then(() => {
+  initTabs();
+  if (currentUser) {
+    initPlayerCountSelect();
+    syncFromD1();
+    refreshPlaygroupGames();
+    loadRosterDiff();
+  }
+});
 
 // Re-fetches everything derived from either data source: syncFromD1
 // re-reads the D1 database (also re-runs renderWinRatesTable as part of
@@ -2905,6 +2948,11 @@ loadRosterDiff();
 // never shows stale data), once on initial page load, and once right
 // after a game or roster submission.
 async function refreshEverything() {
+  // Guards the visibility-change listener below -- it fires on any
+  // tab-focus regardless of sign-in state, and would otherwise fire off
+  // three now-guaranteed-401 requests every time a signed-out visitor
+  // switches back to the tab.
+  if (!currentUser) return;
   const btn = document.getElementById("global-refresh-btn");
   if (btn) btn.classList.add("spinning");
   try {

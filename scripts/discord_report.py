@@ -18,6 +18,7 @@ Both are grouped by player, one player-header row followed by their deck
 rows, matching how the old sheet was laid out.
 """
 import io
+import os
 import time
 
 import matplotlib
@@ -31,6 +32,14 @@ RELAY_BASE_URL = "https://mtg-pod-validator-relay.mattdomi18.workers.dev"
 PLAYERS_URL = f"{RELAY_BASE_URL}/players"
 GAMES_URL = f"{RELAY_BASE_URL}/games"
 DECK_WIN_RATES_URL = f"{RELAY_BASE_URL}/deck-win-rates"
+
+# Every relay route now requires a signed-in Discord session (see
+# relay.js's dispatcher) -- except these exact three GET endpoints, which
+# also accept this key in place of one, since this script runs from
+# GitHub Actions with no Discord account of its own to sign in with. Set
+# as the RELAY_INTERNAL_KEY repo secret, passed through by
+# post-discord-live.yml/post-discord-update.yml's env.
+RELAY_HEADERS = {"X-Internal-Key": os.environ.get("RELAY_INTERNAL_KEY", "")}
 
 # Excluded from every table image posted to Discord -- Kristy and Joseph
 # have gone inactive and will drop off the roster soon. Filtered here
@@ -57,7 +66,7 @@ def format_pct(v):
 
 
 def fetch_json(url):
-    resp = requests.get(url, timeout=15)
+    resp = requests.get(url, headers=RELAY_HEADERS, timeout=15)
     resp.raise_for_status()
     return resp.json()
 

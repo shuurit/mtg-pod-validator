@@ -29,8 +29,21 @@
 <div class="tab-bg" id="bg-games-to-update"></div>
 <div class="tab-bg" id="bg-update-app"></div>
 <div class="tab-bg" id="bg-winrates"></div>
-<button id="global-refresh-btn" aria-label="Refresh live data" title="Refresh live data">&#8635;</button>
-<div id="auth-control" class="auth-control">
+<!-- Visible by default, hidden once a signed-in session is confirmed --
+     fails closed: nothing else on the page loads or fetches live data
+     until then (see renderAuthGate/checkAuthSession in app.js), rather
+     than briefly flashing real content before a not-signed-in check
+     catches up. -->
+<div id="signin-gate" class="signin-gate">
+  <div class="signin-gate-card">
+    <h1>Amass a Gathering - App Edition</h1>
+    <p class="hint">Sign in with Discord to use the app.</p>
+    <button id="signin-gate-btn" type="button" class="primary">Sign in with Discord</button>
+    <p id="signin-gate-status" class="hint" hidden></p>
+  </div>
+</div>
+<button id="global-refresh-btn" aria-label="Refresh live data" title="Refresh live data" hidden>&#8635;</button>
+<div id="auth-control" class="auth-control" hidden>
   <button id="auth-signin-btn" type="button" class="auth-signin-btn">Sign in with Discord</button>
   <span id="auth-signed-in" class="auth-signed-in" hidden>
     <span class="auth-signed-in-label">Signed in as </span><strong id="auth-username"></strong>
@@ -38,7 +51,7 @@
   </span>
   <span id="auth-status" class="hint" hidden></span>
 </div>
-<div class="wrap">
+<div class="wrap" hidden>
   <header>
     <h1>Amass a Gathering - App Edition</h1>
     <p class="subtitle">Pick a player count, choose each player's deck, and check the pod's power level spread.</p>

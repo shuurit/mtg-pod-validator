@@ -22,6 +22,7 @@ jobs:
       - name: Post to Discord
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.SEASON_STAT_WEBHOOK }}
+          RELAY_INTERNAL_KEY: ${{ secrets.RELAY_INTERNAL_KEY }}
         run: python scripts/post_to_discord.py
 
       - name: Commit Discord post tracking
@@ -36,4 +37,5 @@ jobs:
       - name: Archive to Discord
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.SEASON_ARCHIVE_WEBHOOK }}
+          RELAY_INTERNAL_KEY: ${{ secrets.RELAY_INTERNAL_KEY }}
         run: python scripts/post_to_discord_archive.py

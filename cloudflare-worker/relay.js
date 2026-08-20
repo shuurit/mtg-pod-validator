@@ -76,22 +76,30 @@
  *   D1 and posts the rankings/deck-strength/win-rate screenshots -- see
  *   scripts/discord_report.py.
  *
- * - POST /games, POST /roster, POST /decks/bracket,
- *   POST /decks/potential-bracket-4 all require a valid session (see
- *   requireSession) -- a signed-in pod member can write any of these for
- *   any deck/player, not just their own; there's no per-owner restriction
- *   in v1. GET /auth/discord/callback -> DISCORD_CLIENT_SECRET: completes
- *   the OAuth handshake app.js starts by sending the browser to Discord's
- *   own /oauth2/authorize (see DISCORD_CLIENT_ID) -- exchanges the
- *   returned code for a Discord identity, matches it against
- *   players.discord_user_id (linked manually per player, not self-serve),
- *   and mints a session token in DECK_CACHE. POST /auth/logout invalidates
- *   one; GET /auth/me lets app.js confirm a stored token's still good.
+ * - Every route requires a valid Discord session (see requireSession)
+ *   except the three that manage the session itself: GET
+ *   /auth/discord/callback -> DISCORD_CLIENT_SECRET completes the OAuth
+ *   handshake app.js starts by sending the browser to Discord's own
+ *   /oauth2/authorize (see DISCORD_CLIENT_ID) -- exchanges the returned
+ *   code for a Discord identity, matches it against players.discord_user_id
+ *   (linked manually per player, not self-serve), and mints a session
+ *   token in DECK_CACHE; POST /auth/logout invalidates one; GET /auth/me
+ *   lets app.js confirm a stored token's still good. This is checked once
+ *   in the fetch handler's dispatcher, not per-route, so a signed-out
+ *   request never reaches any handler -- including reads (GET /players,
+ *   /games, etc.), not just writes. A signed-in pod member can write any
+ *   of the four write endpoints for any deck/player, not just their own;
+ *   there's no per-owner restriction in v1. One narrow exception: GET
+ *   /players, /games, and /deck-win-rates also accept an X-Internal-Key
+ *   header matching INTERNAL_API_KEY in place of a session -- that's
+ *   scripts/discord_report.py calling in from GitHub Actions
+ *   (post-discord-live.yml), which has no Discord account of its own.
  *
  * Deploy with: wrangler deploy
  * Secrets:     wrangler secret put GITHUB_TOKEN
  *              wrangler secret put PLAYGROUP_API_KEY
  *              wrangler secret put DISCORD_CLIENT_SECRET
+ *              wrangler secret put INTERNAL_API_KEY
  * Bindings:    KV namespace bound as DECK_CACHE
  *              D1 database bound as DB
  */
@@ -522,12 +530,7 @@ async function resolveSeasonId(env) {
   throw new Error(`Failed to resolve or create a season for league ${leagueId} ("${activeLeague.name}").`);
 }
 
-async function handleGamesWrite(request, env, ctx) {
-  const session = await requireSession(request, env);
-  if (!session) {
-    return jsonResponse({ error: "Sign in required" }, 401);
-  }
-
+async function handleGamesWrite(request, env, ctx, session) {
   let payload;
   try {
     payload = await request.json();
@@ -713,10 +716,6 @@ async function handleGamesWrite(request, env, ctx) {
 // submits at high enough frequency or low enough supervision for that gap
 // to matter in practice. Worth a real constraint if that ever changes.
 async function handleRosterWrite(request, env) {
-  if (!(await requireSession(request, env))) {
-    return jsonResponse({ error: "Sign in required" }, 401);
-  }
-
   let payload;
   try {
     payload = await request.json();
@@ -772,10 +771,6 @@ async function handleRosterWrite(request, env) {
 // game_results or baseline_power -- so it can't retroactively change any
 // already-logged game's numbers.
 async function handleDeckBracketWrite(request, env) {
-  if (!(await requireSession(request, env))) {
-    return jsonResponse({ error: "Sign in required" }, 401);
-  }
-
   let payload;
   try {
     payload = await request.json();
@@ -798,10 +793,6 @@ async function handleDeckBracketWrite(request, env) {
 // most decks never would be. Purely a manual flag, never touched by any
 // other write path.
 async function handleDeckPotentialBracket4Write(request, env) {
-  if (!(await requireSession(request, env))) {
-    return jsonResponse({ error: "Sign in required" }, 401);
-  }
-
   let payload;
   try {
     payload = await request.json();
@@ -1504,6 +1495,48 @@ export default {
 
     const url = new URL(request.url);
 
+    if (request.method === "GET" && url.pathname === "/auth/discord/callback") {
+      return handleDiscordCallback(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/auth/logout") {
+      return handleAuthLogout(request, env);
+    }
+
+    if (request.method === "GET" && url.pathname === "/auth/me") {
+      return handleAuthMe(request, env);
+    }
+
+    // Everything below requires a valid Discord session -- the whole app,
+    // reads included, not just writes. Checked once here rather than
+    // per-handler: a route added later can't accidentally ship
+    // unauthenticated by someone forgetting its own guard, and it means
+    // the three /auth/* routes above are the only ones ever reachable
+    // signed out (there'd be no way to sign in otherwise) -- with one
+    // narrow exception right below for scripts/discord_report.py, which
+    // has no Discord account of its own to sign in with.
+    //
+    // INTERNAL_KEY_PATHS is that exception: GET /players, /games, and
+    // /deck-win-rates are the exact three endpoints post-discord-live.yml
+    // (GitHub Actions) calls directly to build the Discord report -- a
+    // matching X-Internal-Key header unlocks only those, nothing else
+    // (never a write, never /roster-diff or /playgroup-games either).
+    // INTERNAL_API_KEY is a separate secret from DISCORD_CLIENT_SECRET,
+    // not tied to any player, so it can't be revoked by unlinking
+    // someone's Discord and doesn't expire like a session does.
+    const internalKey = request.headers.get("X-Internal-Key");
+    const isValidInternalKey = !!internalKey && !!env.INTERNAL_API_KEY && internalKey === env.INTERNAL_API_KEY;
+    const INTERNAL_KEY_PATHS = new Set(["/players", "/games", "/deck-win-rates"]);
+    const usingInternalKey = isValidInternalKey && request.method === "GET" && INTERNAL_KEY_PATHS.has(url.pathname);
+
+    let session = null;
+    if (!usingInternalKey) {
+      session = await requireSession(request, env);
+      if (!session) {
+        return jsonResponse({ error: "Sign in required" }, 401);
+      }
+    }
+
     if (request.method === "GET" && url.pathname === "/playgroup-games") {
       return handlePlaygroupGames(env, ctx, request);
     }
@@ -1533,7 +1566,7 @@ export default {
     }
 
     if (request.method === "POST" && url.pathname === "/games") {
-      return handleGamesWrite(request, env, ctx);
+      return handleGamesWrite(request, env, ctx, session);
     }
 
     if (request.method === "POST" && url.pathname === "/roster") {
@@ -1546,18 +1579,6 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/decks/potential-bracket-4") {
       return handleDeckPotentialBracket4Write(request, env);
-    }
-
-    if (request.method === "GET" && url.pathname === "/auth/discord/callback") {
-      return handleDiscordCallback(request, env);
-    }
-
-    if (request.method === "POST" && url.pathname === "/auth/logout") {
-      return handleAuthLogout(request, env);
-    }
-
-    if (request.method === "GET" && url.pathname === "/auth/me") {
-      return handleAuthMe(request, env);
     }
 
     return new Response("Not found", { status: 404, headers: corsHeaders() });

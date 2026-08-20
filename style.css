@@ -196,6 +196,49 @@ body {
   color: var(--bad);
 }
 
+/* The whole-page gate shown until a signed-in session is confirmed --
+   var(--bg), not a dark scrim like .modal-overlay, since .wrap is
+   genuinely hidden behind this (not just visually covered), so it should
+   read as "this is the page," not a dialog floating over something. */
+.signin-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.signin-gate[hidden] { display: none; }
+
+.signin-gate-card {
+  width: 100%;
+  max-width: 420px;
+  text-align: center;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  padding: 32px 28px;
+}
+.signin-gate-card h1 {
+  margin: 0 0 8px;
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.signin-gate-card .hint {
+  margin: 0 0 20px;
+}
+.signin-gate-card button.primary {
+  width: 100%;
+}
+#signin-gate-status.hint {
+  margin: 14px 0 0;
+  color: var(--bad);
+}
+
 header h1 {
   margin: 0 0 6px;
   font-size: 1.85rem;
