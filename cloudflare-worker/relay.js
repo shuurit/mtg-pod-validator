@@ -365,6 +365,22 @@ function isValidPotentialBracket4Payload(payload) {
 // access token (needs DISCORD_CLIENT_SECRET, so this has to happen here,
 // never in the browser), looks up that Discord account's id in `players`,
 // and either mints a session or reports that no player is linked yet.
+// Discord's CDN URL for a user's avatar -- their own upload if they have
+// one, else one of Discord's 6 default avatars, deterministically chosen
+// per account (never random) so the same signed-out account always shows
+// the same default. Two different formulas depending on whether the
+// account is on Discord's newer username system (discriminator "0", no
+// legacy #1234 tag) or not -- both documented behavior, not a guess.
+function discordAvatarUrl(discordUser) {
+  if (discordUser.avatar) {
+    return `https://cdn.discordapp.com/avatars/${discordUser.id}/${discordUser.avatar}.png`;
+  }
+  const index = discordUser.discriminator && discordUser.discriminator !== "0"
+    ? Number(discordUser.discriminator) % 5
+    : Number(BigInt(discordUser.id) >> 22n) % 6;
+  return `https://cdn.discordapp.com/embed/avatars/${index}.png`;
+}
+
 // Always redirects back to the app -- there's no useful JSON response to
 // give a browser mid-OAuth-redirect, and app.js reads the outcome out of
 // the URL fragment on load either way.
@@ -422,6 +438,7 @@ async function handleDiscordCallback(request, env) {
       // Discord's newer display name, null for accounts that never set
       // one; username (the unique handle) always exists as a fallback.
       username: discordUser.global_name || discordUser.username,
+      avatarUrl: discordAvatarUrl(discordUser),
     }),
     { expirationTtl: SESSION_TTL_SECONDS }
   );
@@ -451,7 +468,7 @@ async function handleAuthMe(request, env) {
   if (!session) {
     return jsonResponse({ error: "Not signed in" }, 401);
   }
-  return jsonResponse({ playerId: session.playerId, username: session.username }, 200);
+  return jsonResponse({ playerId: session.playerId, username: session.username, avatarUrl: session.avatarUrl }, 200);
 }
 
 // ---------- POST /games, POST /roster : D1 writes ----------

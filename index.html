@@ -43,12 +43,18 @@
   </div>
 </div>
 <button id="global-refresh-btn" aria-label="Refresh live data" title="Refresh live data" hidden>&#8635;</button>
+<!-- Only ever shown once signed in -- renderAuthGate hides this whole
+     div while signed out, the sign-in gate above is what's shown
+     instead, so there's no separate "sign in" button needed in here. -->
 <div id="auth-control" class="auth-control" hidden>
-  <button id="auth-signin-btn" type="button" class="auth-signin-btn">Sign in with Discord</button>
-  <span id="auth-signed-in" class="auth-signed-in" hidden>
-    <span class="auth-signed-in-label">Signed in as </span><strong id="auth-username"></strong>
-    <button id="auth-signout-btn" type="button" class="icon-btn">Sign out</button>
-  </span>
+  <div class="auth-avatar-wrap">
+    <button id="auth-avatar-btn" type="button" class="auth-avatar-btn" aria-haspopup="true" aria-expanded="false" aria-label="Account menu">
+      <img id="auth-avatar-img" alt="">
+    </button>
+    <div id="auth-menu" class="auth-menu" hidden>
+      <button id="auth-signout-btn" type="button" class="auth-menu-item">Sign out</button>
+    </div>
+  </div>
   <span id="auth-status" class="hint" hidden></span>
 </div>
 <div class="wrap" hidden>

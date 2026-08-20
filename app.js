@@ -1069,6 +1069,7 @@ document.addEventListener("keydown", e => {
   if (e.key === "Escape") {
     hideRevealModal();
     hideComboTrackModal();
+    hideAuthMenu();
   }
 });
 
@@ -2832,18 +2833,25 @@ async function checkAuthSession() {
 }
 
 function renderAuthControl() {
-  const signinBtn = document.getElementById("auth-signin-btn");
-  const signedInEl = document.getElementById("auth-signed-in");
-  const usernameEl = document.getElementById("auth-username");
-  if (!signinBtn || !signedInEl || !usernameEl) return;
+  const avatarImg = document.getElementById("auth-avatar-img");
+  if (!avatarImg) return;
   if (currentUser) {
-    signinBtn.hidden = true;
-    signedInEl.hidden = false;
-    usernameEl.textContent = currentUser.username;
+    avatarImg.src = currentUser.avatarUrl || "";
+    avatarImg.alt = `Signed in as ${currentUser.username}`;
   } else {
-    signinBtn.hidden = false;
-    signedInEl.hidden = true;
+    // #auth-control is hidden whenever this is true (see renderAuthGate),
+    // so this is just keeping the <img> from holding onto a stale avatar
+    // between sessions -- never actually visible itself.
+    avatarImg.removeAttribute("src");
+    hideAuthMenu();
   }
+}
+
+function hideAuthMenu() {
+  const menu = document.getElementById("auth-menu");
+  const btn = document.getElementById("auth-avatar-btn");
+  if (menu) menu.hidden = true;
+  if (btn) btn.setAttribute("aria-expanded", "false");
 }
 
 // The whole-app gate -- nothing else on the page is shown, and no live
@@ -2871,17 +2879,35 @@ function wireAuthControl() {
   // be top-level navigation (it can't be loaded in an iframe/XHR), and
   // client_id/redirect_uri are both public so no relay round trip is
   // needed just to send the browser there. See DISCORD_AUTHORIZE_URL.
-  // Both buttons do the same thing -- the corner one only exists once
-  // already signed in (for re-auth after an expired session), the gate's
-  // is the one anyone actually starts from.
-  for (const id of ["auth-signin-btn", "signin-gate-btn"]) {
-    const btn = document.getElementById(id);
-    if (btn) btn.addEventListener("click", () => { window.location.href = DISCORD_AUTHORIZE_URL; });
+  const gateSigninBtn = document.getElementById("signin-gate-btn");
+  if (gateSigninBtn) {
+    gateSigninBtn.addEventListener("click", () => { window.location.href = DISCORD_AUTHORIZE_URL; });
+  }
+
+  // Click the avatar to reveal "Sign out" -- click anywhere else (or the
+  // menu item itself) to close it. Same click-to-reveal pattern as every
+  // other menu/modal in this app, not hover, so it behaves the same on
+  // touch as it does with a mouse.
+  const avatarBtn = document.getElementById("auth-avatar-btn");
+  const menu = document.getElementById("auth-menu");
+  if (avatarBtn && menu) {
+    avatarBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const opening = menu.hidden;
+      menu.hidden = !opening;
+      avatarBtn.setAttribute("aria-expanded", String(opening));
+    });
+    document.addEventListener("click", (e) => {
+      if (!menu.hidden && !menu.contains(e.target) && e.target !== avatarBtn) {
+        hideAuthMenu();
+      }
+    });
   }
 
   const signoutBtn = document.getElementById("auth-signout-btn");
   if (signoutBtn) {
     signoutBtn.addEventListener("click", async () => {
+      hideAuthMenu();
       if (sessionToken) {
         try {
           await fetch(AUTH_LOGOUT_RELAY_URL, { method: "POST", headers: authHeaders() });
