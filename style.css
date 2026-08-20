@@ -62,6 +62,21 @@
 
 * { box-sizing: border-box; }
 
+/* iOS Safari/PWA can briefly let position:fixed layers (.tab-bg below,
+   .auth-control, #global-refresh-btn) detach from the real viewport edge
+   during/after a scroll -- a known WebKit quirk, not something this app's
+   layout is doing wrong. With no background of its own, html defaults to
+   browser white, so that gap showed as a white strip right where the
+   translucent status bar sits, undoing viewport-fit=cover's whole point
+   -- confirmed the hard way on a real iPhone (fine on load, wrong again
+   after scrolling). Matching html's background to the theme means even
+   if the glitch still happens, the gap is invisible instead of a white
+   flash; see .tab-bg's translateZ(0) below for the other half of the fix
+   (forcing its own compositing layer, which iOS handles more reliably). */
+html {
+  background: var(--bg);
+}
+
 body {
   margin: 0;
   font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
@@ -90,6 +105,11 @@ body {
   opacity: 0;
   transition: opacity 0.9s ease;
   pointer-events: none;
+  /* Forces its own GPU compositing layer -- the standard fix for iOS
+     Safari/WebKit's position:fixed-detaches-on-scroll quirk (see html's
+     background comment above for the actual bug this addresses). */
+  -webkit-transform: translateZ(0);
+  transform: translateZ(0);
 }
 
 .tab-bg.active {
@@ -136,6 +156,8 @@ body {
   top: max(14px, env(safe-area-inset-top));
   right: max(14px, env(safe-area-inset-right));
   z-index: 100;
+  -webkit-transform: translateZ(0);
+  transform: translateZ(0);
 }
 
 #global-refresh-btn {
@@ -153,6 +175,8 @@ body {
   align-items: center;
   justify-content: center;
   box-shadow: var(--shadow-md);
+  -webkit-transform: translateZ(0);
+  transform: translateZ(0);
 }
 
 #global-refresh-btn.spinning {
