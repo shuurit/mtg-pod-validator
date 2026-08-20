@@ -143,26 +143,38 @@ body {
   padding: max(40px, calc(env(safe-area-inset-top) + 24px)) 20px 90px;
 }
 
-/* Both fixed top-right, stacked -- reachable regardless of scroll position
-   or which tab is active, mainly for a home-screen "Add to Home Screen"
-   install, which can lack a browser reload button or reliable
-   pull-to-refresh. .auth-control sits on top; the refresh button's top
-   offset adds its own height (~44px) plus a gap on top of the shared base
-   offset, so they never overlap. No background/border of its own -- just
-   a positioning wrapper now that it's only ever the avatar circle, which
-   carries its own shape. */
-.auth-control {
-  position: fixed;
-  top: max(14px, env(safe-area-inset-top));
-  right: max(14px, env(safe-area-inset-right));
-  z-index: 100;
-  -webkit-transform: translateZ(0);
-  transform: translateZ(0);
+/* Title + avatar on one row -- align-items: flex-start (not center) so
+   the avatar lines up with the TOP of the title specifically, which
+   still reads correctly once the title wraps to 2-3 lines on a narrow
+   screen (centering against the whole wrapped block would sit the
+   avatar too low relative to the first line). */
+.header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.header-row h1 {
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
+/* No longer fixed/positioned on its own -- it's a normal flex child of
+   .header-row now, specifically so it aligns with the title instead of
+   floating independently in a corner regardless of where the title
+   actually renders. */
+.auth-control {
+  flex: 0 0 auto;
+}
+
+/* Desktop-only fallback -- (pointer: coarse) below hides this on touch,
+   where the pull-to-refresh gesture (#pull-refresh) replaces it. Kept
+   fixed/top-right since desktop has no equivalent "aligned with the
+   title" concern the avatar's move solved; this is a distinct utility
+   control, not an identity badge. */
 #global-refresh-btn {
   position: fixed;
-  top: calc(max(14px, env(safe-area-inset-top)) + 50px);
+  top: max(14px, env(safe-area-inset-top));
   right: max(14px, env(safe-area-inset-right));
   z-index: 100;
   width: 40px;
@@ -179,6 +191,10 @@ body {
   transform: translateZ(0);
 }
 
+@media (pointer: coarse) {
+  #global-refresh-btn { display: none !important; }
+}
+
 #global-refresh-btn.spinning {
   animation: global-refresh-spin 0.8s linear infinite;
   pointer-events: none;
@@ -188,6 +204,31 @@ body {
 @keyframes global-refresh-spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
+}
+
+/* Grows from 0 via JS (initPullToRefresh in app.js) as the page is
+   pulled down at scroll position 0 -- touch-only in practice, since
+   nothing but a touchmove gesture ever changes its height. Sits inside
+   .wrap (below the safe-area-aware top padding, see .wrap above), so
+   revealing it never renders under the status bar. */
+.pull-refresh {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 0;
+  overflow: hidden;
+  color: var(--muted);
+}
+.pull-refresh.settling {
+  transition: height 0.2s ease;
+}
+.pull-refresh-icon {
+  display: inline-block;
+  font-size: 1.3rem;
+  line-height: 1;
+}
+.pull-refresh.refreshing .pull-refresh-icon {
+  animation: global-refresh-spin 0.8s linear infinite;
 }
 
 .auth-avatar-wrap {
@@ -1081,10 +1122,13 @@ td.num {
 
   header h1 {
     font-size: 1.5rem;
-    /* Leaves room for the fixed avatar/refresh-button stack pinned to the
-       top-right corner (both 40px circles, same right edge), so wrapped
-       title text doesn't run under either of them. */
-    padding-right: 60px;
+  }
+
+  /* Shrink the avatar itself (not just padding around it) so it doesn't
+     dominate a wrapped, smaller-font title next to it. */
+  .auth-avatar-btn {
+    width: 32px;
+    height: 32px;
   }
 
   .card {

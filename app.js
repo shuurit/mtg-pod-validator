@@ -2927,6 +2927,86 @@ function wireAuthControl() {
   }
 }
 
+// ---------- pull-to-refresh (touch) ----------
+// Replaces #global-refresh-btn on touch devices (see the (pointer:
+// coarse) rule in style.css that hides that button there) -- desktop
+// keeps the button since a mouse has no pull gesture to replace it with.
+// Reuses refreshEverything() itself, just retargets the "spinning" visual
+// at #pull-refresh instead of the button.
+function initPullToRefresh() {
+  const indicator = document.getElementById("pull-refresh");
+  if (!indicator) return;
+
+  const THRESHOLD = 70; // px pulled before a release actually triggers a refresh
+  const MAX_PULL = 100; // px -- caps how far the indicator grows regardless of how far the finger travels
+  let startY = null;
+  let pulling = false; // true only once a real downward pull-at-the-top has been confirmed, not just any touch
+  let refreshing = false;
+
+  document.addEventListener("touchstart", (e) => {
+    // Only ever the start of a pull if there's something to refresh
+    // (signed in -- refreshEverything no-ops otherwise anyway) and nothing
+    // above to scroll past. Re-checked on every touchstart, not cached,
+    // since sign-in state and scroll position both change between pulls.
+    if (refreshing || !currentUser || (window.scrollY || document.documentElement.scrollTop) > 0) {
+      startY = null;
+      return;
+    }
+    startY = e.touches[0].clientY;
+    pulling = false;
+  }, { passive: true });
+
+  document.addEventListener("touchmove", (e) => {
+    if (startY == null || refreshing) return;
+    const delta = e.touches[0].clientY - startY;
+    if (delta <= 0 || (window.scrollY || document.documentElement.scrollTop) > 0) {
+      // Finger moved up, or the page scrolled out from under a pull
+      // already in progress (e.g. content grew) -- bail rather than keep
+      // tracking a gesture that no longer means "pull to refresh".
+      startY = null;
+      indicator.classList.remove("pulling");
+      indicator.style.height = "0px";
+      return;
+    }
+    pulling = true;
+    // Damped (0.5x), not 1:1 with the finger -- matches the resistance
+    // feel of a native pull-to-refresh instead of the indicator just
+    // following the touch point exactly.
+    const pull = Math.min(delta * 0.5, MAX_PULL);
+    indicator.classList.remove("settling");
+    indicator.style.height = `${pull}px`;
+    // preventDefault only once a pull is confirmed -- doing this
+    // unconditionally on every touchmove would also block normal
+    // scrolling anywhere else on the page.
+    e.preventDefault();
+  }, { passive: false });
+
+  document.addEventListener("touchend", async () => {
+    if (!pulling) {
+      startY = null;
+      return;
+    }
+    const pulledEnough = parseFloat(indicator.style.height || "0") >= THRESHOLD;
+    pulling = false;
+    startY = null;
+    indicator.classList.add("settling");
+    if (pulledEnough) {
+      refreshing = true;
+      indicator.classList.add("refreshing");
+      indicator.style.height = "48px";
+      try {
+        await refreshEverything();
+      } finally {
+        indicator.classList.remove("refreshing");
+        indicator.style.height = "0px";
+        refreshing = false;
+      }
+    } else {
+      indicator.style.height = "0px";
+    }
+  });
+}
+
 // ---------- init ----------
 
 const gtuIntroEl = document.getElementById("gtu-intro");
@@ -2939,6 +3019,7 @@ if (gtuIntroEl) {
 // check uses it.
 consumeAuthRedirect();
 wireAuthControl();
+initPullToRefresh();
 
 // Every relay route except sign-in itself now requires a session (see
 // relay.js), so there's no point calling any of these -- let alone

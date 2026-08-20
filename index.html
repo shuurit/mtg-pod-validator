@@ -42,24 +42,45 @@
     <p id="signin-gate-status" class="hint" hidden></p>
   </div>
 </div>
+<!-- Desktop-only fallback (see the (pointer: coarse) rule in style.css
+     that hides it on touch) -- touch devices get the pull-to-refresh
+     gesture at the top of .wrap instead. Still fixed/top-right, since it
+     no longer needs to align with anything else in that corner now that
+     the avatar's moved into the header itself. -->
 <button id="global-refresh-btn" aria-label="Refresh live data" title="Refresh live data" hidden>&#8635;</button>
-<!-- Only ever shown once signed in -- renderAuthGate hides this whole
-     div while signed out, the sign-in gate above is what's shown
-     instead, so there's no separate "sign in" button needed in here. -->
-<div id="auth-control" class="auth-control" hidden>
-  <div class="auth-avatar-wrap">
-    <button id="auth-avatar-btn" type="button" class="auth-avatar-btn" aria-haspopup="true" aria-expanded="false" aria-label="Account menu">
-      <img id="auth-avatar-img" alt="">
-    </button>
-    <div id="auth-menu" class="auth-menu" hidden>
-      <button id="auth-signout-btn" type="button" class="auth-menu-item">Sign out</button>
-    </div>
-  </div>
-  <span id="auth-status" class="hint" hidden></span>
-</div>
 <div class="wrap" hidden>
+  <!-- Grows from 0 as the page is pulled down at scroll position 0 (see
+       initPullToRefresh in app.js) -- touch-only in practice, since
+       nothing but a touchmove gesture ever changes its height. Lives
+       inside .wrap (below the safe-area-aware top padding), not fixed
+       to the true viewport edge, so revealing it never renders under
+       the status bar the way the old fixed refresh button had to be
+       carefully positioned to avoid. -->
+  <div id="pull-refresh" class="pull-refresh" aria-hidden="true">
+    <span id="pull-refresh-icon" class="pull-refresh-icon">&#8635;</span>
+  </div>
+
   <header>
-    <h1>Amass a Gathering - App Edition</h1>
+    <div class="header-row">
+      <h1>Amass a Gathering - App Edition</h1>
+      <!-- Only ever shown once signed in -- renderAuthGate hides this
+           whole div while signed out, the sign-in gate above is what's
+           shown instead, so there's no separate "sign in" button needed
+           in here. In the header row now (not fixed), specifically so
+           it aligns with the title instead of floating independently in
+           a corner. -->
+      <div id="auth-control" class="auth-control" hidden>
+        <div class="auth-avatar-wrap">
+          <button id="auth-avatar-btn" type="button" class="auth-avatar-btn" aria-haspopup="true" aria-expanded="false" aria-label="Account menu">
+            <img id="auth-avatar-img" alt="">
+          </button>
+          <div id="auth-menu" class="auth-menu" hidden>
+            <button id="auth-signout-btn" type="button" class="auth-menu-item">Sign out</button>
+          </div>
+        </div>
+        <span id="auth-status" class="hint" hidden></span>
+      </div>
+    </div>
     <p class="subtitle">Pick a player count, choose each player's deck, and check the pod's power level spread.</p>
   </header>
 
