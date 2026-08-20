@@ -151,12 +151,20 @@ body {
 .header-row {
   display: flex;
   align-items: flex-start;
-  justify-content: space-between;
+  /* flex-start, not space-between -- the avatar should sit right next to
+     the title, not get pushed out to the far edge of a wide desktop
+     .wrap while the title stays put on the left (confirmed the hard way
+     from a screenshot: the two ended up nowhere near each other). */
+  justify-content: flex-start;
   gap: 12px;
 }
 .header-row h1 {
   min-width: 0;
-  flex: 1 1 auto;
+  /* flex-grow: 0 -- shouldn't expand to fill the row (that would shove
+     the avatar to the end again, same problem as space-between above,
+     just caused a different way). flex-shrink stays on so it can still
+     wrap on a narrow screen instead of overflowing. */
+  flex: 0 1 auto;
 }
 
 /* No longer fixed/positioned on its own -- it's a normal flex child of
