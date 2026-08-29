@@ -54,6 +54,17 @@ in minutes even though each individual call is cheap. It's a budget, not a
 one-at-a-time lock, so a few players refreshing at once from the same home
 network never trips it.
 
+**Known gap:** `caches.default` is documented to have no effect on a plain
+`*.workers.dev` deployment (only Workers reachable through a custom domain
+get a working Cache API) — this Worker doesn't have one yet, so this
+limiter most likely isn't actually enforcing anything right now, silently.
+`isRateLimited` fails open on any error for the same reason: a broken or
+unsupported limiter should never take real traffic down with it. Actually
+restoring protection needs a custom domain (which would also unlock
+Cloudflare's Bot Fight Mode / Rate Limiting Rules at the edge, before
+requests even reach the Worker) or a different counter mechanism that
+works without one.
+
 ## Endpoints
 
 - `GET /playgroup-games` — live active-league games. Always fresh.
