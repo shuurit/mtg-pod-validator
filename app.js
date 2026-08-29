@@ -1957,7 +1957,7 @@ function openGameForm(pgGame) {
   // response) since it needs the full event history for just this one
   // game, which is too expensive to pull for every pending game up front.
   if (pgGame.playgroup_game_id && RELAY_BASE_URL) {
-    fetch(`${RELAY_BASE_URL}/debug/game?id=${pgGame.playgroup_game_id}&events=true`, { cache: "no-store" })
+    fetch(`${RELAY_BASE_URL}/debug/game?id=${pgGame.playgroup_game_id}&events=true`, { cache: "no-store", headers: authHeaders() })
       .then(res => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
