@@ -223,25 +223,39 @@ function pgFetch(path, env) {
 // tripped for a normal deck submission, not a burst). Bucketing by time
 // guarantees every IP's count actually returns to 0 at each window
 // boundary regardless of how much traffic keeps arriving.
+//
+// Cloudflare's Cache API only works on Workers reachable through a custom
+// domain -- on a plain *.workers.dev deployment like this one currently
+// is, cache operations are documented to have no effect, which likely
+// means this never actually rate-limits anything right now (fails open
+// silently, not something visible in a deploy or a normal request). Fails
+// open on an explicit error too, same reasoning as the no-op case: a
+// broken or unsupported limiter should never take real traffic down with
+// it, it should just stop limiting until a custom domain (or another
+// mechanism) restores it.
 async function isRateLimited(request, ctx) {
-  const ip = request.headers.get("CF-Connecting-IP") || "unknown";
-  const bucket = Math.floor(Date.now() / 1000 / RATE_LIMIT_WINDOW_SECONDS);
-  const cache = caches.default;
-  const cacheKey = new Request(`https://rate-limit.internal/${ip}/${bucket}`);
+  try {
+    const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+    const bucket = Math.floor(Date.now() / 1000 / RATE_LIMIT_WINDOW_SECONDS);
+    const cache = caches.default;
+    const cacheKey = new Request(`https://rate-limit.internal/${ip}/${bucket}`);
 
-  const cached = await cache.match(cacheKey);
-  const count = cached ? (await cached.json()).count : 0;
+    const cached = await cache.match(cacheKey);
+    const count = cached ? (await cached.json()).count : 0;
 
-  ctx.waitUntil(
-    cache.put(
-      cacheKey,
-      new Response(JSON.stringify({ count: count + 1 }), {
-        headers: { "Cache-Control": `max-age=${RATE_LIMIT_WINDOW_SECONDS}` },
-      })
-    )
-  );
+    ctx.waitUntil(
+      cache.put(
+        cacheKey,
+        new Response(JSON.stringify({ count: count + 1 }), {
+          headers: { "Cache-Control": `max-age=${RATE_LIMIT_WINDOW_SECONDS}` },
+        })
+      ).catch(() => {})
+    );
 
-  return count + 1 > RATE_LIMIT_MAX_REQUESTS;
+    return count + 1 > RATE_LIMIT_MAX_REQUESTS;
+  } catch {
+    return false;
+  }
 }
 
 async function kvGetJson(env, key, fallback) {
