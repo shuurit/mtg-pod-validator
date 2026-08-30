@@ -774,6 +774,24 @@ function initPlayerCountSelect() {
   });
 }
 
+// Pull-to-refresh's own reset, on top of the usual data refetch -- a pull
+// signals "we're done with this pod, starting fresh" (unlike the desktop
+// refresh button, a background visibility-change refresh, or the refresh
+// that follows a submission, none of which should blow away a pod someone's
+// still setting up), so it also clears every slot's player/deck pick, pod
+// size back to its initial default, and any stale pass/fail results from
+// the last check.
+function resetPodSetup() {
+  podCount = 4;
+  podSelections = [];
+  lastCeiling = null;
+  const sel = document.getElementById("player-count");
+  if (sel) sel.value = podCount;
+  renderPodSlots();
+  const resultsSection = document.getElementById("results-section");
+  if (resultsSection) resultsSection.hidden = true;
+}
+
 function renderPodSlots() {
   const container = document.getElementById("pod-slots");
   container.innerHTML = "";
@@ -2995,6 +3013,7 @@ function initPullToRefresh() {
       indicator.classList.add("refreshing");
       indicator.style.height = "48px";
       try {
+        resetPodSetup();
         await refreshEverything();
       } finally {
         indicator.classList.remove("refreshing");
