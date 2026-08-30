@@ -4,7 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Amass a Gathering - App Edition</title>
-<link rel="stylesheet" href="style.css">
+<!-- ?v=N cache-busts style.css/app.js on phones that already cached an
+     older copy (GitHub Pages' cache headers otherwise mean a pull-to-
+     refresh, which only re-fetches data, can leave a stale script running
+     for a while) -- bump N here whenever either file changes. -->
+<link rel="stylesheet" href="style.css?v=2">
 
 <!-- Home-screen icon (iOS "Add to Home Screen" + Android/Chrome install).
      Generated from icon-source.png via scripts/generate_icons.py -- rerun
@@ -177,6 +181,6 @@
   </div>
 </div>
 
-<script src="app.js"></script>
+<script src="app.js?v=2"></script>
 </body>
 </html>
