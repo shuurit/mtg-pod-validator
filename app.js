@@ -420,12 +420,15 @@ function formatPower(power) {
 // in this app) -- just enough to bucket a deck's power into a color so a
 // player's whole pool reads visually at a glance instead of needing to
 // parse a column of numbers. Reuses the existing good/warn/bad tokens
-// already established for banners/result-rows elsewhere.
-function powerTierClass(power) {
-  if (power < 2.5) return "power-chip-low";
-  if (power < 3.2) return "power-chip-mid";
-  if (power < 3.7) return "power-chip-high";
-  return "power-chip-max";
+// already established for banners/result-rows elsewhere. Takes a prefix so
+// both the power chip itself and the deck row's tier edge (see
+// renderPlayersTable) share one set of thresholds instead of two copies
+// silently drifting apart.
+function powerTierClass(power, prefix = "power-chip") {
+  if (power < 2.5) return `${prefix}-low`;
+  if (power < 3.2) return `${prefix}-mid`;
+  if (power < 3.7) return `${prefix}-high`;
+  return `${prefix}-max`;
 }
 
 function buildPowerChip(power) {
@@ -741,6 +744,13 @@ function renderPlayersTable() {
       const tr = document.createElement("tr");
       const nameTd = document.createElement("td");
       nameTd.textContent = deck.name;
+      // A colored edge on the row itself, same tier thresholds as the power
+      // coin two cells over -- a glance down the column reads the pool's
+      // shape (mostly one color vs. a spread) without needing to read any
+      // numbers at all. Deliberately on the name cell, not the row: a <tr>
+      // border doesn't render reliably once a table sets border-collapse
+      // (which .winrates-table does), a <td> border does.
+      nameTd.classList.add(powerTierClass(deck.power, "deck-row"));
       const powerTd = document.createElement("td");
       powerTd.className = "num";
       powerTd.appendChild(bracketEditingDeckIds.has(deck.id) ? buildBracketEditRow(deck) : buildPowerCell(deck));
@@ -1000,7 +1010,7 @@ function showRevealModal(evaluated) {
 
     const artSlot = document.createElement("div");
     artSlot.className = "reveal-tile-art-fallback";
-    artSlot.textContent = "Loading art…";
+    artSlot.textContent = "Painting the art…";
     tile.appendChild(artSlot);
 
     const playerLine = document.createElement("div");
@@ -1126,6 +1136,56 @@ function evaluatePod(entries) {
   });
 }
 
+// Draws the exact floor/ceiling math evaluatePod already computes, so the
+// spread reads as a shape instead of a sentence. Deliberately reveals
+// nothing beyond what the banner/result rows already say out loud: marker
+// position is relative to the floor (never an absolute power number), and
+// the only number ever printed on a marker is the same "+X over" amount
+// already shown per-row for anyone flagged out of range -- an in-range
+// marker gets no number at all, matching how its row just says "In range."
+function buildPowerGauge(judgedEntries, floor, ceiling) {
+  const wrap = document.createElement("div");
+  wrap.className = "gauge-wrap";
+  const track = document.createElement("div");
+  track.className = "gauge-track";
+
+  // ceiling - floor is always exactly RANGE_TOLERANCE, but derived rather
+  // than assumed in case that ever changes. The track extends past the
+  // ceiling when someone's over it, so the good zone's width shrinks to
+  // however much of the full (possibly-stretched) track it actually covers.
+  const span = ceiling - floor;
+  const maxPower = Math.max(ceiling, ...judgedEntries.map(e => e.power));
+  const totalSpan = Math.max(span, maxPower - floor) || 1;
+
+  const zone = document.createElement("div");
+  zone.className = "gauge-zone";
+  zone.style.width = `${Math.min(100, (span / totalSpan) * 100)}%`;
+  track.appendChild(zone);
+
+  for (const entry of judgedEntries) {
+    const pct = Math.min(100, Math.max(0, ((entry.power - floor) / totalSpan) * 100));
+    const marker = document.createElement("div");
+    marker.className = "gauge-marker " + (entry.compatible ? "ok" : "over");
+    marker.style.left = `${pct}%`;
+
+    const label = document.createElement("span");
+    label.className = "dot-label";
+    label.textContent = entry.playerName;
+    marker.appendChild(label);
+
+    if (!entry.compatible) {
+      const val = document.createElement("span");
+      val.className = "dot-value";
+      val.textContent = `+${formatPower(entry.overBy)}`;
+      marker.appendChild(val);
+    }
+    track.appendChild(marker);
+  }
+
+  wrap.appendChild(track);
+  return wrap;
+}
+
 function runValidation() {
   const resultsSection = document.getElementById("results-section");
   const resultsDiv = document.getElementById("results");
@@ -1166,6 +1226,7 @@ function runValidation() {
     : "";
 
   let allInRange;
+  let gaugeFloor = null;
   if (judged.length === 0) {
     allInRange = true;
     lastCeiling = null;
@@ -1190,10 +1251,17 @@ function runValidation() {
     // Feeds refreshDeckOptions in renderPodSlots: a slot flagged here only
     // offers decks at or under this ceiling the next time its picker reopens.
     lastCeiling = min + RANGE_TOLERANCE;
+    gaugeFloor = min;
   }
 
   const evaluated = evaluatePod(entries);
   evaluated.forEach((entry, i) => { podSelections[i].outOfRange = !entry.compatible; });
+
+  // Drawn from the exact same evaluated data as the rows below -- see
+  // buildPowerGauge for why this never shows more than the rows already do.
+  if (gaugeFloor !== null) {
+    resultsDiv.appendChild(buildPowerGauge(evaluated.filter(e => !e.exempt), gaugeFloor, gaugeFloor + RANGE_TOLERANCE));
+  }
 
   for (const entry of evaluated) {
     const row = document.createElement("div");
@@ -1733,7 +1801,10 @@ function renderGamesToUpdate() {
   const listEl = document.getElementById("gtu-game-list");
   if (!playgroupGamesData || !statusEl || !listEl) return;
   if (gameLogSeason3Rows.length === 0) {
-    statusEl.textContent = "Waiting on deck-strength.xlsx to load...";
+    // "the Game Log" -- not "deck-strength.xlsx", which this stopped
+    // reading from back when the D1 migration landed; the string just
+    // never got updated to match.
+    statusEl.textContent = "Still syncing the Game Log…";
     updateGamesToUpdateTabBadge(0);
     return;
   }
@@ -1748,7 +1819,7 @@ function renderGamesToUpdate() {
   if (missing.length === 0) {
     const p = document.createElement("p");
     p.className = "hint";
-    p.textContent = "Nothing missing — every tracked game is already logged.";
+    p.textContent = "Nothing missing — every game's already on the books.";
     listEl.appendChild(p);
     return;
   }
@@ -2540,7 +2611,7 @@ function renderUpdateAppTab() {
   if (newPlayers.length === 0 && newDecksForExisting.length === 0) {
     const nothingNewEl = document.createElement("p");
     nothingNewEl.className = "hint";
-    nothingNewEl.textContent = "Nothing new — everyone and everything tracked here matches playgroup.gg.";
+    nothingNewEl.textContent = "Bench is fully synced. Nothing left to draft.";
     listEl.appendChild(nothingNewEl);
     rosterUpdateSelectedGroupKey = null;
     return;

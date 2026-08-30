@@ -702,12 +702,21 @@ td.num {
   font-variant-numeric: tabular-nums;
 }
 
-/* Illustrative power-tier thresholds -- see powerTierClass in app.js. */
+/* Illustrative power-tier thresholds -- see powerTierClass in app.js. A
+   coin, not the old pill -- a fixed circle reads as a small nameplate
+   detail (like a card's mana-cost circle) instead of a generic status
+   pill, and its footprint no longer depends on how many digits the power
+   value has. overflow:hidden clips the hover sweep below to the circle. */
 .power-chip {
-  display: inline-block;
-  padding: 2px 9px;
-  border-radius: 999px;
-  font-size: 0.82rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  font-size: 0.78rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
@@ -722,6 +731,41 @@ td.num {
 .power-chip-pending {
   border: 1px dashed var(--warn);
 }
+
+/* A light catching the coin, the way a real foil card does -- purely
+   decorative, triggered on hover/focus of the cell it sits in (not the
+   coin alone) so a keyboard/touch user landing on the pencil or flame
+   next to it sees the same catch a mouse hover gets. */
+.power-chip::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(120deg, transparent 35%, rgba(255, 255, 255, 0.65) 50%, transparent 65%);
+  transform: translateX(-140%);
+  opacity: 0;
+}
+.power-cell:hover .power-chip::after,
+.power-cell:focus-within .power-chip::after {
+  opacity: 1;
+  animation: power-chip-shine 0.9s ease-in-out;
+}
+@keyframes power-chip-shine {
+  from { transform: translateX(-140%); }
+  to { transform: translateX(140%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .power-chip::after { display: none; }
+}
+
+/* Same tier thresholds as the power coin (see powerTierClass in app.js),
+   applied to the deck name cell instead -- a colored edge down the column
+   so a player's whole pool reads as a shape at a glance, no numbers
+   required. On the <td>, not the <tr>: a row border doesn't render
+   reliably once border-collapse is set, which .winrates-table always is. */
+.deck-row-low { border-left: 3px solid var(--accent); }
+.deck-row-mid { border-left: 3px solid var(--good); }
+.deck-row-high { border-left: 3px solid var(--warn); }
+.deck-row-max { border-left: 3px solid var(--bad); }
 
 .power-cell, .bracket-edit {
   display: inline-flex;
@@ -884,6 +928,61 @@ td.num {
 .result-row .power {
   font-variant-numeric: tabular-nums;
   font-weight: 700;
+}
+
+/* Power spread, drawn -- see buildPowerGauge in app.js. Sits between the
+   pass/fail banner and the per-player result rows; the banner text stays
+   as the accessible summary, this is purely additive. */
+.gauge-wrap {
+  padding: 34px 8px 0;
+  margin-bottom: 16px;
+}
+.gauge-track {
+  position: relative;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--border-soft);
+}
+.gauge-zone {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  border-radius: 999px;
+  background: var(--good-bg);
+}
+.gauge-marker {
+  position: absolute;
+  top: 50%;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  border: 3px solid var(--card-bg);
+  box-shadow: var(--shadow-md);
+}
+.gauge-marker.ok { background: var(--good); }
+.gauge-marker.over { background: var(--bad); }
+.gauge-marker .dot-label {
+  position: absolute;
+  top: -26px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.gauge-marker .dot-value {
+  position: absolute;
+  bottom: -20px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.7rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--bad);
+  white-space: nowrap;
 }
 
 .to-game-btn {
