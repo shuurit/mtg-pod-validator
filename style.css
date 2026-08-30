@@ -29,6 +29,21 @@
      than the artwork fighting the theme. */
   --bg-scrim: rgba(245, 243, 238, 0.83);
   --card-bg-translucent: rgba(255, 255, 255, 0.25);
+
+  /* Magic's own five mana colors -- see buildIdentityCoin in app.js.
+     Deliberately the same in light and dark theme: these are brand-accurate
+     card colors a Magic player already recognizes, not part of this app's
+     own palette, so they shouldn't shift with it. */
+  --pip-w: #f4eecb;
+  --pip-u: #1a6fb0;
+  --pip-b: #2a2721;
+  --pip-r: #cf3229;
+  --pip-g: #0f7a45;
+  /* A warm foil gold for the Ready to Play reveal only -- see .reveal-tile-
+     art-pair below. Same reasoning as the pips: a physical-material color
+     (foil card stock), not part of this app's own light/dark palette, so
+     it stays fixed across both themes. */
+  --foil: #c9a13f;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -767,6 +782,27 @@ td.num {
 .deck-row-high { border-left: 3px solid var(--warn); }
 .deck-row-max { border-left: 3px solid var(--bad); }
 
+.deck-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* A deck's color identity -- see buildIdentityCoin in app.js. Same dark
+   ring a real mana symbol uses to stay legible against any card frame,
+   light or dark, which is why it doesn't come from a theme token. */
+.id-coin {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(0, 0, 0, 0.55);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+.id-coin-colorless {
+  background: linear-gradient(135deg, #b9b6ad, #8a877e);
+}
+
 .power-cell, .bracket-edit {
   display: inline-flex;
   align-items: center;
@@ -1049,6 +1085,21 @@ td.num {
   right: 14px;
 }
 
+/* This pod's combined colors -- see showRevealModal in app.js. Naturally
+   capped at 5 bars (there are only 5 colors to combine), hidden entirely
+   when nobody's color identity has been captured yet. */
+.reveal-strip {
+  display: flex;
+  gap: 4px;
+  margin: 2px 0 4px;
+}
+.reveal-strip span {
+  flex: 1 1 0;
+  height: 5px;
+  border-radius: 3px;
+}
+.reveal-strip[hidden] { display: none; }
+
 .reveal-grid {
   display: grid;
   /* grid-template-columns set inline by showRevealModal, based on pod size. */
@@ -1057,10 +1108,26 @@ td.num {
 }
 
 /* Two side by side for a partner/background commander deck, one alone
-   otherwise -- see splitCommanderNames in app.js. */
+   otherwise -- see splitCommanderNames in app.js. Also the foil rim/sweep's
+   own container (clips both images -- or the one -- into a single unified
+   frame, rather than each image getting its own separate border), the same
+   trick a real foil card's light-catch is standing in for. */
 .reveal-tile-art-pair {
   display: flex;
   gap: 4px;
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  border: 1.5px solid var(--foil);
+}
+.reveal-tile-art-pair::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(115deg, transparent 40%, rgba(255, 255, 255, 0.55) 50%, transparent 60%);
+  transform: translateX(-160%);
+  animation: reveal-foil-sweep 3s ease-in-out infinite;
+  pointer-events: none;
 }
 
 .reveal-tile-art {
@@ -1070,14 +1137,16 @@ td.num {
   height: var(--reveal-img-height, 110px);
   object-fit: cover;
   display: block;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border);
   background: var(--bg-accent);
+  /* Border/radius live on the wrapping .reveal-tile-art-pair now, which
+     clips this (and a partner deck's second image) into one foil-rimmed
+     frame instead of two separately-bordered tiles. */
 }
 
 /* Shown in place of the art if a commander name can't be resolved on
    Scryfall (typo, obscure/un-indexed card) -- text-only, never a broken
-   popup over one bad lookup. */
+   popup over one bad lookup. Gets its own foil rim/sweep, matching the real
+   art case, since this is still shown inside the same reveal moment. */
 .reveal-tile-art-fallback {
   width: 100%;
   height: var(--reveal-img-height, 110px);
@@ -1089,9 +1158,28 @@ td.num {
   font-size: 0.8rem;
   color: var(--muted);
   border-radius: var(--radius-md);
-  border: 1px dashed var(--border);
+  border: 1.5px dashed var(--foil);
   background: var(--bg-accent);
   box-sizing: border-box;
+  position: relative;
+  overflow: hidden;
+}
+.reveal-tile-art-fallback::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(115deg, transparent 40%, rgba(255, 255, 255, 0.35) 50%, transparent 60%);
+  transform: translateX(-160%);
+  animation: reveal-foil-sweep 3s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes reveal-foil-sweep {
+  0%, 40% { transform: translateX(-160%); }
+  60%, 100% { transform: translateX(160%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .reveal-tile-art-pair::after, .reveal-tile-art-fallback::after { display: none; }
 }
 
 .reveal-tile-player {

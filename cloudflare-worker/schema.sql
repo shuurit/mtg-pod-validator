@@ -77,7 +77,17 @@ CREATE TABLE decks (
   -- two-card combo, so this gates whether Games to Update even asks about
   -- it for a given deck (see game_results.early_two_card_combo below)
   -- rather than showing that checkbox for every deck in every game.
-  potential_bracket_4 INTEGER NOT NULL DEFAULT 0
+  potential_bracket_4 INTEGER NOT NULL DEFAULT 0,
+  -- playgroup.gg's own color_identity array (e.g. ["G","U"]), collapsed to
+  -- a plain string in WUBRG order (e.g. "UG") -- see toCanonicalColorString
+  -- in relay.js. NULL means "never captured" (no playgroup_deck_id to match
+  -- against, or not synced yet), distinct from "" which means a confirmed
+  -- colorless deck -- the two need to render differently (no badge at all
+  -- vs. a neutral one), not collapse into the same falsy check. Synced
+  -- opportunistically off the same /users/{id}/decks read syncDecksFromPlaygroup
+  -- already does for `archived`, and set directly at write time for a deck
+  -- added fresh via Update the App -- never guessed or computed here.
+  color_identity TEXT
 );
 
 CREATE TABLE games (

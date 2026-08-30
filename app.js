@@ -259,6 +259,10 @@ function applyPlayersFromD1(data) {
       bracket: d.bracket ?? null, bracketPending: !!d.bracketPending, newDeck: !!d.newDeck,
       potentialBracket4: !!d.potentialBracket4, comboFlagged: !!d.comboFlagged,
       comboFlaggedCount: d.comboFlaggedCount ?? 0, comboWindowSize: d.comboWindowSize ?? 0,
+      // null/undefined ("never captured") vs. "" (confirmed colorless) vs. a
+      // real string of letters -- see schema.sql's color_identity comment
+      // and buildIdentityCoin, which renders each case differently.
+      colorIdentity: d.colorIdentity ?? null,
     })),
   })));
 }
@@ -414,6 +418,51 @@ function buildTable(className, headers, rows) {
 
 function formatPower(power) {
   return power.toFixed(1);
+}
+
+// Same WUBRG order relay.js's toCanonicalColorString already collapsed a
+// deck's colors into -- kept here too so a coin's wedges always read
+// left-to-right in the same fixed sequence regardless of which deck.
+const WUBRG_ORDER = ["W", "U", "B", "R", "G"];
+const PIP_COLOR_VAR = { W: "--pip-w", U: "--pip-u", B: "--pip-b", R: "--pip-r", G: "--pip-g" };
+
+// A deck's color identity as a single fixed-size coin -- see the design
+// review this came out of: a row of one dot per color got wider (and
+// messier) the more colors a deck had, which is backwards, so every deck
+// gets the same 20px footprint whether it's mono-color or five. Returns
+// null (no coin at all) for colorIdentity === null/undefined, i.e. never
+// captured yet -- distinct from "" (confirmed colorless), which still
+// renders, just as a plain neutral coin.
+function buildIdentityCoin(colorIdentity) {
+  if (colorIdentity === null || colorIdentity === undefined) return null;
+
+  const coin = document.createElement("span");
+  coin.className = "id-coin";
+  coin.setAttribute("aria-hidden", "true");
+
+  const colors = WUBRG_ORDER.filter(c => colorIdentity.includes(c));
+  if (colors.length === 0) {
+    coin.classList.add("id-coin-colorless");
+    return coin;
+  }
+  if (colors.length === 1) {
+    coin.style.background = `var(${PIP_COLOR_VAR[colors[0]]})`;
+    return coin;
+  }
+
+  // Equal wedges with a thin dark seam baked into each boundary -- reads as
+  // an actual pie chart instead of a blended blob once there are 3+ colors.
+  const seam = 2; // degrees of dark divider on each side of a boundary
+  const step = 360 / colors.length;
+  const stops = [];
+  colors.forEach((c, i) => {
+    const start = i * step;
+    const end = (i + 1) * step;
+    stops.push(`var(${PIP_COLOR_VAR[c]}) ${start}deg ${end - seam}deg`);
+    stops.push(`rgba(0,0,0,.4) ${end - seam}deg ${end}deg`);
+  });
+  coin.style.background = `conic-gradient(${stops.join(", ")})`;
+  return coin;
 }
 
 // Illustrative-only thresholds (not a canonical scale defined anywhere else
@@ -743,7 +792,10 @@ function renderPlayersTable() {
     for (const { deck, pgPower } of deckRows) {
       const tr = document.createElement("tr");
       const nameTd = document.createElement("td");
-      nameTd.textContent = deck.name;
+      nameTd.className = "deck-name-cell";
+      const coin = buildIdentityCoin(deck.colorIdentity);
+      if (coin) nameTd.appendChild(coin);
+      nameTd.appendChild(document.createTextNode(deck.name));
       // A colored edge on the row itself, same tier thresholds as the power
       // coin two cells over -- a glance down the column reads the pool's
       // shape (mostly one color vs. a spread) without needing to read any
@@ -979,10 +1031,34 @@ function showRevealModal(evaluated) {
   const modal = document.getElementById("reveal-modal");
   const grid = document.getElementById("reveal-modal-grid");
   const goBtn = document.getElementById("reveal-modal-to-game");
+  const colorStrip = document.getElementById("reveal-color-strip");
   if (!modal || !grid || !goBtn) return;
 
   goBtn.href = PLAYGROUP_URL;
   grid.innerHTML = "";
+
+  // This pod's combined colors, deduped and in a fixed order -- the same
+  // coin language as Players & Decks (see buildIdentityCoin), just as a
+  // banner strip instead of a per-deck coin. Skips entries with no
+  // captured color identity entirely rather than treating "unknown" as
+  // "colorless" -- the two aren't the same claim. Naturally capped at 5
+  // bars regardless of pod size, since there are only 5 colors to combine.
+  if (colorStrip) {
+    colorStrip.innerHTML = "";
+    const podColors = new Set();
+    for (const entry of evaluated) {
+      if (typeof entry.colorIdentity === "string") {
+        for (const c of entry.colorIdentity) podColors.add(c);
+      }
+    }
+    const ordered = WUBRG_ORDER.filter(c => podColors.has(c));
+    for (const c of ordered) {
+      const bar = document.createElement("span");
+      bar.style.background = `var(${PIP_COLOR_VAR[c]})`;
+      colorStrip.appendChild(bar);
+    }
+    colorStrip.hidden = ordered.length === 0;
+  }
 
   // Sized so the whole popup fits the viewport with no scrolling, for any
   // pod size 1-8 -- capped at 4 columns (wraps to a 2nd row past 4
@@ -1212,6 +1288,7 @@ function runValidation() {
       deckName: deck.name,
       power: deck.power,
       newDeck: !!deck.newDeck,
+      colorIdentity: deck.colorIdentity,
     };
   });
 
@@ -2764,7 +2841,7 @@ function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
           // number there as the decimal it replaces.
           const bracket = parseInt(state.bracket, 10);
           if (!Number.isInteger(bracket) || bracket < 1 || bracket > 5) return;
-          decks.push({ name: d.commander_name, power: bracket, playgroupDeckId: d.id, playgroupDeckName: d.name, potentialBracket4: !!state.potentialBracket4 });
+          decks.push({ name: d.commander_name, power: bracket, playgroupDeckId: d.id, playgroupDeckName: d.name, potentialBracket4: !!state.potentialBracket4, colorIdentity: d.color_identity ?? null });
           submittedDeckIds.push(String(d.id));
         });
         if (displayName && decks.length > 0) {
@@ -2779,7 +2856,7 @@ function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
           if (!state || !state.checked) return;
           const bracket = parseInt(state.bracket, 10);
           if (!Number.isInteger(bracket) || bracket < 1 || bracket > 5) return;
-          payload.newDecksForExisting.push({ player: g.player, name: d.commander_name, power: bracket, playgroupDeckId: d.id, playgroupDeckName: d.name, potentialBracket4: !!state.potentialBracket4 });
+          payload.newDecksForExisting.push({ player: g.player, name: d.commander_name, power: bracket, playgroupDeckId: d.id, playgroupDeckName: d.name, potentialBracket4: !!state.potentialBracket4, colorIdentity: d.color_identity ?? null });
           submittedDeckIds.push(String(d.id));
         });
       });

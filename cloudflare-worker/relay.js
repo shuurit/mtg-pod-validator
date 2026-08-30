@@ -343,7 +343,8 @@ function isValidRosterUpdatePayload(payload) {
 
   const validDeck = d =>
     d && typeof d === "object" && typeof d.name === "string" && d.name && typeof d.power === "number" &&
-    (d.potentialBracket4 === undefined || typeof d.potentialBracket4 === "boolean");
+    (d.potentialBracket4 === undefined || typeof d.potentialBracket4 === "boolean") &&
+    (d.colorIdentity === undefined || d.colorIdentity === null || typeof d.colorIdentity === "string");
 
   const validNewPlayer = p =>
     p && typeof p === "object" &&
@@ -772,8 +773,8 @@ async function handleRosterWrite(request, env) {
 
     if (p.decks.length) {
       const deckStmts = p.decks.map(d =>
-        env.DB.prepare("INSERT INTO decks (player_id, name, baseline_power, playgroup_deck_id, playgroup_deck_name, new_deck, potential_bracket_4) VALUES (?, ?, ?, ?, ?, 1, ?)")
-          .bind(playerId, d.name, d.power, d.playgroupDeckId != null ? String(d.playgroupDeckId) : null, d.playgroupDeckName ?? null, d.potentialBracket4 ? 1 : 0)
+        env.DB.prepare("INSERT INTO decks (player_id, name, baseline_power, playgroup_deck_id, playgroup_deck_name, new_deck, potential_bracket_4, color_identity) VALUES (?, ?, ?, ?, ?, 1, ?, ?)")
+          .bind(playerId, d.name, d.power, d.playgroupDeckId != null ? String(d.playgroupDeckId) : null, d.playgroupDeckName ?? null, d.potentialBracket4 ? 1 : 0, d.colorIdentity ?? null)
       );
       await env.DB.batch(deckStmts);
     }
@@ -785,8 +786,8 @@ async function handleRosterWrite(request, env) {
     if (!player) {
       return jsonResponse({ error: `Unknown player: ${d.player}` }, 400);
     }
-    await env.DB.prepare("INSERT INTO decks (player_id, name, baseline_power, playgroup_deck_id, playgroup_deck_name, new_deck, potential_bracket_4) VALUES (?, ?, ?, ?, ?, 1, ?)")
-      .bind(player.id, d.name, d.power, d.playgroupDeckId != null ? String(d.playgroupDeckId) : null, d.playgroupDeckName ?? null, d.potentialBracket4 ? 1 : 0).run();
+    await env.DB.prepare("INSERT INTO decks (player_id, name, baseline_power, playgroup_deck_id, playgroup_deck_name, new_deck, potential_bracket_4, color_identity) VALUES (?, ?, ?, ?, ?, 1, ?, ?)")
+      .bind(player.id, d.name, d.power, d.playgroupDeckId != null ? String(d.playgroupDeckId) : null, d.playgroupDeckName ?? null, d.potentialBracket4 ? 1 : 0, d.colorIdentity ?? null).run();
     createdDecks.push({ player: d.player, name: d.name });
   }
 
@@ -1117,17 +1118,31 @@ async function handleDebugGame(request, env) {
 
 // ---------- GET /roster-diff : who/what is on playgroup.gg but not yet tracked ----------
 
+// playgroup.gg's Deck.color_identity is an unordered array (e.g. ["G","U"]) --
+// collapsed to a plain string in a fixed WUBRG order (e.g. "UG") so it's
+// directly usable as a stable sequence of wedges for the identity coin
+// (buildIdentityCoin in app.js) without either side re-sorting. Empty array
+// -> "" (a confirmed colorless deck), which decks.color_identity treats as
+// meaningfully different from NULL ("never captured") -- see schema.sql.
+const WUBRG_ORDER = ["W", "U", "B", "R", "G"];
+function toCanonicalColorString(colors) {
+  if (!Array.isArray(colors)) return null;
+  return WUBRG_ORDER.filter(c => colors.includes(c)).join("");
+}
+
 // computeRosterDiff already fetches every tracked player's full deck list
-// (including archived status) fresh from playgroup.gg on every call -- the
-// cheapest possible way to keep decks.archived from drifting stale is to
-// piggyback on that instead of a separate sync job. Fire-and-forget via
-// ctx.waitUntil (same pattern as handleGamesWrite's post-discord dispatch):
-// this is a GET endpoint, so a slow or failed write here should never
-// affect the response app.js is waiting on. Only writes rows that actually
-// changed, not a blind rewrite of every tracked deck on every request.
-async function syncArchivedStatus(env, decksByUsername) {
+// (including archived status and color identity) fresh from playgroup.gg on
+// every call -- the cheapest possible way to keep decks.archived/
+// decks.color_identity from drifting stale is to piggyback on that instead
+// of a separate sync job. Fire-and-forget via ctx.waitUntil (same pattern as
+// handleGamesWrite's post-discord dispatch): this is a GET endpoint, so a
+// slow or failed write here should never affect the response app.js is
+// waiting on. Only writes rows that actually changed, not a blind rewrite of
+// every tracked deck on every request. Named for both fields now, not just
+// the one it originally shipped for.
+async function syncDecksFromPlaygroup(env, decksByUsername) {
   const { results: tracked } = await env.DB.prepare(
-    "SELECT id, playgroup_deck_id, archived FROM decks WHERE playgroup_deck_id IS NOT NULL"
+    "SELECT id, playgroup_deck_id, archived, color_identity FROM decks WHERE playgroup_deck_id IS NOT NULL"
   ).all();
   const byPgId = new Map(tracked.map(d => [d.playgroup_deck_id, d]));
 
@@ -1137,8 +1152,17 @@ async function syncArchivedStatus(env, decksByUsername) {
       const row = byPgId.get(String(d.id));
       if (!row) continue;
       const liveArchived = d.archived ? 1 : 0;
-      if (row.archived !== liveArchived) {
+      // d.color_identity here is already the canonical string (see
+      // computeRosterDiff below) -- compared directly against the stored
+      // value, no re-derivation.
+      const archivedChanged = row.archived !== liveArchived;
+      const colorChanged = d.color_identity !== null && d.color_identity !== row.color_identity;
+      if (archivedChanged && colorChanged) {
+        stmts.push(env.DB.prepare("UPDATE decks SET archived = ?, color_identity = ? WHERE id = ?").bind(liveArchived, d.color_identity, row.id));
+      } else if (archivedChanged) {
         stmts.push(env.DB.prepare("UPDATE decks SET archived = ? WHERE id = ?").bind(liveArchived, row.id));
+      } else if (colorChanged) {
+        stmts.push(env.DB.prepare("UPDATE decks SET color_identity = ? WHERE id = ?").bind(d.color_identity, row.id));
       }
     }
   }
@@ -1180,11 +1204,12 @@ async function computeRosterDiff(env, ctx) {
       power_level: typeof d.power_level === "number" ? d.power_level : null,
       bracket: d.bracket ?? null,
       archived: !!d.archived,
+      color_identity: toCanonicalColorString(d.color_identity),
     }));
   }));
 
-  const syncPromise = syncArchivedStatus(env, decksByUsername)
-    .catch(err => console.error("decks.archived sync failed:", err));
+  const syncPromise = syncDecksFromPlaygroup(env, decksByUsername)
+    .catch(err => console.error("decks sync from playgroup.gg failed:", err));
   if (ctx) ctx.waitUntil(syncPromise); else await syncPromise;
 
   return {
@@ -1241,7 +1266,7 @@ async function computePlayersData(env) {
 
   const { results: deckRows } = await env.DB.prepare(`
     SELECT d.id, d.player_id, d.name, d.playgroup_deck_id, d.archived, d.new_deck,
-           d.potential_bracket_4, d.bracket AS bracket_override,
+           d.potential_bracket_4, d.bracket AS bracket_override, d.color_identity,
            (SELECT gr.bracket FROM game_results gr JOIN games g ON g.id = gr.game_id
             WHERE gr.deck_id = d.id ORDER BY g.id DESC LIMIT 1) AS last_logged_bracket,
            COALESCE(
@@ -1294,6 +1319,10 @@ async function computePlayersData(env) {
       comboWindowSize: d.combo_window_size,
       playgroupId: d.playgroup_deck_id,
       archived: !!d.archived,
+      // NULL ("never captured") vs. "" (confirmed colorless) vs. a real
+      // string of letters -- see schema.sql's color_identity comment.
+      // Passed straight through, never derived here.
+      colorIdentity: d.color_identity,
     });
   }
 
