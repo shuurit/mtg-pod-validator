@@ -1285,7 +1285,11 @@ async function computePlayersData(env) {
            (SELECT COUNT(*) FROM (
               SELECT gr.early_two_card_combo AS c FROM game_results gr JOIN games g ON g.id = gr.game_id
               WHERE gr.deck_id = d.id ORDER BY g.id DESC LIMIT 5
-            ) WHERE c = 1) AS combo_flagged_count
+            ) WHERE c = 1) AS combo_flagged_count,
+           -- Total logged games (any season, no LIMIT) -- distinct from
+           -- combo_window_size above, which is capped at 5. Feeds the
+           -- Players & Decks nameplate's "Logged N games" subtitle.
+           (SELECT COUNT(*) FROM game_results gr WHERE gr.deck_id = d.id) AS games_logged
     FROM decks d
     ORDER BY d.id
   `).all();
@@ -1323,6 +1327,7 @@ async function computePlayersData(env) {
       // string of letters -- see schema.sql's color_identity comment.
       // Passed straight through, never derived here.
       colorIdentity: d.color_identity,
+      gamesLogged: d.games_logged,
     });
   }
 

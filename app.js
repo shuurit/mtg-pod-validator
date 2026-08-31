@@ -263,6 +263,7 @@ function applyPlayersFromD1(data) {
       // real string of letters -- see schema.sql's color_identity comment
       // and buildIdentityCoin, which renders each case differently.
       colorIdentity: d.colorIdentity ?? null,
+      gamesLogged: d.gamesLogged ?? 0,
     })),
   })));
 }
@@ -671,10 +672,23 @@ function buildDeckPlate(deck, pgPower) {
   nameLine.appendChild(nameText);
   left.appendChild(nameLine);
 
+  // "New deck" and "Logged N games" are mutually exclusive by construction
+  // -- decks.new_deck is cleared the moment a game actually gets logged for
+  // it (see handleGamesWrite), so a deck is never both at once. Playgroup
+  // Power sits alongside whichever of the two applies, not instead of it.
+  const subParts = [];
+  if (deck.newDeck) {
+    subParts.push("New deck");
+  } else if (deck.gamesLogged > 0) {
+    subParts.push(`Logged ${deck.gamesLogged} game${deck.gamesLogged === 1 ? "" : "s"}`);
+  }
   if (pgPower !== null) {
+    subParts.push(`Playgroup Power: ${formatPower(pgPower)}`);
+  }
+  if (subParts.length > 0) {
     const sub = document.createElement("div");
     sub.className = "deck-plate-sub";
-    sub.textContent = `Playgroup Power: ${formatPower(pgPower)}`;
+    sub.textContent = subParts.join(" · ");
     left.appendChild(sub);
   }
 
