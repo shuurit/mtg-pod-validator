@@ -444,52 +444,76 @@ header h1 {
   display: none;
 }
 
-.winrates-table {
-  width: 100%;
-  border-collapse: collapse;
-  margin-top: 8px;
-  font-size: 0.92rem;
+.wr-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
 }
 
-.winrates-table th, .winrates-table td {
-  text-align: left;
-  padding: 10px;
-  border-bottom: 1px solid var(--border-soft);
+/* One player's standing -- see buildWinRateCard in app.js. Same
+   border+radius-only convention as .deck-plate/.gtu-game-card/.uta-group:
+   no background of its own, so it blends with the parent .card's
+   translucent glass instead of stacking a second solid card inside it. */
+.wr-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 13px 16px;
 }
 
-.winrates-table td.num {
-  text-align: right;
+.wr-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.wr-rank {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: var(--muted);
+  min-width: 2.2em;
+}
+.wr-name {
+  font-weight: 700;
+  font-size: 0.95rem;
+  flex: 1 1 auto;
+}
+.wr-trend {
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.wr-metric-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 0.88rem;
+  margin-bottom: 6px;
+}
+.wr-metric-value {
   font-variant-numeric: tabular-nums;
-  font-weight: 600;
-}
-
-.winrates-table th.sortable {
-  cursor: pointer;
-  user-select: none;
+  font-weight: 700;
   white-space: nowrap;
 }
-
-/* Only numeric sortable columns right-align -- a text column like Deck
-   stays left-aligned to match its own (left-aligned) data cells below it. */
-.winrates-table th.sortable.num {
-  text-align: right;
+.wr-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--border-soft);
+  overflow: hidden;
+}
+.wr-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
 }
 
-.winrates-table th.sortable:hover {
-  color: var(--accent);
-}
-.winrates-table th.sortable.sorted {
-  color: var(--accent);
-}
-
-.winrates-table th.trend, .winrates-table td.trend {
-  text-align: center;
-}
-
-.winrates-table td.muted, .winrates-table span.na {
+.wr-metric-secondary {
+  margin-top: 10px;
+  font-size: 0.82rem;
   color: var(--muted);
-  font-weight: 400;
-  font-style: italic;
+  font-variant-numeric: tabular-nums;
 }
 
 .trend-up { color: var(--good); }
@@ -761,23 +785,23 @@ td.num {
   .power-chip::after { display: none; }
 }
 
-/* Sort control for the deck-plate list below -- functionally identical to
-   the sortable <th>s a table used to have (same playerDeckSortState, same
-   click-to-toggle-direction logic in renderPlayersTable), just rendered as
-   plain buttons since there's no table header left to click. */
-.deck-plate-sort-bar {
+/* Shared sort control -- see buildSortBar in app.js. Functionally
+   identical to the sortable <th>s a table used to have, just rendered as
+   plain buttons since neither list below (deck plates, win-rate cards) is
+   a <table> anymore. */
+.sort-bar {
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
   margin-top: 12px;
 }
-.deck-plate-sort-bar-label {
+.sort-bar-label {
   font-size: 0.78rem;
   color: var(--muted);
   margin-right: 2px;
 }
-.deck-plate-sort-btn {
+.sort-btn {
   border: none;
   background: transparent;
   padding: 3px 9px;
@@ -786,8 +810,8 @@ td.num {
   color: var(--muted);
   border-radius: 999px;
 }
-.deck-plate-sort-btn:hover { color: var(--accent); }
-.deck-plate-sort-btn.active { color: var(--accent); background: var(--accent-soft); }
+.sort-btn:hover { color: var(--accent); }
+.sort-btn.active { color: var(--accent); background: var(--accent-soft); }
 
 .deck-plate-list {
   display: flex;
@@ -1289,49 +1313,138 @@ td.num {
   font-size: 1rem;
 }
 
-.gtu-table-scroll {
-  width: 100%;
-  overflow-x: auto;
+/* One participant's input card in Games to Update -- replaces what used to
+   be a row in a 13-column table that needed its own horizontal scroll to
+   fit on a phone. See buildGtuParticipantCard in app.js -- every input is
+   still built by the same makeGtuInput helper with the same class+data-i
+   naming, so nothing about how a value gets read out or pre-filled from
+   playgroup.gg changed, only the layout around it. */
+.gtu-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   margin-bottom: 14px;
 }
-
-.gtu-table-scroll .gtu-input-table {
-  margin-bottom: 0;
+.gtu-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px 14px 14px;
+}
+.gtu-card-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.gtu-card-name {
+  font-weight: 700;
+  font-size: 0.92rem;
+}
+.gtu-card-deck {
+  color: var(--muted);
+  font-size: 0.85rem;
+  flex: 1 1 auto;
+}
+.gtu-card-result {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+.gtu-card-result.win {
+  color: var(--good);
+}
+.gtu-card-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+  gap: 10px;
+}
+.gtu-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.gtu-field-label {
+  font-size: 0.72rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.gtu-field input {
+  width: 100%;
+}
+.gtu-card-checks {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.gtu-check-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+}
+.gtu-check-field input {
+  width: 18px;
+  height: 18px;
 }
 
-/* Shared by every gtu- and uta- data-entry table (input table, results
-   table, deck table) -- .gtu-input-table/.gtu-results-table additionally
-   get margin-bottom, which .uta-deck-table has never had (it sits inside
-   .uta-group's own padding instead). */
-.gtu-input-table, .gtu-results-table, .uta-deck-table {
+.gtu-results-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.85rem;
-}
-
-.gtu-input-table, .gtu-results-table {
   margin-bottom: 14px;
 }
-
-.gtu-input-table th, .gtu-input-table td,
-.gtu-results-table th, .gtu-results-table td,
-.uta-deck-table th, .uta-deck-table td {
+.gtu-results-table th, .gtu-results-table td {
   padding: 6px 8px;
   border-bottom: 1px solid var(--border-soft);
   text-align: left;
 }
 
-.gtu-input-table input[type="number"], .uta-deck-table input[type="number"] {
-  width: 64px;
+.gtu-results {
+  margin-top: 12px;
 }
 
-.gtu-input-table input[type="checkbox"], .uta-deck-table input[type="checkbox"] {
+/* One pending deck's card in Update the App -- see buildUtaDeckCard in
+   app.js. Same border+radius-only convention as .deck-plate/.wr-card. */
+.uta-deck-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+.uta-deck-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+}
+.uta-deck-card-select {
+  flex: 0 0 auto;
+  display: flex;
+}
+.uta-deck-card-select input {
   width: 18px;
   height: 18px;
 }
-
-.gtu-results {
-  margin-top: 12px;
+.uta-deck-card-info {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.88rem;
+}
+.uta-deck-card-name {
+  font-weight: 600;
+}
+.uta-deck-card-controls {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 /* Shared by the Games to Update and Update the App submit controls. */

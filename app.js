@@ -371,6 +371,32 @@ async function syncFromD1() {
 
 // ---------- shared table building ----------
 
+// A row of plain clickable labels standing in for what used to be sortable
+// <th>s, shared by Players & Decks' per-player deck list and Player Win
+// Rates -- neither is a <table> anymore (see buildDeckPlate/the win-rates
+// cards), but both still sort exactly the way their table version did.
+// Purely a rendering helper: the actual sort state and re-render stay owned
+// by the caller, handed back through onSelect(col).
+function buildSortBar(columns, activeColumn, activeDirection, onSelect) {
+  const bar = document.createElement("div");
+  bar.className = "sort-bar";
+  const label = document.createElement("span");
+  label.className = "sort-bar-label";
+  label.textContent = "Sort:";
+  bar.appendChild(label);
+  for (const col of columns) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "sort-btn";
+    const isActive = activeColumn === col.key;
+    btn.textContent = col.label + (isActive ? (activeDirection === "desc" ? " ▾" : " ▴") : "");
+    if (isActive) btn.classList.add("active");
+    btn.addEventListener("click", () => onSelect(col));
+    bar.appendChild(btn);
+  }
+  return bar;
+}
+
 // Builds a <table class="${className}"> purely via createElement/
 // textContent/appendChild -- never innerHTML -- so untrusted text (player
 // names, commander names, playgroup.gg usernames, all of which a playgroup
@@ -816,34 +842,14 @@ function renderPlayersTable() {
       });
     }
 
-    // Same three columns a table's headers used to sort, now a row of
-    // plain clickable labels above the plate list -- there's no <th> left
-    // to click since each deck is its own card, but the underlying
-    // sortState (per player, in playerDeckSortState) and the click-to-
-    // toggle/re-sort logic are identical to what the table version had.
-    const sortBar = document.createElement("div");
-    sortBar.className = "deck-plate-sort-bar";
-    const sortBarLabel = document.createElement("span");
-    sortBarLabel.className = "deck-plate-sort-bar-label";
-    sortBarLabel.textContent = "Sort:";
-    sortBar.appendChild(sortBarLabel);
-    for (const col of PLAYER_DECK_COLUMNS) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "deck-plate-sort-btn";
-      const isActive = sortState.column === col.key;
-      btn.textContent = col.label + (isActive ? (sortState.direction === "desc" ? " ▾" : " ▴") : "");
-      if (isActive) btn.classList.add("active");
-      btn.addEventListener("click", () => {
-        if (sortState.column === col.key) {
-          playerDeckSortState.set(player.id, { column: col.key, direction: sortState.direction === "desc" ? "asc" : "desc" });
-        } else {
-          playerDeckSortState.set(player.id, { column: col.key, direction: col.defaultDir });
-        }
-        renderPlayersTable();
-      });
-      sortBar.appendChild(btn);
-    }
+    const sortBar = buildSortBar(PLAYER_DECK_COLUMNS, sortState.column, sortState.direction, col => {
+      if (sortState.column === col.key) {
+        playerDeckSortState.set(player.id, { column: col.key, direction: sortState.direction === "desc" ? "asc" : "desc" });
+      } else {
+        playerDeckSortState.set(player.id, { column: col.key, direction: col.defaultDir });
+      }
+      renderPlayersTable();
+    });
     block.appendChild(sortBar);
 
     const plateList = document.createElement("div");
@@ -1529,6 +1535,77 @@ function computeWinRatesRankTrend() {
 const TREND_SYMBOL = { up: "▲", down: "▼", steady: "–" };
 const TREND_CLASS = { up: "trend-up", down: "trend-down", steady: "trend-steady" };
 
+// One player's card in Player Win Rates -- rank, name, and trend up top;
+// whichever metric is currently sorted (sortKey) gets the big bar, the
+// other stays plain text underneath. Both metrics' real values are always
+// shown somewhere on the card; sorting only changes which one is drawn as
+// the bar, never hides the other.
+function buildWinRateCard(row, rank, sortKey, direction) {
+  const card = document.createElement("div");
+  card.className = "wr-card";
+
+  const header = document.createElement("div");
+  header.className = "wr-card-header";
+
+  const rankEl = document.createElement("span");
+  rankEl.className = "wr-rank";
+  rankEl.textContent = rank !== null ? `#${rank}` : "—";
+  header.appendChild(rankEl);
+
+  const nameEl = document.createElement("span");
+  nameEl.className = "wr-name";
+  nameEl.textContent = row.name;
+  header.appendChild(nameEl);
+
+  if (row.adjPct !== null && direction) {
+    const trendEl = document.createElement("span");
+    trendEl.className = `wr-trend ${TREND_CLASS[direction]}`;
+    trendEl.title = "Whether this player's rank in the Player Adjusted Win Rate standings moved compared to before their most recent logged game";
+    trendEl.textContent = TREND_SYMBOL[direction];
+    header.appendChild(trendEl);
+  }
+  card.appendChild(header);
+
+  const isAdjusted = sortKey === "adjPct";
+  const primaryLabel = isAdjusted ? "Player Adjusted Win Rate" : "Win Rate (playgroup.gg)";
+  const primaryPct = isAdjusted ? row.adjPct : row.pgPct;
+  const primaryWL = isAdjusted ? `${row.adjWins}-${row.adjLosses}` : `${row.pgWins}-${row.pgLosses}`;
+  const primaryNa = isAdjusted ? "No games logged this season" : "No games in the active league yet";
+
+  const primary = document.createElement("div");
+  primary.className = "wr-metric-primary";
+  const primaryTop = document.createElement("div");
+  primaryTop.className = "wr-metric-top";
+  const primaryLabelEl = document.createElement("span");
+  primaryLabelEl.textContent = primaryLabel;
+  const primaryValEl = document.createElement("span");
+  primaryValEl.className = "wr-metric-value";
+  primaryValEl.textContent = primaryPct !== null ? `${primaryPct.toFixed(3)}% (${primaryWL})` : primaryNa;
+  primaryTop.append(primaryLabelEl, primaryValEl);
+  primary.appendChild(primaryTop);
+  if (primaryPct !== null) {
+    const bar = document.createElement("div");
+    bar.className = "wr-bar";
+    const fill = document.createElement("div");
+    fill.className = "wr-bar-fill";
+    fill.style.width = `${Math.max(0, Math.min(100, primaryPct))}%`;
+    bar.appendChild(fill);
+    primary.appendChild(bar);
+  }
+  card.appendChild(primary);
+
+  const secondaryLabel = isAdjusted ? "Win Rate (playgroup.gg)" : "Player Adjusted Win Rate";
+  const secondaryPct = isAdjusted ? row.pgPct : row.adjPct;
+  const secondaryWL = isAdjusted ? `${row.pgWins}-${row.pgLosses}` : `${row.adjWins}-${row.adjLosses}`;
+  const secondaryNa = isAdjusted ? "No games in the active league yet" : "No games logged this season";
+  const secondary = document.createElement("div");
+  secondary.className = "wr-metric-secondary";
+  secondary.textContent = `${secondaryLabel}: ${secondaryPct !== null ? `${secondaryPct.toFixed(3)}% (${secondaryWL})` : secondaryNa}`;
+  card.appendChild(secondary);
+
+  return card;
+}
+
 // Renders the Player Win Rates table from an already-fetched
 // /playgroup-games response -- see refreshPlaygroupGames below, which is
 // the only place that actually fetches it. Called both from there and from
@@ -1582,90 +1659,35 @@ function renderWinRatesTable(data) {
 
   const trendByPlayer = computeWinRatesRankTrend();
 
-  const table = document.createElement("table");
-  table.className = "winrates-table";
-  const thead = document.createElement("thead");
-  const headRow = document.createElement("tr");
+  // Competition-style ranks (ties share a rank) off whichever metric is
+  // currently sorted -- same assignRanks used for the trend calculation,
+  // so "who's #1" agrees with what computeWinRatesRankTrend already
+  // considers #1. Computed from a fixed descending order regardless of
+  // winRatesSortDirection: flipping the list to see the bottom of the
+  // pack first shouldn't relabel the best performer as anything but #1.
+  // Rows with no data for this metric never get a rank at all.
+  const rankable = rowData.filter(r => r[sortKey] !== null).sort((a, b) => b[sortKey] - a[sortKey]);
+  const rankByName = assignRanks(rankable.map(r => ({ name: r.name, rate: r[sortKey] })));
 
-  const nameTh = document.createElement("th");
-  nameTh.textContent = "Player";
-  headRow.appendChild(nameTh);
-
-  for (const col of WINRATES_COLUMNS) {
-    const th = document.createElement("th");
-    th.className = "sortable num"; // both columns here are numeric/right-aligned
-    const isActive = winRatesSortColumn === col.key;
-    th.textContent = col.label + (isActive ? (winRatesSortDirection === "desc" ? " ▾" : " ▴") : "");
-    if (isActive) th.classList.add("sorted");
-    th.addEventListener("click", () => {
-      if (winRatesSortColumn === col.key) {
-        winRatesSortDirection = winRatesSortDirection === "desc" ? "asc" : "desc";
-      } else {
-        winRatesSortColumn = col.key;
-        winRatesSortDirection = "desc";
-      }
-      renderWinRatesTable(playgroupGamesData);
-    });
-    headRow.appendChild(th);
-    // Trend rides right alongside the Adjusted Win Rate column it's
-    // derived from -- not sortable itself (it's a change, not a value).
-    if (col.key === "adjusted") {
-      const trendTh = document.createElement("th");
-      trendTh.className = "trend";
-      trendTh.textContent = "Trend";
-      trendTh.title = "Whether this player's rank in the Player Adjusted Win Rate standings moved compared to before their most recent logged game";
-      headRow.appendChild(trendTh);
-    }
-  }
-  thead.appendChild(headRow);
-  table.appendChild(thead);
-
-  const tbody = document.createElement("tbody");
-
-  for (const row of rowData) {
-    const tr = document.createElement("tr");
-
-    const nameTd = document.createElement("td");
-    nameTd.textContent = row.name;
-    tr.appendChild(nameTd);
-
-    const adjTd = document.createElement("td");
-    adjTd.className = "num";
-    if (row.adjPct !== null) {
-      adjTd.textContent = `${row.adjPct.toFixed(3)}% (${row.adjWins}-${row.adjLosses})`;
-    } else {
-      adjTd.className += " muted";
-      adjTd.innerHTML = `<span class="na">No games logged this season</span>`;
-    }
-    tr.appendChild(adjTd);
-
-    const trendTd = document.createElement("td");
-    trendTd.className = "trend";
-    const direction = trendByPlayer[row.name];
-    if (row.adjPct !== null && direction) {
-      trendTd.innerHTML = `<span class="${TREND_CLASS[direction]}">${TREND_SYMBOL[direction]}</span>`;
-    } else {
-      trendTd.className += " muted";
-      trendTd.textContent = "—";
-    }
-    tr.appendChild(trendTd);
-
-    const pgTd = document.createElement("td");
-    pgTd.className = "num";
-    if (row.pgPct !== null) {
-      pgTd.textContent = `${row.pgPct.toFixed(3)}% (${row.pgWins}-${row.pgLosses})`;
-    } else {
-      pgTd.className += " muted";
-      pgTd.innerHTML = `<span class="na">No games in the active league yet</span>`;
-    }
-    tr.appendChild(pgTd);
-
-    tbody.appendChild(tr);
-  }
-
-  table.appendChild(tbody);
   tableEl.innerHTML = "";
-  tableEl.appendChild(table);
+
+  const sortBar = buildSortBar(WINRATES_COLUMNS, winRatesSortColumn, winRatesSortDirection, col => {
+    if (winRatesSortColumn === col.key) {
+      winRatesSortDirection = winRatesSortDirection === "desc" ? "asc" : "desc";
+    } else {
+      winRatesSortColumn = col.key;
+      winRatesSortDirection = "desc";
+    }
+    renderWinRatesTable(playgroupGamesData);
+  });
+  tableEl.appendChild(sortBar);
+
+  const list = document.createElement("div");
+  list.className = "wr-card-list";
+  for (const row of rowData) {
+    list.appendChild(buildWinRateCard(row, rankByName[row.name] ?? null, sortKey, trendByPlayer[row.name]));
+  }
+  tableEl.appendChild(list);
 
   statusEl.textContent = `Live as of ${new Date(data.generated_at).toLocaleTimeString()} (playgroup.gg data may be cached up to 5 min).`;
   noteEl.innerHTML = "";
@@ -2100,6 +2122,82 @@ function makeGtuInput(type, suffix, i, attrs) {
   return el;
 }
 
+// One participant's card in the Games to Update form -- replaces a row in
+// what used to be a 13-column input table (Player/Commander/Result plus 10
+// input cells), which needed its own horizontal scroll to even fit on a
+// phone. Every input is still built by the same makeGtuInput helper with
+// the exact same class+data-i naming, so readInputs (calculateGameToUpdate)
+// and the playgroup.gg pre-fill below both keep finding them the same way
+// via querySelector -- only the surrounding markup changed, not how any
+// value gets read out or filled in.
+function buildGtuParticipantCard(p, i, pgGame) {
+  const defaultStrength = findDefaultStrength(p.player, p.commander);
+  const defaultPlace = p.result === "win" ? 1 : "";
+  const defaultBracket = findDefaultBracket(p.player, p.commander);
+  // Only decks flagged potential_bracket_4 even get asked -- everyone else
+  // just gets no checkbox at all, not one that's always unchecked.
+  const comboEligible = findDeckPotentialBracket4(p.player, p.commander);
+
+  const card = document.createElement("div");
+  card.className = "gtu-card";
+
+  const header = document.createElement("div");
+  header.className = "gtu-card-header";
+  const nameEl = document.createElement("span");
+  nameEl.className = "gtu-card-name";
+  nameEl.textContent = p.player;
+  const deckEl = document.createElement("span");
+  deckEl.className = "gtu-card-deck";
+  deckEl.textContent = p.commander;
+  const resultEl = document.createElement("span");
+  resultEl.className = "gtu-card-result" + (p.result === "win" ? " win" : "");
+  resultEl.textContent = p.result === "win" ? "Win ✓" : "Loss";
+  header.append(nameEl, deckEl, resultEl);
+  card.appendChild(header);
+
+  const field = (labelText, inputEl) => {
+    const wrap = document.createElement("label");
+    wrap.className = "gtu-field";
+    const lbl = document.createElement("span");
+    lbl.className = "gtu-field-label";
+    lbl.textContent = labelText;
+    wrap.append(lbl, inputEl);
+    return wrap;
+  };
+
+  const fields = document.createElement("div");
+  fields.className = "gtu-card-fields";
+  fields.append(
+    field("Cmdr Strength", makeGtuInput("number", "gtu-strength", i, { step: "0.1", min: "0", max: "5", value: defaultStrength ?? "" })),
+    field("Place", makeGtuInput("number", "gtu-place", i, { min: "1", max: pgGame.pod_size, value: defaultPlace })),
+    field("KOs", makeGtuInput("number", "gtu-knockouts", i, { min: "0", value: 0 })),
+    field("TOV", makeGtuInput("number", "gtu-tov", i, { min: "1", value: "" })),
+    field("Disruptions", makeGtuInput("number", "gtu-disruptions", i, { min: "0", value: 0 })),
+    field("Recoveries", makeGtuInput("number", "gtu-recoveries", i, { min: "0", value: 0 })),
+    field("Bracket", makeGtuInput("number", "gtu-bracket", i, { min: "1", max: "5", value: defaultBracket })),
+  );
+  card.appendChild(fields);
+
+  const checkField = (labelText, inputEl) => {
+    const wrap = document.createElement("label");
+    wrap.className = "gtu-check-field";
+    wrap.append(inputEl, document.createTextNode(labelText));
+    return wrap;
+  };
+  const checks = document.createElement("div");
+  checks.className = "gtu-card-checks";
+  checks.append(
+    checkField("Pop-Off", makeGtuInput("checkbox", "gtu-popoff", i)),
+    checkField("Behind", makeGtuInput("checkbox", "gtu-behind", i)),
+  );
+  if (comboEligible) {
+    checks.appendChild(checkField("Early combo?", makeGtuInput("checkbox", "gtu-combo", i)));
+  }
+  card.appendChild(checks);
+
+  return card;
+}
+
 function openGameForm(pgGame) {
   const areaEl = document.getElementById("gtu-form-area");
   areaEl.innerHTML = "";
@@ -2118,42 +2216,10 @@ function openGameForm(pgGame) {
     box.appendChild(derivedHint);
   }
 
-  const rows = pgGame.participants.map((p, i) => {
-    const defaultStrength = findDefaultStrength(p.player, p.commander);
-    const defaultPlace = p.result === "win" ? 1 : "";
-    const defaultBracket = findDefaultBracket(p.player, p.commander);
-    // Only decks flagged potential_bracket_4 even get asked -- everyone
-    // else just shows a dash, no checkbox to accidentally check.
-    const comboEligible = findDeckPotentialBracket4(p.player, p.commander);
-    return [
-      p.player,
-      p.commander,
-      p.result === "win" ? "Win ✓" : "Loss",
-      { node: makeGtuInput("number", "gtu-strength", i, { step: "0.1", min: "0", max: "5", value: defaultStrength ?? "" }) },
-      { node: makeGtuInput("number", "gtu-place", i, { min: "1", max: pgGame.pod_size, value: defaultPlace }) },
-      { node: makeGtuInput("number", "gtu-knockouts", i, { min: "0", value: 0 }) },
-      { node: makeGtuInput("number", "gtu-tov", i, { min: "1", value: "" }) },
-      { node: makeGtuInput("checkbox", "gtu-popoff", i) },
-      { node: makeGtuInput("number", "gtu-disruptions", i, { min: "0", value: 0 }) },
-      { node: makeGtuInput("number", "gtu-recoveries", i, { min: "0", value: 0 }) },
-      { node: makeGtuInput("checkbox", "gtu-behind", i) },
-      { node: makeGtuInput("number", "gtu-bracket", i, { min: "1", max: "5", value: defaultBracket }) },
-      comboEligible ? { node: makeGtuInput("checkbox", "gtu-combo", i) } : "—",
-    ];
-  });
-  const { table } = buildTable(
-    "gtu-input-table",
-    ["Player", "Commander", "Result", "Cmdr Strength", "Place", "KOs", "TOV", "Pop-Off", "Disruptions", "Recoveries", "Behind", "Bracket", "Combo?"],
-    rows
-  );
-  // 12 columns of real content don't fit a phone (or even a narrower
-  // desktop card) at once -- confirmed the hard way, the table was
-  // overflowing its own wrapper with no way to reach the clipped columns.
-  // Scrolls inside its own box instead of breaking out of it.
-  const tableScroll = document.createElement("div");
-  tableScroll.className = "gtu-table-scroll";
-  tableScroll.appendChild(table);
-  box.appendChild(tableScroll);
+  const cardList = document.createElement("div");
+  cardList.className = "gtu-card-list";
+  pgGame.participants.forEach((p, i) => cardList.appendChild(buildGtuParticipantCard(p, i, pgGame)));
+  box.appendChild(cardList);
 
   // Fills in Place/KOs/TOV from playgroup.gg's raw per-game event log --
   // still fully editable, same as the Cmdr Strength/Bracket prefills
@@ -2171,9 +2237,9 @@ function openGameForm(pgGame) {
         pgGame.participants.forEach((p, i) => {
           const fields = derived[p.deck_name];
           if (!fields) return;
-          const placeInput = table.querySelector(`.gtu-place[data-i="${i}"]`);
-          const kosInput = table.querySelector(`.gtu-knockouts[data-i="${i}"]`);
-          const tovInput = table.querySelector(`.gtu-tov[data-i="${i}"]`);
+          const placeInput = cardList.querySelector(`.gtu-place[data-i="${i}"]`);
+          const kosInput = cardList.querySelector(`.gtu-knockouts[data-i="${i}"]`);
+          const tovInput = cardList.querySelector(`.gtu-tov[data-i="${i}"]`);
           if (placeInput) placeInput.value = fields.place;
           if (kosInput) kosInput.value = fields.kos;
           if (tovInput && fields.tov != null) tovInput.value = fields.tov;
@@ -2505,30 +2571,52 @@ function computeRosterDiff(data) {
 // deck.commander_name are playgroup.gg data a playgroup member ultimately
 // controls, and the name cell can hold two text pieces (commander name +
 // an optional muted "(actual deck name)" aside).
-function deckTableRow(deck) {
+// One pending deck's card in Update the App -- same fields a table row used
+// to hold (checkbox, name, bracket select, Bracket-4 flame), just laid out
+// as a card instead. wireRosterUpdateGroupInputs below still wires all of
+// these up by class name, same as before -- the one place that actually
+// cared about the old <tr> structure (the bracket-select handler's
+// closest("tr") lookup for its sibling flame button) is updated alongside
+// this to look for .uta-deck-card instead.
+function buildUtaDeckCard(deck) {
   const state = rosterUpdateDeckState.get(String(deck.id));
 
+  const card = document.createElement("div");
+  card.className = "uta-deck-card";
+
+  const checkboxWrap = document.createElement("label");
+  checkboxWrap.className = "uta-deck-card-select";
   const checkbox = document.createElement("input");
   checkbox.type = "checkbox";
   checkbox.className = "uta-deck-check";
   checkbox.dataset.deckId = deck.id;
   checkbox.checked = !!state.checked;
+  checkboxWrap.appendChild(checkbox);
+  card.appendChild(checkboxWrap);
 
-  const nameCell = document.createDocumentFragment();
-  nameCell.appendChild(document.createTextNode(deck.commander_name));
+  const info = document.createElement("div");
+  info.className = "uta-deck-card-info";
+  const nameLine = document.createElement("div");
+  nameLine.className = "uta-deck-card-name";
+  nameLine.appendChild(document.createTextNode(deck.commander_name));
   if (deck.name !== deck.commander_name) {
-    nameCell.appendChild(document.createTextNode(" "));
+    nameLine.appendChild(document.createTextNode(" "));
     const aside = document.createElement("span");
     aside.className = "hint";
     aside.textContent = `(${deck.name})`;
-    nameCell.appendChild(aside);
+    nameLine.appendChild(aside);
   }
+  info.appendChild(nameLine);
   if (deck.replacesCommanderName) {
-    const swapHint = document.createElement("span");
+    const swapHint = document.createElement("div");
     swapHint.className = "hint";
-    swapHint.textContent = ` — commander swap, was ${deck.replacesCommanderName}`;
-    nameCell.appendChild(swapHint);
+    swapHint.textContent = `Commander swap — was ${deck.replacesCommanderName}`;
+    info.appendChild(swapHint);
   }
+  card.appendChild(info);
+
+  const controls = document.createElement("div");
+  controls.className = "uta-deck-card-controls";
 
   const bracketSelect = document.createElement("select");
   bracketSelect.className = "uta-deck-bracket";
@@ -2544,6 +2632,7 @@ function deckTableRow(deck) {
     bracketSelect.appendChild(opt);
   }
   bracketSelect.value = state.bracket;
+  controls.appendChild(bracketSelect);
 
   const b4Btn = document.createElement("button");
   b4Btn.type = "button";
@@ -2557,8 +2646,10 @@ function deckTableRow(deck) {
   // 4. Kept in sync as the bracket choice changes by the bracket select's
   // own change listener below, not re-derived here on every render.
   b4Btn.hidden = state.bracket !== "3";
+  controls.appendChild(b4Btn);
 
-  return [{ node: checkbox }, { node: nameCell }, { node: bracketSelect }, { node: b4Btn }];
+  card.appendChild(controls);
+  return card;
 }
 
 // Wires up live state-capture on a just-rendered group's inputs, so every
@@ -2577,7 +2668,7 @@ function wireRosterUpdateGroupInputs(container) {
     el.addEventListener("change", () => {
       const deckId = el.dataset.deckId;
       let next = { ...rosterUpdateDeckState.get(deckId), bracket: el.value };
-      const b4Btn = el.closest("tr")?.querySelector(".uta-deck-b4");
+      const b4Btn = el.closest(".uta-deck-card")?.querySelector(".uta-deck-b4");
       if (b4Btn) {
         const eligible = el.value === "3";
         b4Btn.hidden = !eligible;
@@ -2640,8 +2731,10 @@ function renderRosterUpdateGroup(group) {
     header.appendChild(label);
     box.appendChild(header);
 
-    const { table } = buildTable("uta-deck-table", ["", "Deck", "Bracket", "Bracket 4?"], p.decks.map(deckTableRow));
-    box.appendChild(table);
+    const cardList = document.createElement("div");
+    cardList.className = "uta-deck-card-list";
+    p.decks.map(buildUtaDeckCard).forEach(c => cardList.appendChild(c));
+    box.appendChild(cardList);
   } else {
     const g = group.data;
     const strong = document.createElement("strong");
@@ -2650,8 +2743,10 @@ function renderRosterUpdateGroup(group) {
     header.appendChild(document.createTextNode(` — ${g.decks.length} new deck(s)`));
     box.appendChild(header);
 
-    const { table } = buildTable("uta-deck-table", ["", "Deck", "Bracket", "Bracket 4?"], g.decks.map(deckTableRow));
-    box.appendChild(table);
+    const cardList = document.createElement("div");
+    cardList.className = "uta-deck-card-list";
+    g.decks.map(buildUtaDeckCard).forEach(c => cardList.appendChild(c));
+    box.appendChild(cardList);
   }
 
   wireRosterUpdateGroupInputs(box);
