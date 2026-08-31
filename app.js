@@ -647,6 +647,47 @@ function buildBracketEditRow(deck) {
   return wrap;
 }
 
+// A deck's whole row in Players & Decks, as a card instead of a table row --
+// the "nameplate" from the design review: a colored top edge keyed to the
+// same power tier as the coin (powerTierClass), name + color identity coin
+// on the left, Playgroup Power as a muted subtitle underneath it, and the
+// exact same interactive right side a table cell used to hold (combo badge,
+// flame toggle, power coin, bracket pencil -- see buildPowerCell/
+// buildBracketEditRow, untouched, just relocated).
+function buildDeckPlate(deck, pgPower) {
+  const plate = document.createElement("div");
+  plate.className = `deck-plate ${powerTierClass(deck.power, "deck-plate")}`;
+
+  const left = document.createElement("div");
+  left.className = "deck-plate-left";
+
+  const nameLine = document.createElement("div");
+  nameLine.className = "deck-plate-name";
+  const coin = buildIdentityCoin(deck.colorIdentity);
+  if (coin) nameLine.appendChild(coin);
+  const nameText = document.createElement("span");
+  nameText.className = "deck-plate-name-text";
+  nameText.textContent = deck.name;
+  nameLine.appendChild(nameText);
+  left.appendChild(nameLine);
+
+  if (pgPower !== null) {
+    const sub = document.createElement("div");
+    sub.className = "deck-plate-sub";
+    sub.textContent = `Playgroup Power: ${formatPower(pgPower)}`;
+    left.appendChild(sub);
+  }
+
+  plate.appendChild(left);
+
+  const right = document.createElement("div");
+  right.className = "deck-plate-right";
+  right.appendChild(bracketEditingDeckIds.has(deck.id) ? buildBracketEditRow(deck) : buildPowerCell(deck));
+  plate.appendChild(right);
+
+  return plate;
+}
+
 // Looks up a deck's power_level as playgroup.gg itself has it rated, for
 // comparison against our own tracked Power column. Matches by playgroup
 // deck ID first (backfilled onto most rows via deck-strength.xlsx column
@@ -761,21 +802,25 @@ function renderPlayersTable() {
       });
     }
 
-    const table = document.createElement("table");
-    table.className = "winrates-table";
-    const thead = document.createElement("thead");
-    const headRow = document.createElement("tr");
+    // Same three columns a table's headers used to sort, now a row of
+    // plain clickable labels above the plate list -- there's no <th> left
+    // to click since each deck is its own card, but the underlying
+    // sortState (per player, in playerDeckSortState) and the click-to-
+    // toggle/re-sort logic are identical to what the table version had.
+    const sortBar = document.createElement("div");
+    sortBar.className = "deck-plate-sort-bar";
+    const sortBarLabel = document.createElement("span");
+    sortBarLabel.className = "deck-plate-sort-bar-label";
+    sortBarLabel.textContent = "Sort:";
+    sortBar.appendChild(sortBarLabel);
     for (const col of PLAYER_DECK_COLUMNS) {
-      const th = document.createElement("th");
-      th.className = col.numeric ? "sortable num" : "sortable";
-      // The Power cell ends in a fixed-width pencil (see .deck-edit-btn),
-      // not the chip -- power-header pulls the header text in to sit over
-      // the chip instead of the flush-right pencil. See style.css.
-      if (col.key === "power") th.classList.add("power-header");
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "deck-plate-sort-btn";
       const isActive = sortState.column === col.key;
-      th.textContent = col.label + (isActive ? (sortState.direction === "desc" ? " ▾" : " ▴") : "");
-      if (isActive) th.classList.add("sorted");
-      th.addEventListener("click", () => {
+      btn.textContent = col.label + (isActive ? (sortState.direction === "desc" ? " ▾" : " ▴") : "");
+      if (isActive) btn.classList.add("active");
+      btn.addEventListener("click", () => {
         if (sortState.column === col.key) {
           playerDeckSortState.set(player.id, { column: col.key, direction: sortState.direction === "desc" ? "asc" : "desc" });
         } else {
@@ -783,37 +828,16 @@ function renderPlayersTable() {
         }
         renderPlayersTable();
       });
-      headRow.appendChild(th);
+      sortBar.appendChild(btn);
     }
-    thead.appendChild(headRow);
-    table.appendChild(thead);
+    block.appendChild(sortBar);
 
-    const tbody = document.createElement("tbody");
+    const plateList = document.createElement("div");
+    plateList.className = "deck-plate-list";
     for (const { deck, pgPower } of deckRows) {
-      const tr = document.createElement("tr");
-      const nameTd = document.createElement("td");
-      nameTd.className = "deck-name-cell";
-      const coin = buildIdentityCoin(deck.colorIdentity);
-      if (coin) nameTd.appendChild(coin);
-      nameTd.appendChild(document.createTextNode(deck.name));
-      // A colored edge on the row itself, same tier thresholds as the power
-      // coin two cells over -- a glance down the column reads the pool's
-      // shape (mostly one color vs. a spread) without needing to read any
-      // numbers at all. Deliberately on the name cell, not the row: a <tr>
-      // border doesn't render reliably once a table sets border-collapse
-      // (which .winrates-table does), a <td> border does.
-      nameTd.classList.add(powerTierClass(deck.power, "deck-row"));
-      const powerTd = document.createElement("td");
-      powerTd.className = "num";
-      powerTd.appendChild(bracketEditingDeckIds.has(deck.id) ? buildBracketEditRow(deck) : buildPowerCell(deck));
-      const pgTd = document.createElement("td");
-      pgTd.className = "num";
-      pgTd.textContent = pgPower === null ? "—" : formatPower(pgPower);
-      tr.append(nameTd, powerTd, pgTd);
-      tbody.appendChild(tr);
+      plateList.appendChild(buildDeckPlate(deck, pgPower));
     }
-    table.appendChild(tbody);
-    block.appendChild(table);
+    block.appendChild(plateList);
     container.appendChild(block);
   }
 }

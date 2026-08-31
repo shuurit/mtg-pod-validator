@@ -475,17 +475,6 @@ header h1 {
   text-align: right;
 }
 
-/* Players & Decks' Power column ends in a fixed-width pencil (see
-   .deck-edit-btn), not the chip -- flush-right would land "Power" over
-   that pencil instead. Pulls the header in by exactly the pencil's own
-   width (24px) plus the gap before it (6px), on top of the cell's base
-   10px right padding, so it lands over the chip instead regardless of
-   whether a combo badge/flame toggle are also present (they only affect
-   how far the row extends to the left, never the chip's distance from the
-   pencil -- see buildPowerCell in app.js). */
-.winrates-table th.power-header {
-  padding-right: 40px;
-}
 .winrates-table th.sortable:hover {
   color: var(--accent);
 }
@@ -772,20 +761,96 @@ td.num {
   .power-chip::after { display: none; }
 }
 
-/* Same tier thresholds as the power coin (see powerTierClass in app.js),
-   applied to the deck name cell instead -- a colored edge down the column
-   so a player's whole pool reads as a shape at a glance, no numbers
-   required. On the <td>, not the <tr>: a row border doesn't render
-   reliably once border-collapse is set, which .winrates-table always is. */
-.deck-row-low { border-left: 3px solid var(--accent); }
-.deck-row-mid { border-left: 3px solid var(--good); }
-.deck-row-high { border-left: 3px solid var(--warn); }
-.deck-row-max { border-left: 3px solid var(--bad); }
+/* Sort control for the deck-plate list below -- functionally identical to
+   the sortable <th>s a table used to have (same playerDeckSortState, same
+   click-to-toggle-direction logic in renderPlayersTable), just rendered as
+   plain buttons since there's no table header left to click. */
+.deck-plate-sort-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.deck-plate-sort-bar-label {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-right: 2px;
+}
+.deck-plate-sort-btn {
+  border: none;
+  background: transparent;
+  padding: 3px 9px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+  border-radius: 999px;
+}
+.deck-plate-sort-btn:hover { color: var(--accent); }
+.deck-plate-sort-btn.active { color: var(--accent); background: var(--accent-soft); }
 
-.deck-name-cell {
+.deck-plate-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+/* A deck's whole row, as a nameplate instead of a table row -- see
+   buildDeckPlate in app.js. Border+radius only (no background of its own),
+   same convention as .gtu-game-card/.uta-group, so it blends with the
+   parent .card's own translucent glass instead of layering a second solid
+   card inside it. */
+.deck-plate {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 13px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+/* Same tier thresholds as the power coin (see powerTierClass in app.js) --
+   a colored top edge, the actual "nameplate" detail this concept is named
+   for, so a player's whole pool reads as a shape (mostly one color vs. a
+   spread) without needing to read any numbers at all. */
+.deck-plate::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+}
+.deck-plate-low::before { background: var(--accent); }
+.deck-plate-mid::before { background: var(--good); }
+.deck-plate-high::before { background: var(--warn); }
+.deck-plate-max::before { background: var(--bad); }
+
+.deck-plate-left {
+  min-width: 0;
+}
+.deck-plate-name {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.deck-plate-name-text {
+  font-weight: 700;
+  font-size: 0.95rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.deck-plate-sub {
+  margin-top: 3px;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.deck-plate-right {
+  flex: 0 0 auto;
 }
 
 /* A deck's color identity -- see buildIdentityCoin in app.js. Same dark
@@ -811,9 +876,8 @@ td.num {
 
 /* De-emphasized on purpose (vs. the bolder .icon-btn buttons elsewhere) --
    still fully visible/tappable, just not competing with the power chip on
-   every row of a long deck list. Fixed width (not just padding) so the
-   pencil's position is a known constant -- .power-header below depends on
-   it to line up with the chip, which sits just to this button's left. */
+   every row of a long deck list. Fixed width (not just padding) so its own
+   position stays a known constant regardless of what else is in the cell. */
 .deck-edit-btn {
   border: none;
   background: transparent;
