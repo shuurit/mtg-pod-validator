@@ -3165,12 +3165,10 @@ function renderAuthGate() {
   const gate = document.getElementById("signin-gate");
   const wrap = document.querySelector(".wrap");
   const authControl = document.getElementById("auth-control");
-  const refreshBtn = document.getElementById("global-refresh-btn");
   const signedIn = !!currentUser;
   if (gate) gate.hidden = signedIn;
   if (wrap) wrap.hidden = !signedIn;
   if (authControl) authControl.hidden = !signedIn;
-  if (refreshBtn) refreshBtn.hidden = !signedIn;
 }
 
 function wireAuthControl() {
@@ -3227,11 +3225,12 @@ function wireAuthControl() {
 }
 
 // ---------- pull-to-refresh (touch) ----------
-// Replaces #global-refresh-btn on touch devices (see the (pointer:
-// coarse) rule in style.css that hides that button there) -- desktop
-// keeps the button since a mouse has no pull gesture to replace it with.
-// Reuses refreshEverything() itself, just retargets the "spinning" visual
-// at #pull-refresh instead of the button.
+// The only manual refresh control left -- the old fixed desktop button next
+// to the avatar was removed once this covered every device that matters
+// for this app (used at the table, on phones). A pure-mouse desktop visit
+// still gets a fresh read automatically on every tab focus (see the
+// visibilitychange listener below) or a plain browser reload; there's just
+// no dedicated in-app button for it anymore.
 function initPullToRefresh() {
   const indicator = document.getElementById("pull-refresh");
   if (!indicator) return;
@@ -3350,7 +3349,7 @@ checkAuthSession().then(() => {
 // basically no benefit, since nothing here needs sub-minute freshness the
 // way a user's own submit already gets by awaiting this same function
 // directly after a successful submit (see calculateGameToUpdate and
-// renderRosterUpdateSubmit). Triggered by: the manual refresh button, the
+// renderRosterUpdateSubmit). Triggered by: the pull-to-refresh gesture, the
 // visibility-change listener right below (so opening/returning to the app
 // never shows stale data), once on initial page load, and once right
 // after a game or roster submission.
@@ -3360,18 +3359,7 @@ async function refreshEverything() {
   // three now-guaranteed-401 requests every time a signed-out visitor
   // switches back to the tab.
   if (!currentUser) return;
-  const btn = document.getElementById("global-refresh-btn");
-  if (btn) btn.classList.add("spinning");
-  try {
-    await Promise.all([syncFromD1(), refreshPlaygroupGames(), loadRosterDiff()]);
-  } finally {
-    if (btn) btn.classList.remove("spinning");
-  }
-}
-
-const globalRefreshBtn = document.getElementById("global-refresh-btn");
-if (globalRefreshBtn) {
-  globalRefreshBtn.addEventListener("click", refreshEverything);
+  await Promise.all([syncFromD1(), refreshPlaygroupGames(), loadRosterDiff()]);
 }
 
 // Only fires on an actual open/return to the app, not a timer -- catches

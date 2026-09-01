@@ -8,7 +8,7 @@
      older copy (GitHub Pages' cache headers otherwise mean a pull-to-
      refresh, which only re-fetches data, can leave a stale script running
      for a while) -- bump N here whenever either file changes. -->
-<link rel="stylesheet" href="style.css?v=6">
+<link rel="stylesheet" href="style.css?v=7">
 
 <!-- Home-screen icon (iOS "Add to Home Screen" + Android/Chrome install).
      Generated from icon-source.png via scripts/generate_icons.py -- rerun
@@ -45,14 +45,7 @@
     <button id="signin-gate-btn" type="button" class="primary">Sign in with Discord</button>
     <p id="signin-gate-status" class="hint" hidden></p>
   </div>
-</div>
-<!-- Desktop-only fallback (see the (pointer: coarse) rule in style.css
-     that hides it on touch) -- touch devices get the pull-to-refresh
-     gesture at the top of .wrap instead. Still fixed/top-right, since it
-     no longer needs to align with anything else in that corner now that
-     the avatar's moved into the header itself. -->
-<button id="global-refresh-btn" aria-label="Refresh live data" title="Refresh live data" hidden>&#8635;</button>
-<div class="wrap" hidden>
+</div><div class="wrap" hidden>
   <!-- Grows from 0 as the page is pulled down at scroll position 0 (see
        initPullToRefresh in app.js) -- touch-only in practice, since
        nothing but a touchmove gesture ever changes its height. Lives
@@ -182,6 +175,6 @@
   </div>
 </div>
 
-<script src="app.js?v=7"></script>
+<script src="app.js?v=8"></script>
 </body>
 </html>
