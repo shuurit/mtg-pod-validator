@@ -8,7 +8,7 @@
      older copy (GitHub Pages' cache headers otherwise mean a pull-to-
      refresh, which only re-fetches data, can leave a stale script running
      for a while) -- bump N here whenever either file changes. -->
-<link rel="stylesheet" href="style.css?v=7">
+<link rel="stylesheet" href="style.css?v=8">
 
 <!-- Home-screen icon (iOS "Add to Home Screen" + Android/Chrome install).
      Generated from icon-source.png via scripts/generate_icons.py -- rerun
@@ -106,7 +106,11 @@
 
       <div id="pod-slots"></div>
 
-      <div class="row">
+      <!-- Home row for the real validate button when Set Up Pod falls back
+           to the plain list (podCount > 6) -- renderPodSlots moves the
+           button here, or into the round table's felt center, but never
+           duplicates it. See renderPodTable/renderPodSlots in app.js. -->
+      <div class="row" id="pod-validate-row">
         <button id="validate-btn" class="primary">Check Deck Power Spread</button>
       </div>
     </section>
@@ -175,6 +179,6 @@
   </div>
 </div>
 
-<script src="app.js?v=8"></script>
+<script src="app.js?v=9"></script>
 </body>
 </html>
