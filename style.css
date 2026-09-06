@@ -1870,7 +1870,7 @@ input.gtu-in-prefilled {
   gap: 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: 10px 12px;
+  padding: 13px 16px;
 }
 .uta-deck-card-select {
   flex: 0 0 auto;
@@ -1885,8 +1885,26 @@ input.gtu-in-prefilled {
   min-width: 0;
   font-size: 0.88rem;
 }
+/* Same left-side shape as .deck-plate-name/-sub in Players & Decks --
+   coin + name, then a muted meta line -- so a brand-new deck reads the
+   same way an already-tracked one does instead of looking like a
+   different, plainer kind of thing. */
 .uta-deck-card-name {
-  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+.uta-deck-card-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.uta-deck-card-sub {
+  margin-top: 3px;
+  font-size: 0.78rem;
+  color: var(--muted);
 }
 .uta-deck-card-controls {
   flex: 0 0 auto;
@@ -1937,12 +1955,42 @@ input.gtu-in-prefilled {
 }
 
 .uta-group-header {
-  font-size: 0.92rem;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
-.uta-group-header input[type="text"] {
-  margin-left: 6px;
+.uta-group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.uta-group-title code {
+  font-size: 0.82rem;
+}
+
+/* Pill treatment, same accent-soft/accent pairing already used elsewhere
+   for "worth noticing" (see input.gtu-in-prefilled) -- a brand-new player
+   is exactly that. */
+.uta-new-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.uta-group-name-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 0.85rem;
+  color: var(--muted);
 }
 
 /* ---------- phone / tablet ---------- */

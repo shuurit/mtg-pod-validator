@@ -3058,20 +3058,41 @@ function buildUtaDeckCard(deck) {
   info.className = "uta-deck-card-info";
   const nameLine = document.createElement("div");
   nameLine.className = "uta-deck-card-name";
-  nameLine.appendChild(document.createTextNode(deck.commander_name));
+  // Same identity coin as every other deck in the app -- color_identity
+  // is already on this raw playgroup.gg deck object (see relay.js's
+  // handleRosterDiff), it just wasn't rendered here before.
+  const coin = buildIdentityCoin(deck.color_identity);
+  if (coin) nameLine.appendChild(coin);
+  const nameText = document.createElement("span");
+  nameText.className = "uta-deck-card-name-text";
+  nameText.appendChild(document.createTextNode(deck.commander_name));
   if (deck.name !== deck.commander_name) {
-    nameLine.appendChild(document.createTextNode(" "));
+    nameText.appendChild(document.createTextNode(" "));
     const aside = document.createElement("span");
     aside.className = "hint";
     aside.textContent = `(${deck.name})`;
-    nameLine.appendChild(aside);
+    nameText.appendChild(aside);
   }
+  nameLine.appendChild(nameText);
   info.appendChild(nameLine);
+
+  // Same "Playgroup Power" hint buildDeckPlate already shows for existing
+  // decks -- playgroup.gg's own tracked power_level was already on this
+  // object too (see handleRosterDiff), just unused here before. Gives a
+  // data-informed starting point before picking a bracket, instead of a
+  // cold guess.
+  const subParts = [];
+  if (typeof deck.power_level === "number") {
+    subParts.push(`Playgroup Power: ${formatPower(deck.power_level)}`);
+  }
   if (deck.replacesCommanderName) {
-    const swapHint = document.createElement("div");
-    swapHint.className = "hint";
-    swapHint.textContent = `Commander swap — was ${deck.replacesCommanderName}`;
-    info.appendChild(swapHint);
+    subParts.push(`Commander swap — was ${deck.replacesCommanderName}`);
+  }
+  if (subParts.length > 0) {
+    const sub = document.createElement("div");
+    sub.className = "uta-deck-card-sub";
+    sub.textContent = subParts.join(" · ");
+    info.appendChild(sub);
   }
   card.appendChild(info);
 
@@ -3176,12 +3197,20 @@ function renderRosterUpdateGroup(group) {
     // `"` would otherwise break out of that attribute entirely, not just
     // read oddly as text.
     const p = group.data;
-    const label = document.createElement("label");
-    label.appendChild(document.createTextNode("New player (playgroup.gg: "));
+    const title = document.createElement("div");
+    title.className = "uta-group-title";
+    const badge = document.createElement("span");
+    badge.className = "uta-new-badge";
+    badge.textContent = "New player";
+    title.appendChild(badge);
     const code = document.createElement("code");
     code.textContent = p.username;
-    label.appendChild(code);
-    label.appendChild(document.createTextNode(") — display name: "));
+    title.appendChild(code);
+    header.appendChild(title);
+
+    const label = document.createElement("label");
+    label.className = "uta-group-name-field";
+    label.appendChild(document.createTextNode("Display name"));
     const nameInput = document.createElement("input");
     nameInput.type = "text";
     nameInput.className = "uta-display-name";
@@ -3197,10 +3226,17 @@ function renderRosterUpdateGroup(group) {
     box.appendChild(cardList);
   } else {
     const g = group.data;
-    const strong = document.createElement("strong");
-    strong.textContent = g.player;
-    header.appendChild(strong);
-    header.appendChild(document.createTextNode(` — ${g.decks.length} new deck(s)`));
+    const title = document.createElement("div");
+    title.className = "uta-group-title";
+    const name = document.createElement("span");
+    name.className = "player-name-display";
+    name.textContent = g.player;
+    title.appendChild(name);
+    const meta = document.createElement("span");
+    meta.className = "hint";
+    meta.textContent = `${g.decks.length} new deck${g.decks.length === 1 ? "" : "s"}`;
+    title.appendChild(meta);
+    header.appendChild(title);
     box.appendChild(header);
 
     const cardList = document.createElement("div");
