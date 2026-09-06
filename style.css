@@ -1018,6 +1018,7 @@ td.num {
   justify-content: center;
   font-weight: 700;
   font-size: 1.05rem;
+  transition: transform 0.25s cubic-bezier(0.3, 0.6, 0.3, 1.5);
 }
 .seat.filled .seat-avatar {
   background: var(--accent-soft);
@@ -1032,6 +1033,15 @@ td.num {
 }
 .seat.editing .seat-avatar {
   box-shadow: 0 0 0 3px var(--accent-soft);
+}
+/* Tapped, the same quarter-turn a permanent makes when it's tapped for
+   mana -- see the "tapped" class toggle in buildSeatEl/updateSeatDisplay.
+   The player's initial reads sideways once tapped, same as a real card's
+   text does at the table -- left as-is on purpose, not counter-rotated,
+   since an upright letter on a rotated coin would look like a mistake
+   instead of the actual point. */
+.seat.tapped .seat-avatar {
+  transform: rotate(90deg);
 }
 .seat-name {
   font-weight: 700;

@@ -459,6 +459,7 @@ function formatPower(power) {
 // left-to-right in the same fixed sequence regardless of which deck.
 const WUBRG_ORDER = ["W", "U", "B", "R", "G"];
 const PIP_COLOR_VAR = { W: "--pip-w", U: "--pip-u", B: "--pip-b", R: "--pip-r", G: "--pip-g" };
+const WUBRG_NAMES = { W: "White", U: "Blue", B: "Black", R: "Red", G: "Green" };
 
 // A deck's color identity as a single fixed-size coin -- see the design
 // review this came out of: a row of one dot per color got wider (and
@@ -472,9 +473,21 @@ function buildIdentityCoin(colorIdentity) {
 
   const coin = document.createElement("span");
   coin.className = "id-coin";
-  coin.setAttribute("aria-hidden", "true");
 
   const colors = WUBRG_ORDER.filter(c => colorIdentity.includes(c));
+  // Previously aria-hidden with no fallback of any kind -- a deck's color
+  // identity is real information (which colors, not just how many), and
+  // hue alone doesn't carry it to a screen reader or a colorblind player.
+  // The title is the same plain-letter shorthand ("WUBG") a Magic player
+  // already reads on their own decklist; the aria-label spells the same
+  // thing out in words for anyone a hover tooltip doesn't reach.
+  coin.setAttribute("role", "img");
+  coin.title = colors.length === 0 ? "Colorless" : colors.join("");
+  coin.setAttribute(
+    "aria-label",
+    colors.length === 0 ? "Colorless" : `Color identity: ${colors.map(c => WUBRG_NAMES[c]).join(", ")}`
+  );
+
   if (colors.length === 0) {
     coin.classList.add("id-coin-colorless");
     return coin;
@@ -1049,6 +1062,12 @@ function updateSeatDisplay(wrap, i) {
   const player = podPlayers.find(p => String(p.id) === slot.playerId);
   seatEl.classList.toggle("filled", !!player);
   seatEl.classList.toggle("empty", !player);
+  // Tapped -- the same quarter-turn a permanent makes when it's tapped for
+  // mana -- once a deck is actually picked, not merely a player. See the
+  // "Tap for Mana" concept review; only the seat's own rotation shipped,
+  // not that concept's colored mana glyph/pool, since a deck's color is
+  // exactly the thing this table keeps masked until the reveal.
+  seatEl.classList.toggle("tapped", !!(player && slot.deckId));
   seatEl.querySelector(".seat-avatar").textContent = player ? player.name.charAt(0).toUpperCase() : "+";
   seatEl.querySelector(".seat-name").textContent = player ? player.name : "Add player";
   seatEl.querySelector(".seat-state").textContent =
@@ -1072,7 +1091,10 @@ function buildSeatEl(i) {
 
   const seatEl = document.createElement("button");
   seatEl.type = "button";
-  seatEl.className = "seat" + (player ? " filled" : " empty") + (editingSeatIndex === i ? " editing" : "");
+  seatEl.className = "seat" +
+    (player ? " filled" : " empty") +
+    (editingSeatIndex === i ? " editing" : "") +
+    (player && slot.deckId ? " tapped" : "");
   seatEl.dataset.seatIndex = i;
   seatEl.style.left = `${x}px`;
   seatEl.style.top = `${y}px`;
@@ -1493,6 +1515,15 @@ function runValidation() {
   document.getElementById("validate-btn").classList.remove("glow");
   resultsDiv.innerHTML = "";
   resultsSection.hidden = false;
+  // The button lives inside the round table now (see renderPodTable), with
+  // its own result rendering in a separate card below -- on a phone that
+  // card can easily start below the fold, so tapping the button did
+  // something invisible until you scrolled down to check. Same pattern
+  // openGameForm already uses for the same reason (see its own
+  // scrollIntoView); "nearest" is a no-op if the section's already visible,
+  // so re-checking while already looking at the results doesn't yank the
+  // page around.
+  resultsSection.scrollIntoView({ behavior: "smooth", block: "nearest" });
 
   const incomplete = podSelections.some(s => !s.playerId || !s.deckId);
   if (incomplete) {
