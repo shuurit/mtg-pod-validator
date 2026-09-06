@@ -213,6 +213,24 @@ function rowsToPlayers(rows) {
   return [...byName.values()];
 }
 
+// Updates both a tab badge's top-nav copy (#<baseId>) and its
+// #bottom-tabs mirror (#<baseId>-bottom, see index.html) so the two bars
+// never show different counts -- whichever one a given device isn't
+// showing (see the (pointer: coarse) split in style.css) still has the
+// right number ready if the viewport/pointer type ever changes mid-session.
+function setTabBadge(baseId, count) {
+  for (const id of [baseId, `${baseId}-bottom`]) {
+    const badge = document.getElementById(id);
+    if (!badge) continue;
+    if (count > 0) {
+      badge.textContent = String(count);
+      badge.hidden = false;
+    } else {
+      badge.hidden = true;
+    }
+  }
+}
+
 // Shared tail of applying a freshly-built players array, regardless of
 // where it came from (DEFAULT_ROSTER fallback, or a real D1 read).
 // Same pattern as updateGamesToUpdateTabBadge/updateRosterUpdateTabBadge --
@@ -220,14 +238,7 @@ function rowsToPlayers(rows) {
 // yet." Scoped to podPlayers (playgroup-linked, tracked players), matching
 // what Players & Decks itself shows.
 function updateDeckStrengthValidatorTabBadge(count) {
-  const badge = document.getElementById("dsv-tab-badge");
-  if (!badge) return;
-  if (count > 0) {
-    badge.textContent = String(count);
-    badge.hidden = false;
-  } else {
-    badge.hidden = true;
-  }
+  setTabBadge("dsv-tab-badge", count);
 }
 
 function setPlayers(newPlayers) {
@@ -1672,11 +1683,15 @@ document.getElementById("validate-btn").addEventListener("click", runValidation)
 // ---------- tabs ----------
 
 function initTabs() {
-  const buttons = document.querySelectorAll(".tab-btn");
+  // .bottom-tab-btn is #bottom-tabs' touch-only mirror of the same 4
+  // destinations (see index.html) -- both sets share data-tab values, so
+  // one handler drives whichever bar is actually visible on this device
+  // and keeps the other one's .active state in sync for free.
+  const buttons = document.querySelectorAll(".tab-btn, .bottom-tab-btn");
   buttons.forEach(btn => {
     btn.addEventListener("click", () => {
       buttons.forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
+      document.querySelectorAll(`[data-tab="${btn.dataset.tab}"]`).forEach(b => b.classList.add("active"));
       document.querySelectorAll(".tab-panel").forEach(p => { p.hidden = true; });
       document.getElementById(`tab-${btn.dataset.tab}`).hidden = false;
       // Same id scheme as the tab panel (#bg-<tab> next to #tab-<tab>) --
@@ -2166,14 +2181,7 @@ function findDeckPotentialBracket4(playerName, commanderName) {
 // itself, hidden entirely at 0 so absence means "nothing to log," not "not
 // loaded yet."
 function updateGamesToUpdateTabBadge(count) {
-  const badge = document.getElementById("gtu-tab-badge");
-  if (!badge) return;
-  if (count > 0) {
-    badge.textContent = String(count);
-    badge.hidden = false;
-  } else {
-    badge.hidden = true;
-  }
+  setTabBadge("gtu-tab-badge", count);
 }
 
 function renderGamesToUpdate() {
@@ -3044,16 +3052,9 @@ function setAllRosterUpdateChecked(group, checked) {
 // loaded yet" (loadRosterDiff only calls renderUpdateAppTab, which is the
 // only caller of this, once rosterDiffData has actually loaded).
 function updateRosterUpdateTabBadge(newPlayers, newDecksForExisting) {
-  const badge = document.getElementById("uta-tab-badge");
-  if (!badge) return;
   const count = newPlayers.reduce((n, p) => n + p.decks.length, 0) +
     newDecksForExisting.reduce((n, g) => n + g.decks.length, 0);
-  if (count > 0) {
-    badge.textContent = String(count);
-    badge.hidden = false;
-  } else {
-    badge.hidden = true;
-  }
+  setTabBadge("uta-tab-badge", count);
 }
 
 // Shows rosterUpdateSubmitConfirmation once, then clears it -- a normal
@@ -3493,6 +3494,36 @@ function wireAuthControl() {
   }
 }
 
+// ---------- theme ----------
+// Explicit override on top of the system (prefers-color-scheme) theme
+// style.css already had before this existed -- "auto" means "no override,"
+// i.e. removing data-theme and going back to following the OS setting, not
+// a third palette of its own. See the :root[data-theme="dark"] block and
+// the :not([data-theme="light"]) guard on the dark media query in
+// style.css for the other half of this.
+function applyTheme(choice) {
+  if (choice === "light" || choice === "dark") {
+    document.documentElement.setAttribute("data-theme", choice);
+  } else {
+    document.documentElement.removeAttribute("data-theme");
+    choice = "auto";
+  }
+  document.querySelectorAll(".theme-toggle-btn").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.themeChoice === choice);
+  });
+  return choice;
+}
+
+function initTheme() {
+  applyTheme(localStorage.getItem("themePreference"));
+  document.querySelectorAll(".theme-toggle-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const choice = applyTheme(btn.dataset.themeChoice);
+      localStorage.setItem("themePreference", choice);
+    });
+  });
+}
+
 // ---------- pull-to-refresh (touch) ----------
 // The only manual refresh control left -- the old fixed desktop button next
 // to the avatar was removed once this covered every device that matters
@@ -3581,6 +3612,10 @@ const gtuIntroEl = document.getElementById("gtu-intro");
 if (gtuIntroEl) {
   gtuIntroEl.textContent = "Games from playgroup.gg that aren't logged yet. Fill in what playgroup.gg can't supply, then submit.";
 }
+
+// Runs before anything else in this section so there's no flash of the
+// wrong theme after a stored explicit choice -- see initTheme/applyTheme.
+initTheme();
 
 // Must run before checkAuthSession -- consumes a just-completed Discord
 // redirect (if any) so sessionToken is set before the very first /auth/me

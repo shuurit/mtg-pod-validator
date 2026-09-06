@@ -8,7 +8,7 @@
      older copy (GitHub Pages' cache headers otherwise mean a pull-to-
      refresh, which only re-fetches data, can leave a stale script running
      for a while) -- bump N here whenever either file changes. -->
-<link rel="stylesheet" href="style.css?v=10">
+<link rel="stylesheet" href="style.css?v=11">
 
 <!-- Home-screen icon (iOS "Add to Home Screen" + Android/Chrome install).
      Generated from icon-source.png via scripts/generate_icons.py -- rerun
@@ -72,6 +72,18 @@
             <img id="auth-avatar-img" alt="">
           </button>
           <div id="auth-menu" class="auth-menu" hidden>
+            <!-- Explicit override on top of the system (prefers-color-scheme)
+                 theme this app already had -- "Auto" is that same default,
+                 not a fourth separate option. See applyTheme in app.js. -->
+            <div class="auth-menu-section">
+              <span class="auth-menu-label">Theme</span>
+              <div class="theme-toggle" id="theme-toggle" role="group" aria-label="Theme">
+                <button type="button" class="theme-toggle-btn" data-theme-choice="auto">Auto</button>
+                <button type="button" class="theme-toggle-btn" data-theme-choice="light">Light</button>
+                <button type="button" class="theme-toggle-btn" data-theme-choice="dark">Dark</button>
+              </div>
+            </div>
+            <div class="auth-menu-divider"></div>
             <button id="auth-signout-btn" type="button" class="auth-menu-item">Sign out</button>
           </div>
         </div>
@@ -152,6 +164,33 @@
   </div>
 </div>
 
+<!-- Touch-only mirror of #main-tabs above (hidden there via (pointer:
+     coarse), see style.css) -- same 4 data-tab destinations, so
+     initTabs() in app.js can drive both bars with one shared handler.
+     Short labels + an icon instead of the full tab names, since there's
+     no room for those in a thumb-reach bar. -->
+<nav class="bottom-tabs" id="bottom-tabs">
+  <button class="bottom-tab-btn active" data-tab="pod">
+    <span class="bottom-tab-icon" aria-hidden="true">⚖️</span>
+    <span class="bottom-tab-label">Validator</span>
+    <span class="tab-badge" id="dsv-tab-badge-bottom" hidden></span>
+  </button>
+  <button class="bottom-tab-btn" data-tab="games-to-update">
+    <span class="bottom-tab-icon" aria-hidden="true">📝</span>
+    <span class="bottom-tab-label">Update</span>
+    <span class="tab-badge" id="gtu-tab-badge-bottom" hidden></span>
+  </button>
+  <button class="bottom-tab-btn" data-tab="update-app">
+    <span class="bottom-tab-icon" aria-hidden="true">➕</span>
+    <span class="bottom-tab-label">New</span>
+    <span class="tab-badge" id="uta-tab-badge-bottom" hidden></span>
+  </button>
+  <button class="bottom-tab-btn" data-tab="winrates">
+    <span class="bottom-tab-icon" aria-hidden="true">📊</span>
+    <span class="bottom-tab-label">Rates</span>
+  </button>
+</nav>
+
 <!-- Shown once a pod fully passes the power-spread check -- see
      showRevealModal in app.js. Hidden by default, one persistent node
      regardless of which tab is active. -->
@@ -179,6 +218,6 @@
   </div>
 </div>
 
-<script src="app.js?v=11"></script>
+<script src="app.js?v=12"></script>
 </body>
 </html>

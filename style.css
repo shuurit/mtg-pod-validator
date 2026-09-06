@@ -46,8 +46,12 @@
   --foil: #c9a13f;
 }
 
+/* :not([data-theme="light"]) so an explicit "Light" choice from the
+   avatar-menu theme toggle (see #theme-toggle in app.js) beats a dark OS
+   setting -- without this guard, the OS would always win here regardless
+   of what the user picked in-app. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #131217;
     --bg-accent: #18171d;
     --card-bg: #1c1b22;
@@ -73,6 +77,38 @@
     --bg-scrim: rgba(19, 18, 23, 0.83);
     --card-bg-translucent: rgba(28, 27, 34, 0.25);
   }
+}
+
+/* Same values as the media-query block above, duplicated (not shared via
+   a media query, since this has to apply regardless of the OS setting) --
+   wins over a light OS setting when the user explicitly picks "Dark" in
+   the avatar-menu theme toggle. Keep both blocks in sync if this palette
+   ever changes. */
+:root[data-theme="dark"] {
+  --bg: #131217;
+  --bg-accent: #18171d;
+  --card-bg: #1c1b22;
+  --ink: #f3f1ec;
+  --muted: #b2ac9f;
+  --border: #34323b;
+  --border-soft: #29282f;
+  --accent: #a48bff;
+  --accent-strong: #b9a4ff;
+  --accent-soft: rgba(164, 139, 255, 0.14);
+  --accent-ink: #171522;
+  --good: #5bd992;
+  --good-bg: #142a1e;
+  --good-border: #204a30;
+  --bad: #ff9b96;
+  --bad-bg: #33191b;
+  --bad-border: #5c2a2a;
+  --warn: #ffc266;
+  --warn-bg: #362510;
+  --warn-border: #5c421c;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 14px 36px -16px rgba(0, 0, 0, 0.65);
+  --bg-scrim: rgba(19, 18, 23, 0.83);
+  --card-bg-translucent: rgba(28, 27, 34, 0.25);
 }
 
 * { box-sizing: border-box; }
@@ -156,6 +192,16 @@ body {
      home-screen app -- confirmed the hard way from a real iPhone
      screenshot, not just simulated in a browser without a real notch. */
   padding: max(40px, calc(env(safe-area-inset-top) + 24px)) 20px 90px;
+}
+
+/* Extra clearance so the fixed .bottom-tabs bar (touch only, see below)
+   never covers the last bit of content -- 64px roughly matches that bar's
+   own height plus a little breathing room, on top of its own safe-area
+   inset which already accounts for the home-indicator area. */
+@media (pointer: coarse) {
+  .wrap {
+    padding-bottom: calc(90px + 64px + env(safe-area-inset-bottom));
+  }
 }
 
 /* Title + avatar on one row -- align-items: flex-start (not center) so
@@ -293,6 +339,54 @@ body {
 }
 .auth-menu-item:hover { background: var(--bad-bg); color: var(--bad); }
 
+.auth-menu-divider {
+  height: 1px;
+  margin: 6px 4px;
+  background: var(--border);
+}
+
+.auth-menu-section {
+  padding: 4px 10px 8px;
+}
+
+.auth-menu-label {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+/* Auto/Light/Dark segmented control -- Auto means "no override," i.e. the
+   prefers-color-scheme default this app already had before this toggle
+   existed (see applyTheme in app.js). Three options, not a single on/off
+   switch, so picking a side never gives up following the system setting. */
+.theme-toggle {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.theme-toggle-btn {
+  flex: 1 1 0;
+  border: none;
+  background: transparent;
+  padding: 6px 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted);
+  border-left: 1px solid var(--border);
+}
+.theme-toggle-btn:first-child { border-left: none; }
+
+.theme-toggle-btn.active {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
 #auth-status.hint {
   position: absolute;
   top: calc(100% + 8px);
@@ -413,6 +507,86 @@ header h1 {
    hid itself even when correctly marked hidden. */
 .tab-badge[hidden] {
   display: none;
+}
+
+/* Touch devices get .bottom-tabs (below) instead -- this top row would
+   otherwise duplicate the same 4 destinations and eat vertical space that
+   matters much more on a phone than on desktop. */
+@media (pointer: coarse) {
+  .tabs {
+    display: none;
+  }
+}
+
+/* Fixed bottom tab bar, touch devices only -- same (pointer: coarse) split
+   already used for .auth-control/.pull-refresh above. Mirrors #main-tabs'
+   4 destinations (see initTabs in app.js, which drives both bars from one
+   shared click handler and keeps their .active state in sync via matching
+   data-tab attributes) so a phone gets thumb-reach navigation instead of
+   the top row a mouse can already reach easily. */
+.bottom-tabs {
+  display: none;
+}
+
+@media (pointer: coarse) {
+  .bottom-tabs {
+    display: flex;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 100;
+    background: var(--card-bg);
+    border-top: 1px solid var(--border);
+    box-shadow: var(--shadow-md);
+    padding: 6px max(6px, env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom)) max(6px, env(safe-area-inset-left));
+  }
+}
+
+.bottom-tab-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  border: none;
+  background: transparent;
+  padding: 6px 2px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  position: relative;
+}
+
+.bottom-tab-btn.active {
+  color: var(--accent);
+}
+
+.bottom-tab-icon {
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.bottom-tab-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* Smaller and corner-anchored than .tab-badge's inline version -- there's
+   no room next to a one-word label the way there was next to the top
+   nav's full tab names. */
+.bottom-tab-btn .tab-badge {
+  position: absolute;
+  top: 2px;
+  right: calc(50% - 26px);
+  min-width: 15px;
+  height: 15px;
+  font-size: 0.6rem;
+  margin-left: 0;
 }
 
 .wr-card-list {
