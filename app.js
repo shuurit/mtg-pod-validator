@@ -466,33 +466,36 @@ function renderAchievements(achievements, seasonActive) {
     const card = document.createElement("div");
     card.className = "trophy-card";
 
-    // A custom-illustrated badge per achievement (see ACHIEVEMENTS in
-    // relay.js and the /emblems directory) -- with 22 cards on screen, a
-    // repeated generic trophy told a viewer nothing at a glance. `emblem`
-    // is a relative path; falls back to a plain trophy emoji only if an
-    // older cached response predates this field (a bare emoji renders
-    // fine as textContent, an <img> would just show a broken-image icon).
-    const icon = document.createElement("span");
-    icon.className = "trophy-icon";
-    icon.setAttribute("aria-hidden", "true");
+    // The full badge -- circle art plus its own name ribbon, cropped from
+    // the source art wide enough to keep the ribbon's full width (it
+    // extends past the circle's edges) -- see ACHIEVEMENTS in relay.js
+    // and the /emblems directory. This replaced a smaller icon-plus-
+    // separate-heading layout: the ribbon already carries the achievement
+    // name, so a second plain-text heading next to it just repeated the
+    // same words in a plainer font. alt carries the title now that
+    // there's no separate heading element for a screen reader to read
+    // instead. Falls back to a plain trophy emoji only if an older cached
+    // response predates the `emblem` field.
     if (achievement.emblem) {
       const img = document.createElement("img");
-      img.className = "trophy-icon-img";
+      img.className = "trophy-emblem";
       img.src = achievement.emblem;
-      img.alt = "";
-      icon.appendChild(img);
+      img.alt = achievement.title;
+      card.appendChild(img);
     } else {
+      const icon = document.createElement("span");
+      icon.className = "trophy-icon";
       icon.textContent = "🏆";
+      icon.setAttribute("aria-hidden", "true");
+      card.appendChild(icon);
+      const title = document.createElement("div");
+      title.className = "trophy-title";
+      title.textContent = achievement.title;
+      card.appendChild(title);
     }
-    card.appendChild(icon);
 
     const body = document.createElement("div");
     body.className = "trophy-body";
-
-    const title = document.createElement("div");
-    title.className = "trophy-title";
-    title.textContent = achievement.title;
-    body.appendChild(title);
 
     const description = document.createElement("div");
     description.className = "trophy-description";

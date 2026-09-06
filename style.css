@@ -676,63 +676,77 @@ header h1 {
 /* Achievements tab -- see renderAchievements in app.js. A responsive grid,
    not a vertical stack -- 22 achievements as single-column cards would be
    an enormous scroll. Column count follows content width, same reasoning
-   as every other card grid in this app. */
+   as every other card grid in this app. Wider minimum than before: the
+   badge art now includes its own full name ribbon (see .trophy-emblem),
+   which needs real width to stay legible. */
 #achievements-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px;
   margin-top: 12px;
 }
 
 /* Same border+radius-only convention as .wr-card/.deck-plate above, one
-   card per achievement. */
+   card per achievement. Column layout (badge on top, centered) rather
+   than the old icon-beside-text row -- the badge is the focal point now
+   that it carries its own name ribbon, not a small supporting icon next
+   to a plain-text heading. */
 .trophy-card {
   display: flex;
-  align-items: flex-start;
-  gap: 14px;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 4px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: 16px 18px;
+  padding: 14px 16px 16px;
 }
 
+/* Only used by the plain-emoji fallback (see app.js) for an older cached
+   response that predates the `emblem` field. */
 .trophy-icon {
-  font-size: 1.8rem; /* only used by the plain-emoji fallback, see app.js */
+  font-size: 1.8rem;
   line-height: 1;
-  flex: 0 0 auto;
 }
 
-/* The illustrated badges already have their own irregular spiky-crowned
-   silhouette baked in (cropped + chroma-keyed from source art, not a
-   plain circle) -- no border-radius clip here, that would just cut the
-   crown points off. Sized bigger than the old emoji was, since the
-   illustration is the point now, not a supporting icon next to the text. */
-.trophy-icon-img {
+/* The full badge -- circle art plus its own name ribbon, both baked in --
+   cropped and chroma-keyed from source art (see the /emblems directory),
+   not drawn. No border-radius clip: the art's own irregular silhouette
+   (spiky crown, ribbon flaring past the circle's edges) would just get
+   cut off by a plain circular mask. Sized for the ribbon text to stay
+   readable, which a small supporting-icon size couldn't manage. */
+.trophy-emblem {
   display: block;
-  width: 56px;
-  height: 56px;
-  object-fit: contain;
+  width: 100%;
+  max-width: 200px;
+  height: auto;
 }
 
 .trophy-body {
-  flex: 1 1 auto;
+  width: 100%;
   min-width: 0;
 }
 
+/* Only used by the plain-emoji fallback -- the illustrated badge's own
+   ribbon carries the title otherwise, so no separate heading repeats it
+   in a plainer font right below. */
 .trophy-title {
   font-weight: 700;
   font-size: 1rem;
+  margin-top: 4px;
 }
 
 .trophy-description {
   color: var(--muted);
   font-size: 0.85rem;
-  margin-top: 2px;
+  margin-top: 4px;
   margin-bottom: 10px;
 }
 
 .trophy-winner {
   display: flex;
   align-items: baseline;
+  justify-content: center;
   gap: 10px;
   flex-wrap: wrap;
 }
