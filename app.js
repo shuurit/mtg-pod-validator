@@ -410,7 +410,7 @@ async function loadAchievements() {
     const data = await res.json();
     selectedAchievementsSeasonId = data.seasonId;
     renderAchievementsSeasonSelect(data.seasons, data.seasonId);
-    renderAchievements(data.achievements);
+    renderAchievements(data.achievements, data.seasonActive);
     if (statusEl) statusEl.hidden = true;
   } catch (err) {
     if (listEl) listEl.innerHTML = "";
@@ -443,7 +443,14 @@ function renderAchievementsSeasonSelect(seasons, seasonId) {
 // string built server-side (see relay.js) since these span plain counts,
 // ratios, percentages, and averages that don't share one format -- this
 // function never does its own number formatting.
-function renderAchievements(achievements) {
+// seasonActive gates whether a null winner means "hidden until the season
+// ends" (relay.js withholds every winner on purpose while a season is
+// still being played, same reveal-at-the-end spirit as pod validation
+// masking deck identity/power pre-reveal) vs. "genuinely no qualifying
+// data yet" for an already-concluded season -- two different states that
+// both arrive as winner: null, so the message has to come from
+// seasonActive, not from the achievement itself.
+function renderAchievements(achievements, seasonActive) {
   const container = document.getElementById("achievements-list");
   container.innerHTML = "";
 
@@ -507,7 +514,9 @@ function renderAchievements(achievements) {
     } else {
       const empty = document.createElement("div");
       empty.className = "trophy-empty";
-      empty.textContent = "No data for this season yet.";
+      empty.textContent = seasonActive
+        ? "Revealed when the season ends."
+        : "No data for this season yet.";
       body.appendChild(empty);
     }
 

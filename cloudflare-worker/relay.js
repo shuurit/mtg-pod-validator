@@ -2025,31 +2025,56 @@ async function gatherAchievementContext(env, seasonId) {
 // there's only ever one season active at a time in practice, so "most
 // recent" and "current" agree today; this just avoids the client having
 // to know a season id up front for the common case.
+//
+// Winners stay hidden while a season is still being played -- only the
+// title/description/emblem go out, `winner` comes back null for every
+// achievement -- and get revealed once playgroup.gg's active league moves
+// on to a new one. Same "nothing revealed before it should be" spirit as
+// pod validation masking deck identity/power until a pod actually passes.
+// A season is "active" if its own playgroup_league_id matches the
+// currently active league; legacy seasons (migrated from the old
+// spreadsheet, no playgroup_league_id at all) and any other past season
+// never match, so their winners always show. If the live league check
+// itself fails, this fails toward HIDDEN, not revealed -- wrongly hiding
+// a finished season's winners for a moment is a much smaller cost than
+// spoiling an in-progress one.
 async function handleAchievements(request, env) {
   const url = new URL(request.url);
   const seasonParam = url.searchParams.get("season");
 
-  const { results: seasons } = await env.DB.prepare("SELECT id, label FROM seasons ORDER BY id").all();
+  const { results: seasons } = await env.DB.prepare("SELECT id, label, playgroup_league_id FROM seasons ORDER BY id").all();
   if (seasons.length === 0) {
-    return jsonResponse({ seasons: [], seasonId: null, achievements: [] }, 200, { "Cache-Control": "no-store" });
+    return jsonResponse({ seasons: [], seasonId: null, seasonActive: false, achievements: [] }, 200, { "Cache-Control": "no-store" });
   }
 
   const seasonId = seasonParam ? Number(seasonParam) : seasons[seasons.length - 1].id;
-  if (!seasons.some(s => s.id === seasonId)) {
+  const seasonRow = seasons.find(s => s.id === seasonId);
+  if (!seasonRow) {
     return jsonResponse({ error: `Unknown season ${seasonId}` }, 400);
   }
 
-  const ctx = await gatherAchievementContext(env, seasonId);
+  let seasonActive = true;
+  try {
+    const activeLeague = await getActiveLeagueId(env);
+    seasonActive = !!seasonRow.playgroup_league_id && String(activeLeague.id) === String(seasonRow.playgroup_league_id);
+  } catch (err) {
+    console.error("Failed to resolve active league for achievements reveal check:", err);
+  }
 
-  const achievements = ACHIEVEMENTS.map(a => ({
-    id: a.id,
-    title: a.title,
-    emblem: a.emblem,
-    description: a.description,
-    winner: a.compute(ctx),
-  }));
+  let achievements;
+  if (seasonActive) {
+    achievements = ACHIEVEMENTS.map(a => ({ id: a.id, title: a.title, emblem: a.emblem, description: a.description, winner: null }));
+  } else {
+    const ctx = await gatherAchievementContext(env, seasonId);
+    achievements = ACHIEVEMENTS.map(a => ({ id: a.id, title: a.title, emblem: a.emblem, description: a.description, winner: a.compute(ctx) }));
+  }
 
-  return jsonResponse({ seasons, seasonId, achievements }, 200, { "Cache-Control": "no-store" });
+  return jsonResponse({
+    seasons: seasons.map(({ id, label }) => ({ id, label })),
+    seasonId,
+    seasonActive,
+    achievements,
+  }, 200, { "Cache-Control": "no-store" });
 }
 
 // One-time (or safe-to-rerun) pass for games logged before
