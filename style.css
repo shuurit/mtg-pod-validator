@@ -673,9 +673,19 @@ header h1 {
   margin-top: 4px;
 }
 
-/* Achievements tab -- see renderAchievements in app.js. Same
-   border+radius-only convention as .wr-card/.deck-plate above, one card
-   per achievement (just one exists today: most damage dealt). */
+/* Achievements tab -- see renderAchievements in app.js. A responsive grid,
+   not a vertical stack -- 22 achievements as single-column cards would be
+   an enormous scroll. Column count follows content width, same reasoning
+   as every other card grid in this app. */
+#achievements-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+/* Same border+radius-only convention as .wr-card/.deck-plate above, one
+   card per achievement. */
 .trophy-card {
   display: flex;
   align-items: flex-start;
@@ -683,7 +693,6 @@ header h1 {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 16px 18px;
-  margin-top: 12px;
 }
 
 .trophy-icon {

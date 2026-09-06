@@ -759,6 +759,10 @@ async function handleGamesWrite(request, env, ctx, session) {
 // silently skipped rather than failing the whole game's stats.
 // ON CONFLICT so this is safe to rerun -- both the backfill pass and a
 // resubmitted/corrected game rely on that.
+function emptyEventTotals() {
+  return { damage_dealt: 0, healing_done: 0, knockouts: 0, damage_taken: 0, healing_received: 0, self_rating: null };
+}
+
 async function computeAndStoreGameEventStats(env, gameId, playgroupGameId) {
   if (!playgroupGameId) return;
 
@@ -770,35 +774,65 @@ async function computeAndStoreGameEventStats(env, gameId, playgroupGameId) {
   const raw = await res.json();
   const userIdToPlayerId = await getUserIdToPlayerIdMap(env);
 
-  const totals = {}; // playerId -> { damage_dealt, healing_done, knockouts }
-  const bump = (playerId, field, amount) => {
-    if (!totals[playerId]) totals[playerId] = { damage_dealt: 0, healing_done: 0, knockouts: 0 };
-    totals[playerId][field] += amount;
-  };
+  const totals = {}; // playerId -> emptyEventTotals()
+  const get = playerId => (totals[playerId] || (totals[playerId] = emptyEventTotals()));
+
+  let startingPlayerId = null;
   for (const e of raw.events || []) {
     const playerId = userIdToPlayerId[e.user_id];
-    if (!playerId) continue;
-    if (e.kind === "normal_damage" || e.kind === "commander_damage") bump(playerId, "damage_dealt", e.amount || 0);
-    else if (e.kind === "healing") bump(playerId, "healing_done", e.amount || 0);
-    else if (e.kind === "kill") bump(playerId, "knockouts", 1);
+    const receiverPlayerId = userIdToPlayerId[e.receiver_user_id];
+    if (e.kind === "normal_damage" || e.kind === "commander_damage") {
+      if (playerId) get(playerId).damage_dealt += e.amount || 0;
+      if (receiverPlayerId) get(receiverPlayerId).damage_taken += e.amount || 0;
+    } else if (e.kind === "healing") {
+      if (playerId) get(playerId).healing_done += e.amount || 0;
+      if (receiverPlayerId) get(receiverPlayerId).healing_received += e.amount || 0;
+    } else if (e.kind === "kill") {
+      if (playerId) get(playerId).knockouts += 1;
+    } else if (e.kind === "self_rating") {
+      if (playerId) get(playerId).self_rating = e.amount ?? null;
+    } else if (e.kind === "starting_player") {
+      // First starting_player event wins -- confirmed against a real game
+      // that an undo can re-fire this kind, so "first" (not "last") is the
+      // one that actually reflects who started, same reasoning
+      // deriveGameFieldsFromRawGame in app.js already applies to kill
+      // events via happened_at ordering.
+      if (startingPlayerId === null && playerId) startingPlayerId = playerId;
+    }
   }
 
   const stmts = [];
   for (const p of raw.participations || []) {
     const playerId = userIdToPlayerId[p.user_id];
     if (!playerId) continue;
-    const t = totals[playerId] || { damage_dealt: 0, healing_done: 0, knockouts: 0 };
+    const t = get(playerId);
+    const endingLife = typeof raw.life_amount === "number"
+      ? raw.life_amount - t.damage_taken + t.healing_received
+      : null;
     stmts.push(env.DB.prepare(`
-      INSERT INTO game_event_stats (game_id, player_id, damage_dealt, healing_done, knockouts, fun_rating, salt_rating, mulligans_taken)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO game_event_stats (
+        game_id, player_id, damage_dealt, healing_done, knockouts,
+        fun_rating, salt_rating, mulligans_taken, self_rating,
+        damage_taken, healing_received, ending_life
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (game_id, player_id) DO UPDATE SET
         damage_dealt = excluded.damage_dealt, healing_done = excluded.healing_done, knockouts = excluded.knockouts,
-        fun_rating = excluded.fun_rating, salt_rating = excluded.salt_rating, mulligans_taken = excluded.mulligans_taken
+        fun_rating = excluded.fun_rating, salt_rating = excluded.salt_rating, mulligans_taken = excluded.mulligans_taken,
+        self_rating = excluded.self_rating, damage_taken = excluded.damage_taken,
+        healing_received = excluded.healing_received, ending_life = excluded.ending_life
     `).bind(
       gameId, playerId, t.damage_dealt, t.healing_done, t.knockouts,
-      p.fun_rating ?? null, p.salt_rating ?? null, p.mulligans_taken ?? null
+      p.fun_rating ?? null, p.salt_rating ?? null, p.mulligans_taken ?? null, t.self_rating,
+      t.damage_taken, t.healing_received, endingLife
     ));
   }
+
+  // Game-level facts (not per-player) -- one UPDATE alongside the
+  // per-participant INSERTs above, same batch/transaction.
+  stmts.push(env.DB.prepare("UPDATE games SET win_con = ?, starting_player_id = ? WHERE id = ?")
+    .bind(raw.win_con ?? null, startingPlayerId, gameId));
+
   if (stmts.length > 0) await env.DB.batch(stmts);
 }
 
@@ -1628,32 +1662,336 @@ async function handleDeckWinRates(env) {
 
 // ---------- GET /achievements, POST /achievements/backfill ----------
 
+// Shared helpers every ACHIEVEMENTS entry below builds on, so ranking/
+// grouping logic lives in one place instead of being reimplemented per
+// achievement. Rows from either query below (see gatherAchievementContext)
+// all carry player_id/name, so these work against both.
+function groupByPlayer(rows) {
+  const map = new Map();
+  for (const r of rows) {
+    if (!map.has(r.player_id)) map.set(r.player_id, { playerId: r.player_id, name: r.name, rows: [] });
+    map.get(r.player_id).rows.push(r);
+  }
+  return [...map.values()];
+}
+function sumField(rows, field) {
+  return rows.reduce((s, r) => s + (r[field] || 0), 0);
+}
+function avgField(rows, field) {
+  const vals = rows.map(r => r[field]).filter(v => v !== null && v !== undefined);
+  if (vals.length === 0) return null;
+  return vals.reduce((a, b) => a + b, 0) / vals.length;
+}
+// Ranks grouped-by-player entries by valueFn, dropping anyone below
+// minGames or whose value comes back null/NaN (not enough data, not a
+// real zero). ascending:true for "lowest wins" achievements (fewest
+// mulligans, earliest exit).
+function topPlayer(byPlayer, valueFn, { minGames = 1, ascending = false } = {}) {
+  const scored = byPlayer
+    .filter(p => p.rows.length >= minGames)
+    .map(p => ({ playerId: p.playerId, name: p.name, value: valueFn(p.rows) }))
+    .filter(p => p.value !== null && p.value !== undefined && !Number.isNaN(p.value));
+  if (scored.length === 0) return null;
+  scored.sort((a, b) => (ascending ? a.value - b.value : b.value - a.value));
+  return scored[0];
+}
+// gameResults rows already carry win_con (see gatherAchievementContext) --
+// this groups by player among wins matching `predicate(win_con)`, for the
+// Timmy/Johnny awards below.
+function winsByCondition(gameResults, predicate) {
+  return groupByPlayer(gameResults.filter(r => r.result === 1 && predicate(r.win_con)));
+}
+
+// Below this, most achievements need at least a few games before a
+// rate/average means anything -- a single lucky (or unlucky) game
+// shouldn't win "saltiest player." Pure counting stats (most damage, most
+// knockouts) deliberately don't use this; playing more games earning a
+// higher total is the whole point of a season-long counting stat.
+const MIN_GAMES_FOR_RATE = 3;
+
 // A small, deliberately extensible list rather than one hardcoded query --
-// adding a second achievement later means adding an entry here, not a
-// redesign. `rows` is every game_event_stats row (joined with player name)
-// for one season; `compute` returns the single winner or null if the
-// season has no rows yet. Ships with exactly one for now: the "I hate my
-// friends" concept already prototyped by hand against real Season 3 data
-// (see the mtg-pod-validator backlog) before any of this table/endpoint
-// existed -- most total damage dealt across the season.
+// adding another achievement means adding an entry here, not a redesign.
+// Each `compute(ctx)` returns {playerId, name, value, display} for the
+// current season's winner, or null if there's not enough data yet (a
+// genuine empty state, not an error -- see renderAchievements in app.js).
+// `display` is the exact string the frontend shows, computed here rather
+// than assembled client-side from a generic {value, unit} pair, since
+// these span plain counts, ratios, percentages, and averages that don't
+// share one format.
 const ACHIEVEMENTS = [
   {
     id: "most-damage",
     title: "I Hate My Friends",
     description: "Most total damage dealt across the season.",
-    unit: "damage",
-    compute(rows) {
-      const byPlayer = new Map();
-      for (const r of rows) {
-        const entry = byPlayer.get(r.player_id) || { playerId: r.player_id, name: r.name, value: 0 };
-        entry.value += r.damage_dealt;
-        byPlayer.set(r.player_id, entry);
+    compute(ctx) {
+      const winner = topPlayer(ctx.eventStatsByPlayer, rows => sumField(rows, "damage_dealt"));
+      return winner && winner.value > 0 ? { ...winner, display: `${winner.value.toLocaleString()} damage` } : null;
+    },
+  },
+  {
+    id: "most-damage-game",
+    title: "Overkill",
+    description: "Most damage dealt in a single game.",
+    compute(ctx) {
+      let best = null;
+      for (const r of ctx.eventStats) {
+        if (!best || r.damage_dealt > best.value) best = { playerId: r.player_id, name: r.name, value: r.damage_dealt };
       }
-      const ranked = [...byPlayer.values()].sort((a, b) => b.value - a.value);
-      return ranked[0] || null;
+      return best && best.value > 0 ? { ...best, display: `${best.value.toLocaleString()} damage in one game` } : null;
+    },
+  },
+  {
+    id: "most-healing",
+    title: "The Medic",
+    description: "Most total healing done across the season.",
+    compute(ctx) {
+      const winner = topPlayer(ctx.eventStatsByPlayer, rows => sumField(rows, "healing_done"));
+      return winner && winner.value > 0 ? { ...winner, display: `${winner.value.toLocaleString()} healing` } : null;
+    },
+  },
+  {
+    id: "healing-ratio",
+    title: "The Pacifist",
+    description: "Most healing done per point of damage dealt.",
+    compute(ctx) {
+      const winner = topPlayer(ctx.eventStatsByPlayer, rows => {
+        const damage = sumField(rows, "damage_dealt");
+        const healing = sumField(rows, "healing_done");
+        if (damage === 0 && healing === 0) return null;
+        return healing / Math.max(damage, 1);
+      }, { minGames: MIN_GAMES_FOR_RATE });
+      return winner && { ...winner, display: `${winner.value.toFixed(2)}× healing per damage dealt` };
+    },
+  },
+  {
+    id: "most-knockouts",
+    title: "Grim Reaper",
+    description: "Most knockouts across the season.",
+    compute(ctx) {
+      const winner = topPlayer(ctx.eventStatsByPlayer, rows => sumField(rows, "knockouts"));
+      return winner && winner.value > 0 ? { ...winner, display: `${winner.value.toLocaleString()} knockouts` } : null;
+    },
+  },
+  {
+    id: "most-knockouts-game",
+    title: "One-Man Army",
+    description: "Most knockouts in a single game.",
+    compute(ctx) {
+      let best = null;
+      for (const r of ctx.eventStats) {
+        if (!best || r.knockouts > best.value) best = { playerId: r.player_id, name: r.name, value: r.knockouts };
+      }
+      return best && best.value > 0 ? { ...best, display: `${best.value} knockout${best.value === 1 ? "" : "s"} in one game` } : null;
+    },
+  },
+  {
+    id: "most-fun",
+    title: "Life of the Party",
+    description: "Highest average self-reported fun rating.",
+    compute(ctx) {
+      const winner = topPlayer(ctx.eventStatsByPlayer, rows => avgField(rows, "fun_rating"), { minGames: MIN_GAMES_FOR_RATE });
+      return winner && { ...winner, display: `${winner.value.toFixed(1)} avg fun rating` };
+    },
+  },
+  {
+    id: "saltiest",
+    title: "Tilted",
+    description: "Highest average self-reported salt rating.",
+    compute(ctx) {
+      const winner = topPlayer(ctx.eventStatsByPlayer, rows => avgField(rows, "salt_rating"), { minGames: MIN_GAMES_FOR_RATE });
+      return winner && { ...winner, display: `${winner.value.toFixed(1)} avg salt rating` };
+    },
+  },
+  {
+    id: "most-mulligans",
+    title: "Bad Hands",
+    description: "Most mulligans taken across the season.",
+    compute(ctx) {
+      const winner = topPlayer(ctx.eventStatsByPlayer, rows => sumField(rows, "mulligans_taken"));
+      return winner && winner.value > 0 ? { ...winner, display: `${winner.value} mulligan${winner.value === 1 ? "" : "s"}` } : null;
+    },
+  },
+  {
+    id: "fewest-mulligans",
+    title: "Lucky Draw",
+    description: "Lowest average mulligans taken per game.",
+    compute(ctx) {
+      const winner = topPlayer(ctx.eventStatsByPlayer, rows => avgField(rows, "mulligans_taken"), { minGames: MIN_GAMES_FOR_RATE, ascending: true });
+      return winner && { ...winner, display: `${winner.value.toFixed(2)} avg mulligans` };
+    },
+  },
+  {
+    id: "most-confident",
+    title: "Big Ego",
+    description: "Highest average self-rating.",
+    compute(ctx) {
+      const winner = topPlayer(ctx.eventStatsByPlayer, rows => avgField(rows, "self_rating"), { minGames: MIN_GAMES_FOR_RATE });
+      return winner && { ...winner, display: `${winner.value.toFixed(1)} avg self-rating` };
+    },
+  },
+  {
+    id: "denial",
+    title: "Denial",
+    description: "Highest average self-rating in games they lost.",
+    compute(ctx) {
+      // self_rating lives in game_event_stats, result lives in
+      // game_results -- two different tables keyed by (game_id,
+      // player_id), so this can't reduce over one already-grouped row set
+      // the way the simpler achievements above do.
+      const resultByKey = new Map(ctx.gameResults.map(r => [`${r.game_id}:${r.player_id}`, r.result]));
+      const losses = ctx.eventStats.filter(r =>
+        r.self_rating !== null && r.self_rating !== undefined && resultByKey.get(`${r.game_id}:${r.player_id}`) === 0
+      );
+      const winner = topPlayer(groupByPlayer(losses), rows => avgField(rows, "self_rating"), { minGames: 2 });
+      return winner && { ...winner, display: `${winner.value.toFixed(1)} avg self-rating in losses` };
+    },
+  },
+  {
+    id: "combat-wins",
+    title: "Timmy Award",
+    description: "Most wins by combat damage.",
+    compute(ctx) {
+      const winner = topPlayer(winsByCondition(ctx.gameResults, wc => wc === "combat"), rows => rows.length);
+      return winner && { ...winner, display: `${winner.value} combat win${winner.value === 1 ? "" : "s"}` };
+    },
+  },
+  {
+    id: "altwin-wins",
+    title: "Johnny Award",
+    description: "Most wins by a non-combat win condition.",
+    compute(ctx) {
+      const winner = topPlayer(winsByCondition(ctx.gameResults, wc => !!wc && wc !== "combat"), rows => rows.length);
+      return winner && { ...winner, display: `${winner.value} alt-win-con win${winner.value === 1 ? "" : "s"}` };
+    },
+  },
+  {
+    id: "front-runner",
+    title: "Front Runner",
+    description: "Best win rate in games they went first.",
+    compute(ctx) {
+      const wentFirst = groupByPlayer(ctx.gameResults.filter(r => r.starting_player_id === r.player_id));
+      const winner = topPlayer(wentFirst, rows => sumField(rows, "result") / rows.length, { minGames: MIN_GAMES_FOR_RATE });
+      if (!winner) return null;
+      const games = wentFirst.find(p => p.playerId === winner.playerId).rows.length;
+      return { ...winner, display: `${Math.round(winner.value * 100)}% win rate going first (${games} games)` };
+    },
+  },
+  {
+    id: "closest-call",
+    title: "Nine Lives",
+    description: "Won with the lowest life total remaining.",
+    compute(ctx) {
+      const resultByKey = new Map(ctx.gameResults.map(r => [`${r.game_id}:${r.player_id}`, r.result]));
+      let best = null;
+      for (const r of ctx.eventStats) {
+        if (r.ending_life === null || r.ending_life === undefined) continue;
+        if (resultByKey.get(`${r.game_id}:${r.player_id}`) !== 1) continue;
+        if (!best || r.ending_life < best.value) best = { playerId: r.player_id, name: r.name, value: r.ending_life };
+      }
+      return best && { ...best, display: `Won with ${best.value} life left` };
+    },
+  },
+  {
+    id: "untouchable",
+    title: "Untouchable",
+    description: "Won with the highest life total remaining.",
+    compute(ctx) {
+      const resultByKey = new Map(ctx.gameResults.map(r => [`${r.game_id}:${r.player_id}`, r.result]));
+      let best = null;
+      for (const r of ctx.eventStats) {
+        if (r.ending_life === null || r.ending_life === undefined) continue;
+        if (resultByKey.get(`${r.game_id}:${r.player_id}`) !== 1) continue;
+        if (!best || r.ending_life > best.value) best = { playerId: r.player_id, name: r.name, value: r.ending_life };
+      }
+      return best && { ...best, display: `Won with ${best.value} life left` };
+    },
+  },
+  {
+    id: "bridesmaid",
+    title: "Bridesmaid",
+    description: "Most 2nd-place finishes across the season.",
+    compute(ctx) {
+      const winner = topPlayer(groupByPlayer(ctx.gameResults.filter(r => r.place === 2)), rows => rows.length);
+      return winner && { ...winner, display: `${winner.value} second-place finish${winner.value === 1 ? "" : "es"}` };
+    },
+  },
+  {
+    id: "wooden-spoon",
+    title: "Wooden Spoon",
+    description: "Most last-place finishes across the season.",
+    compute(ctx) {
+      const winner = topPlayer(groupByPlayer(ctx.gameResults.filter(r => r.place === r.pod_size)), rows => rows.length);
+      return winner && { ...winner, display: `${winner.value} last-place finish${winner.value === 1 ? "" : "es"}` };
+    },
+  },
+  {
+    id: "longest-survivor",
+    title: "Last One Standing",
+    description: "Highest average turn of elimination in games they lost.",
+    compute(ctx) {
+      const winner = topPlayer(groupByPlayer(ctx.gameResults.filter(r => r.result === 0)), rows => avgField(rows, "tov"), { minGames: MIN_GAMES_FOR_RATE });
+      return winner && { ...winner, display: `Avg turn ${winner.value.toFixed(1)} when eliminated` };
+    },
+  },
+  {
+    id: "early-exit",
+    title: "Early Exit",
+    description: "Lowest average turn of elimination in games they lost.",
+    compute(ctx) {
+      const winner = topPlayer(groupByPlayer(ctx.gameResults.filter(r => r.result === 0)), rows => avgField(rows, "tov"), { minGames: MIN_GAMES_FOR_RATE, ascending: true });
+      return winner && { ...winner, display: `Avg turn ${winner.value.toFixed(1)} when eliminated` };
+    },
+  },
+  {
+    id: "most-decks",
+    title: "Brewmaster",
+    description: "Most different decks piloted across the season.",
+    compute(ctx) {
+      const byPlayer = new Map();
+      for (const r of ctx.gameResults) {
+        if (!byPlayer.has(r.player_id)) byPlayer.set(r.player_id, { playerId: r.player_id, name: r.name, decks: new Set() });
+        byPlayer.get(r.player_id).decks.add(r.deck_id);
+      }
+      let best = null;
+      for (const p of byPlayer.values()) {
+        if (!best || p.decks.size > best.value) best = { playerId: p.playerId, name: p.name, value: p.decks.size };
+      }
+      return best && best.value > 0 ? { ...best, display: `${best.value} different deck${best.value === 1 ? "" : "s"}` } : null;
     },
   },
 ];
+
+// One season's worth of raw material every achievement above draws from --
+// gathered once per request, not once per achievement, since several
+// achievements share the same two row sets. eventStats comes from
+// game_event_stats (the playgroup.gg event-log-derived table); gameResults
+// comes from game_results (the submitted-game table, already carrying
+// place/tov/win_con/starting_player_id via the joins below) -- see
+// schema.sql for both.
+async function gatherAchievementContext(env, seasonId) {
+  const [eventStatsRes, gameResultsRes] = await Promise.all([
+    env.DB.prepare(`
+      SELECT s.game_id, s.player_id, p.name, s.damage_dealt, s.healing_done, s.knockouts,
+             s.fun_rating, s.salt_rating, s.mulligans_taken, s.self_rating,
+             s.damage_taken, s.healing_received, s.ending_life
+      FROM game_event_stats s
+      JOIN games g ON g.id = s.game_id
+      JOIN players p ON p.id = s.player_id
+      WHERE g.season_id = ?
+    `).bind(seasonId).all(),
+    env.DB.prepare(`
+      SELECT gr.game_id, gr.player_id, p.name, gr.place, gr.result, gr.tov, gr.deck_id,
+             g.pod_size, g.win_con, g.starting_player_id
+      FROM game_results gr
+      JOIN games g ON g.id = gr.game_id
+      JOIN players p ON p.id = gr.player_id
+      WHERE g.season_id = ?
+    `).bind(seasonId).all(),
+  ]);
+  const eventStats = eventStatsRes.results;
+  const gameResults = gameResultsRes.results;
+  return { eventStats, gameResults, eventStatsByPlayer: groupByPlayer(eventStats) };
+}
 
 // season query param defaults to the most recent season (highest id) --
 // there's only ever one season active at a time in practice, so "most
@@ -1673,20 +2011,13 @@ async function handleAchievements(request, env) {
     return jsonResponse({ error: `Unknown season ${seasonId}` }, 400);
   }
 
-  const { results: rows } = await env.DB.prepare(`
-    SELECT s.player_id, p.name, s.damage_dealt, s.healing_done, s.knockouts
-    FROM game_event_stats s
-    JOIN games g ON g.id = s.game_id
-    JOIN players p ON p.id = s.player_id
-    WHERE g.season_id = ?
-  `).bind(seasonId).all();
+  const ctx = await gatherAchievementContext(env, seasonId);
 
   const achievements = ACHIEVEMENTS.map(a => ({
     id: a.id,
     title: a.title,
     description: a.description,
-    unit: a.unit,
-    winner: a.compute(rows),
+    winner: a.compute(ctx),
   }));
 
   return jsonResponse({ seasons, seasonId, achievements }, 200, { "Cache-Control": "no-store" });
@@ -1699,12 +2030,20 @@ async function handleAchievements(request, env) {
 // again to pick up where it left off. computeAndStoreGameEventStats's own
 // ON CONFLICT makes this idempotent, so a partial failure just means the
 // next call retries whatever's still missing.
-async function handleAchievementsBackfill(env) {
+// `force=true` reprocesses every game with a playgroup_game_id regardless
+// of whether it already has a game_event_stats row -- needed the first
+// time a new column gets added to what computeAndStoreGameEventStats
+// captures (self_rating/damage_taken/healing_received/ending_life/
+// win_con/starting_player_id all arrived after the initial backfill), since
+// the default NOT EXISTS check would otherwise skip every game that
+// already ran once. Safe either way: computeAndStoreGameEventStats's own
+// ON CONFLICT DO UPDATE overwrites in place, never duplicates.
+async function handleAchievementsBackfill(env, force) {
   const { results: rows } = await env.DB.prepare(`
     SELECT g.id AS game_id, g.playgroup_game_id
     FROM games g
     WHERE g.playgroup_game_id IS NOT NULL
-      AND NOT EXISTS (SELECT 1 FROM game_event_stats s WHERE s.game_id = g.id)
+      ${force ? "" : "AND NOT EXISTS (SELECT 1 FROM game_event_stats s WHERE s.game_id = g.id)"}
     ORDER BY g.id
     LIMIT ?
   `).bind(MAX_EVENT_STATS_BACKFILL_PER_RUN).all();
@@ -1812,7 +2151,7 @@ export default {
     }
 
     if (request.method === "POST" && url.pathname === "/achievements/backfill") {
-      return handleAchievementsBackfill(env);
+      return handleAchievementsBackfill(env, url.searchParams.get("force") === "true");
     }
 
     if (request.method === "GET" && url.pathname === "/debug/game") {

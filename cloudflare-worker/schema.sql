@@ -110,6 +110,14 @@ CREATE TABLE games (
   -- aren't a problem. Purely for accountability now that writes require
   -- auth; nothing reads this back into any calculation.
   submitted_by_player_id INTEGER REFERENCES players(id),
+  -- Both straight from playgroup.gg's own event log (game-level, not
+  -- per-player) -- see computeAndStoreGameEventStats in relay.js. Nullable:
+  -- backfilled for existing games same as game_event_stats itself, and
+  -- win_con specifically can be null if a game ended without one ever
+  -- being set. Power the Timmy/Johnny-award and "goes first" achievements
+  -- (GET /achievements); neither feeds the power-spread math.
+  win_con TEXT,
+  starting_player_id INTEGER REFERENCES players(id),
   UNIQUE(season_id, game_num)
 );
 
@@ -181,5 +189,22 @@ CREATE TABLE game_event_stats (
   fun_rating INTEGER,
   salt_rating INTEGER,
   mulligans_taken INTEGER,
+  -- self_rating has no participations-level equivalent (unlike the three
+  -- above) -- it only exists as its own event kind, so this is read from
+  -- events directly, not the participations array. A distinct metric from
+  -- fun_rating, confirmed against a real game where the same player's
+  -- fun_rating and self_rating disagreed.
+  self_rating INTEGER,
+  -- Same normal_damage/commander_damage/healing events as damage_dealt/
+  -- healing_done above, just summed by receiver_user_id instead of
+  -- user_id -- what this player took/received rather than dealt out.
+  damage_taken INTEGER NOT NULL DEFAULT 0,
+  healing_received INTEGER NOT NULL DEFAULT 0,
+  -- Derived, not a raw field: the game's life_amount (starting life total)
+  -- minus damage_taken plus healing_received. Can go negative (a player
+  -- eliminated well past zero) or above life_amount (healed past
+  -- starting life, which real Commander games do allow) -- both are
+  -- accurate, not errors.
+  ending_life INTEGER,
   PRIMARY KEY (game_id, player_id)
 );

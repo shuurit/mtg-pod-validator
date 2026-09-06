@@ -94,11 +94,14 @@ works without one.
   extensible list of achievements (currently one: most total damage dealt)
   computed from `game_event_stats`. `season` defaults to the most recent
   season. Powers the app's Achievements tab.
-- `POST /achievements/backfill` — one-time (safe-to-rerun) pass that fills
-  in `game_event_stats` for games logged before that table existed, by
-  re-fetching each one's event log from playgroup.gg. Capped per call
-  (`MAX_EVENT_STATS_BACKFILL_PER_RUN`); call again if the response says
-  `remaining: true`.
+- `POST /achievements/backfill[?force=true]` — one-time (safe-to-rerun)
+  pass that fills in `game_event_stats` for games logged before that table
+  existed, by re-fetching each one's event log from playgroup.gg. Capped
+  per call (`MAX_EVENT_STATS_BACKFILL_PER_RUN`); call again if the
+  response says `remaining: true`. `force=true` reprocesses every game
+  regardless of whether it already has a stats row — needed whenever a new
+  column gets added to what's captured, since the default run only looks
+  at games with no row at all.
 - `POST /games` — logs a game: resolves the season from playgroup.gg's
   *current* active league (never trusted from the client, auto-creating a
   season the first time a league is seen), resolves each participant's

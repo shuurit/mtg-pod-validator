@@ -434,10 +434,15 @@ function renderAchievementsSeasonSelect(seasons, seasonId) {
   sel.value = seasonId;
 }
 
-// One trophy card per achievement (just one for now -- most damage dealt,
-// see ACHIEVEMENTS in relay.js). `winner` is null when the season has no
-// game_event_stats rows at all yet (e.g. a brand-new season, or an old one
-// pre-dating the backfill) -- a genuine empty state, not an error.
+// One trophy card per achievement -- see the ACHIEVEMENTS list in relay.js
+// for the full 22 and what each one measures. `winner` is null when the
+// season doesn't have enough data for that specific achievement yet (a
+// brand-new season, an old one pre-dating the backfill, or just not enough
+// qualifying games for a rate-based one like "saltiest player") -- a
+// genuine empty state, not an error. `winner.display` is a fully-formatted
+// string built server-side (see relay.js) since these span plain counts,
+// ratios, percentages, and averages that don't share one format -- this
+// function never does its own number formatting.
 function renderAchievements(achievements) {
   const container = document.getElementById("achievements-list");
   container.innerHTML = "";
@@ -481,7 +486,7 @@ function renderAchievements(achievements) {
       name.textContent = achievement.winner.name;
       const value = document.createElement("span");
       value.className = "trophy-winner-value";
-      value.textContent = `${achievement.winner.value.toLocaleString()} ${achievement.unit}`;
+      value.textContent = achievement.winner.display;
       winnerRow.appendChild(name);
       winnerRow.appendChild(value);
       body.appendChild(winnerRow);
@@ -3859,7 +3864,7 @@ checkAuthSession().then(() => {
     renderSkeletonCards(document.getElementById("gtu-game-list"), 2, ["medium", "short"]);
     renderSkeletonCards(document.getElementById("uta-list"), 2, ["medium", "short"]);
     renderSkeletonCards(document.getElementById("winrates-table"), 4, ["short", "medium"]);
-    renderSkeletonCards(document.getElementById("achievements-list"), 1, ["medium", "short"]);
+    renderSkeletonCards(document.getElementById("achievements-list"), 6, ["medium", "short"]);
     initAchievementsTab();
     syncFromD1();
     refreshPlaygroupGames();
