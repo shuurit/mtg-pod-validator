@@ -724,16 +724,23 @@ function buildPowerOverviewStrip() {
     name.textContent = player.name;
     card.appendChild(name);
 
-    const dots = document.createElement("span");
-    dots.className = "power-overview-dots";
-    for (const deck of activeDecks) {
-      const dot = document.createElement("span");
-      dot.className = `power-overview-dot ${powerTierClass(deck.power, "power-overview-dot")}`;
-      dot.textContent = formatPower(deck.power);
-      dot.title = deck.name;
-      dots.appendChild(dot);
-    }
-    card.appendChild(dots);
+    // A range, not one dot per deck -- a player with a dozen decks (real
+    // examples in this playgroup go into double digits) made the original
+    // one-dot-per-deck version overflow its own card instead of staying
+    // compact, defeating the whole point of an at-a-glance strip. Colored
+    // by the average deck's tier, since a single hue can't honestly
+    // represent a player whose decks span multiple tiers -- the average is
+    // the least misleading single answer to "how strong is this player,"
+    // and the printed range still shows the real spread as text.
+    const powers = activeDecks.map(d => d.power);
+    const min = Math.min(...powers);
+    const max = Math.max(...powers);
+    const avg = powers.reduce((a, b) => a + b, 0) / powers.length;
+    const range = document.createElement("span");
+    range.className = `power-overview-range ${powerTierClass(avg, "power-overview-dot")}`;
+    range.textContent = min === max ? formatPower(min) : `${formatPower(min)}–${formatPower(max)}`;
+    range.title = `${activeDecks.length} deck${activeDecks.length === 1 ? "" : "s"}`;
+    card.appendChild(range);
 
     strip.appendChild(card);
   }

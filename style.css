@@ -1026,26 +1026,27 @@ td.num {
   white-space: nowrap;
 }
 
-.power-overview-dots {
-  display: flex;
-  gap: 3px;
-}
-
-/* Smaller sibling of .power-chip, same tier thresholds and colors
-   (powerTierClass takes a prefix specifically so these two never drift
-   apart) -- a pill, not a circle, since the number here is 2-3 digits
-   inside a much tighter footprint than the coin above affords. */
-.power-overview-dot {
+/* One range per player (e.g. "2.4–3.9"), not one dot per deck -- a
+   player's card used to grow with their deck count and a double-digit
+   collection (real examples in this playgroup exist) overflowed past the
+   card's own edge instead of staying compact. A single fixed-shape pill
+   keeps every card the same rough width regardless of how many decks
+   someone has. Colored by the average deck's tier (powerTierClass, same
+   thresholds .power-chip uses, prefix keeps the two from drifting apart)
+   since a single hue can't honestly represent a player whose decks span
+   several tiers -- the printed text still carries the real min-max spread. */
+.power-overview-range {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   min-width: 26px;
-  height: 20px;
-  padding: 0 5px;
+  height: 22px;
+  padding: 0 8px;
   border-radius: 999px;
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .power-overview-dot-low { background: var(--accent-soft); color: var(--accent); }
 .power-overview-dot-mid { background: var(--good-bg); color: var(--good); }
