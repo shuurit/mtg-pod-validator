@@ -1707,6 +1707,20 @@ function groupByPlayer(rows) {
 function sumField(rows, field) {
   return rows.reduce((s, r) => s + (r[field] || 0), 0);
 }
+
+// Cache-busts the /emblems/*.png files the same way index.html's own
+// ?v=N busts app.js/style.css -- unlike those two, the emblem PNGs have
+// no build step to bump a version number in, so this is a plain constant
+// bumped by hand whenever the underlying image content changes (it's
+// changed twice already: original tight crop -> ribbon included -> full
+// description included -- confirmed the hard way that a phone which had
+// already loaded an older crop just kept serving it from cache, since the
+// filename itself never changed). Bump this any time /emblems/*.png files
+// get new content, even though their filenames stay the same.
+const EMBLEM_CACHE_BUST = "3";
+function emblemUrl(path) {
+  return path ? `${path}?v=${EMBLEM_CACHE_BUST}` : path;
+}
 function avgField(rows, field) {
   const vals = rows.map(r => r[field]).filter(v => v !== null && v !== undefined);
   if (vals.length === 0) return null;
@@ -2167,10 +2181,10 @@ async function handleAchievements(request, env) {
 
   let achievements;
   if (seasonActive) {
-    achievements = ACHIEVEMENTS.map(a => ({ id: a.id, title: a.title, emblem: a.emblem, description: a.description, winner: null }));
+    achievements = ACHIEVEMENTS.map(a => ({ id: a.id, title: a.title, emblem: emblemUrl(a.emblem), description: a.description, winner: null }));
   } else {
     const ctx = await gatherAchievementContext(env, seasonId);
-    achievements = ACHIEVEMENTS.map(a => ({ id: a.id, title: a.title, emblem: a.emblem, description: a.description, winner: a.compute(ctx) }));
+    achievements = ACHIEVEMENTS.map(a => ({ id: a.id, title: a.title, emblem: emblemUrl(a.emblem), description: a.description, winner: a.compute(ctx) }));
   }
 
   return jsonResponse({
