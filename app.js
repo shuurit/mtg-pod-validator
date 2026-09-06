@@ -378,6 +378,31 @@ async function syncFromD1() {
 
 // ---------- shared table building ----------
 
+// Pale, correctly-shaped placeholder cards shown the moment sign-in is
+// confirmed and the real fetches are still in flight, replacing a status
+// line floating over an empty container with something that shows where
+// content is actually about to land. Only ever a starting state: every
+// real render function already clears its container with innerHTML = ""
+// the moment it has something real (or a genuine empty/failed outcome) to
+// show, which removes whatever skeleton was sitting there same as it
+// would remove old real content on a re-render. Not used for Players &
+// Decks -- that tab already renders the DEFAULT_ROSTER fallback
+// synchronously before sign-in even resolves, so it's never actually
+// empty the way the other three tabs are before their first fetch lands.
+function renderSkeletonCards(container, count, lineWidths) {
+  container.innerHTML = "";
+  for (let i = 0; i < count; i++) {
+    const card = document.createElement("div");
+    card.className = "skeleton-card";
+    for (const width of (lineWidths || ["medium", "short"])) {
+      const line = document.createElement("div");
+      line.className = "skeleton-line" + (width ? ` skeleton-line-${width}` : "");
+      card.appendChild(line);
+    }
+    container.appendChild(card);
+  }
+}
+
 // A row of plain clickable labels standing in for what used to be sortable
 // <th>s, shared by Players & Decks' per-player deck list and Player Win
 // Rates -- neither is a <table> anymore (see buildDeckPlate/the win-rates
@@ -1922,9 +1947,15 @@ let playgroupGamesData = null;
 async function refreshPlaygroupGames() {
   const gtuStatusEl = document.getElementById("gtu-status");
   const wrStatusEl = document.getElementById("winrates-sync-status");
+  // Not configured, or the fetch genuinely failed, are both real terminal
+  // outcomes -- unlike renderGamesToUpdate's own "still syncing the Game
+  // Log" branch (which fires while this same fetch just hasn't landed
+  // yet), there's nothing left to wait on here, so the skeleton comes
+  // down in favor of the status text explaining why, same as a plain
+  // empty container always has.
   if (!PLAYGROUP_GAMES_RELAY_URL) {
-    if (gtuStatusEl) gtuStatusEl.textContent = "Live playgroup.gg data not configured.";
-    if (wrStatusEl) wrStatusEl.textContent = "Live playgroup.gg data not configured.";
+    if (gtuStatusEl) { gtuStatusEl.textContent = "Live playgroup.gg data not configured."; document.getElementById("gtu-game-list").innerHTML = ""; }
+    if (wrStatusEl) { wrStatusEl.textContent = "Live playgroup.gg data not configured."; document.getElementById("winrates-table").innerHTML = ""; }
     return;
   }
   try {
@@ -1938,8 +1969,8 @@ async function refreshPlaygroupGames() {
     renderGamesToUpdate();
     renderWinRatesTable(playgroupGamesData);
   } catch (err) {
-    if (gtuStatusEl) gtuStatusEl.textContent = `Couldn't load live playgroup.gg data (${err.message}).`;
-    if (wrStatusEl) wrStatusEl.textContent = `Couldn't load live win rates (${err.message}).`;
+    if (gtuStatusEl) { gtuStatusEl.textContent = `Couldn't load live playgroup.gg data (${err.message}).`; document.getElementById("gtu-game-list").innerHTML = ""; }
+    if (wrStatusEl) { wrStatusEl.textContent = `Couldn't load live win rates (${err.message}).`; document.getElementById("winrates-table").innerHTML = ""; }
   }
 }
 
@@ -2334,6 +2365,21 @@ function makeGtuInput(type, suffix, i, attrs) {
   return el;
 }
 
+// Flags a field as holding a guess rather than something typed in --
+// Cmdr Strength/Bracket from this player's own deck history, Place from a
+// simple win/loss heuristic, and (once the async playgroup.gg pre-fill in
+// openGameForm lands) Place/KOs/TOV again from real event-log data. Every
+// one of these fields was always fully editable; the only thing missing
+// was a way to tell "the app guessed this" from "I typed this" once both
+// look identical as a plain filled-in number. Idempotent and safe to call
+// more than once on the same input -- the playgroup.gg pre-fill can mark
+// a field already marked at creation (e.g. Place for a winner).
+function markGtuPrefilled(input) {
+  if (input.classList.contains("gtu-in-prefilled")) return;
+  input.classList.add("gtu-in-prefilled");
+  input.addEventListener("input", () => input.classList.remove("gtu-in-prefilled"), { once: true });
+}
+
 // One participant's card in the Games to Update form -- replaces a row in
 // what used to be a 13-column input table (Player/Commander/Result plus 10
 // input cells), which needed its own horizontal scroll to even fit on a
@@ -2377,16 +2423,25 @@ function buildGtuParticipantCard(p, i, pgGame) {
     return wrap;
   };
 
+  const strengthInput = makeGtuInput("number", "gtu-strength", i, { step: "0.1", min: "0", max: "5", value: defaultStrength ?? "" });
+  if (defaultStrength !== null) markGtuPrefilled(strengthInput);
+
+  const placeInput = makeGtuInput("number", "gtu-place", i, { min: "1", max: pgGame.pod_size, value: defaultPlace });
+  if (defaultPlace) markGtuPrefilled(placeInput);
+
+  const bracketInput = makeGtuInput("number", "gtu-bracket", i, { min: "1", max: "5", value: defaultBracket });
+  if (defaultBracket !== "") markGtuPrefilled(bracketInput);
+
   const fields = document.createElement("div");
   fields.className = "gtu-card-fields";
   fields.append(
-    field("Cmdr Strength", makeGtuInput("number", "gtu-strength", i, { step: "0.1", min: "0", max: "5", value: defaultStrength ?? "" })),
-    field("Place", makeGtuInput("number", "gtu-place", i, { min: "1", max: pgGame.pod_size, value: defaultPlace })),
+    field("Cmdr Strength", strengthInput),
+    field("Place", placeInput),
     field("KOs", makeGtuInput("number", "gtu-knockouts", i, { min: "0", value: 0 })),
     field("TOV", makeGtuInput("number", "gtu-tov", i, { min: "1", value: "" })),
     field("Disruptions", makeGtuInput("number", "gtu-disruptions", i, { min: "0", value: 0 })),
     field("Recoveries", makeGtuInput("number", "gtu-recoveries", i, { min: "0", value: 0 })),
-    field("Bracket", makeGtuInput("number", "gtu-bracket", i, { min: "1", max: "5", value: defaultBracket })),
+    field("Bracket", bracketInput),
   );
   card.appendChild(fields);
 
@@ -2452,9 +2507,9 @@ function openGameForm(pgGame) {
           const placeInput = cardList.querySelector(`.gtu-place[data-i="${i}"]`);
           const kosInput = cardList.querySelector(`.gtu-knockouts[data-i="${i}"]`);
           const tovInput = cardList.querySelector(`.gtu-tov[data-i="${i}"]`);
-          if (placeInput) placeInput.value = fields.place;
-          if (kosInput) kosInput.value = fields.kos;
-          if (tovInput && fields.tov != null) tovInput.value = fields.tov;
+          if (placeInput) { placeInput.value = fields.place; markGtuPrefilled(placeInput); }
+          if (kosInput) { kosInput.value = fields.kos; markGtuPrefilled(kosInput); }
+          if (tovInput && fields.tov != null) { tovInput.value = fields.tov; markGtuPrefilled(tovInput); }
         });
         derivedHint.textContent = "Place/KOs/TOV pre-filled from playgroup.gg's game log — double check before submitting.";
       })
@@ -2696,6 +2751,7 @@ async function loadRosterDiff() {
   const statusEl = document.getElementById("uta-status");
   if (!ROSTER_DIFF_RELAY_URL) {
     if (statusEl) statusEl.textContent = "Live playgroup.gg data not configured.";
+    document.getElementById("uta-list").innerHTML = "";
     return;
   }
   try {
@@ -2709,6 +2765,7 @@ async function loadRosterDiff() {
     if (!isEditingRosterUpdateForm()) renderUpdateAppTab();
   } catch (err) {
     if (statusEl) statusEl.textContent = `Couldn't load live playgroup.gg data (${err.message}).`;
+    document.getElementById("uta-list").innerHTML = "";
   }
 }
 
@@ -3542,6 +3599,12 @@ checkAuthSession().then(() => {
   initTabs();
   if (currentUser) {
     initPlayerCountSelect();
+    // Shaped placeholders instead of a status line over empty tabs, for
+    // the moment between the gate opening and each fetch below actually
+    // landing. See renderSkeletonCards for why Players & Decks isn't here.
+    renderSkeletonCards(document.getElementById("gtu-game-list"), 2, ["medium", "short"]);
+    renderSkeletonCards(document.getElementById("uta-list"), 2, ["medium", "short"]);
+    renderSkeletonCards(document.getElementById("winrates-table"), 4, ["short", "medium"]);
     syncFromD1();
     refreshPlaygroupGames();
     loadRosterDiff();

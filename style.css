@@ -1381,6 +1381,52 @@ td.num {
   color: var(--muted);
 }
 
+/* Loading placeholders -- see renderSkeletonCards in app.js. Same
+   border+radius-only convention as the real cards these stand in for
+   (.gtu-game-card/.deck-plate/.wr-card), so the shape itself is the
+   preview, not just a generic box. */
+.skeleton-card {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  margin-bottom: 10px;
+}
+.skeleton-line {
+  height: 12px;
+  border-radius: 6px;
+  background: var(--border-soft);
+  margin-bottom: 8px;
+  width: 80%;
+}
+.skeleton-line:last-child {
+  margin-bottom: 0;
+}
+.skeleton-line-medium {
+  width: 55%;
+}
+.skeleton-line-short {
+  width: 30%;
+}
+/* Same sweeping-highlight trick as the power chip's foil hover and the
+   reveal modal's sweep -- a light band crossing left to right, not a
+   pulse, so the several skeleton cards in a list don't all flash in sync. */
+.skeleton-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 30%, rgba(255, 255, 255, 0.35) 50%, transparent 70%);
+  transform: translateX(-100%);
+  animation: skeleton-shimmer 1.6s ease-in-out infinite;
+}
+@keyframes skeleton-shimmer {
+  to { transform: translateX(100%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-card::after { display: none; }
+}
+
 .gtu-game-card {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -1466,6 +1512,19 @@ td.num {
 }
 .gtu-field input {
   width: 100%;
+}
+/* A guess, not something typed in yet -- see markGtuPrefilled in app.js.
+   Dashed border is the same "provisional, please confirm" language
+   .power-chip-pending already uses for a declared-but-unconfirmed
+   bracket; disappears the instant the field is actually edited.
+   input.gtu-in-prefilled, not just .gtu-in-prefilled -- these are all
+   type="number" inputs, and input[type="number"]'s own specificity
+   (0,1,1) otherwise beats a plain class (0,1,0) regardless of which
+   comes later in the file; matching that with the element type here
+   is what actually lets this win instead of silently losing to it. */
+input.gtu-in-prefilled {
+  border: 1px dashed var(--accent);
+  background: var(--accent-soft);
 }
 .gtu-card-checks {
   display: flex;
