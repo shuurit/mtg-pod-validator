@@ -1711,17 +1711,20 @@ const MIN_GAMES_FOR_RATE = 3;
 
 // A small, deliberately extensible list rather than one hardcoded query --
 // adding another achievement means adding an entry here, not a redesign.
-// Each `compute(ctx)` returns {playerId, name, value, display} for the
-// current season's winner, or null if there's not enough data yet (a
-// genuine empty state, not an error -- see renderAchievements in app.js).
-// `display` is the exact string the frontend shows, computed here rather
-// than assembled client-side from a generic {value, unit} pair, since
-// these span plain counts, ratios, percentages, and averages that don't
-// share one format.
+// `emblem` is a single distinguishing icon (see renderAchievements in
+// app.js) -- with 22 of these on one screen, a repeated generic trophy for
+// every card told a viewer nothing. Each `compute(ctx)` returns
+// {playerId, name, value, display} for the current season's winner, or
+// null if there's not enough data yet (a genuine empty state, not an
+// error). `display` is the exact string the frontend shows, computed here
+// rather than assembled client-side from a generic {value, unit} pair,
+// since these span plain counts, ratios, percentages, and averages that
+// don't share one format.
 const ACHIEVEMENTS = [
   {
     id: "most-damage",
     title: "I Hate My Friends",
+    emblem: "💥",
     description: "Most total damage dealt across the season.",
     compute(ctx) {
       const winner = topPlayer(ctx.eventStatsByPlayer, rows => sumField(rows, "damage_dealt"));
@@ -1731,6 +1734,7 @@ const ACHIEVEMENTS = [
   {
     id: "most-damage-game",
     title: "Overkill",
+    emblem: "☠️",
     description: "Most damage dealt in a single game.",
     compute(ctx) {
       let best = null;
@@ -1743,6 +1747,7 @@ const ACHIEVEMENTS = [
   {
     id: "most-healing",
     title: "The Medic",
+    emblem: "⚕️",
     description: "Most total healing done across the season.",
     compute(ctx) {
       const winner = topPlayer(ctx.eventStatsByPlayer, rows => sumField(rows, "healing_done"));
@@ -1752,6 +1757,7 @@ const ACHIEVEMENTS = [
   {
     id: "healing-ratio",
     title: "The Pacifist",
+    emblem: "🕊️",
     description: "Most healing done per point of damage dealt.",
     compute(ctx) {
       const winner = topPlayer(ctx.eventStatsByPlayer, rows => {
@@ -1766,6 +1772,7 @@ const ACHIEVEMENTS = [
   {
     id: "most-knockouts",
     title: "Grim Reaper",
+    emblem: "💀",
     description: "Most knockouts across the season.",
     compute(ctx) {
       const winner = topPlayer(ctx.eventStatsByPlayer, rows => sumField(rows, "knockouts"));
@@ -1775,6 +1782,7 @@ const ACHIEVEMENTS = [
   {
     id: "most-knockouts-game",
     title: "One-Man Army",
+    emblem: "🎖️",
     description: "Most knockouts in a single game.",
     compute(ctx) {
       let best = null;
@@ -1787,6 +1795,7 @@ const ACHIEVEMENTS = [
   {
     id: "most-fun",
     title: "Life of the Party",
+    emblem: "🎉",
     description: "Highest average self-reported fun rating.",
     compute(ctx) {
       const winner = topPlayer(ctx.eventStatsByPlayer, rows => avgField(rows, "fun_rating"), { minGames: MIN_GAMES_FOR_RATE });
@@ -1796,6 +1805,7 @@ const ACHIEVEMENTS = [
   {
     id: "saltiest",
     title: "Tilted",
+    emblem: "🧂",
     description: "Highest average self-reported salt rating.",
     compute(ctx) {
       const winner = topPlayer(ctx.eventStatsByPlayer, rows => avgField(rows, "salt_rating"), { minGames: MIN_GAMES_FOR_RATE });
@@ -1805,6 +1815,7 @@ const ACHIEVEMENTS = [
   {
     id: "most-mulligans",
     title: "Bad Hands",
+    emblem: "✋",
     description: "Most mulligans taken across the season.",
     compute(ctx) {
       const winner = topPlayer(ctx.eventStatsByPlayer, rows => sumField(rows, "mulligans_taken"));
@@ -1814,6 +1825,7 @@ const ACHIEVEMENTS = [
   {
     id: "fewest-mulligans",
     title: "Lucky Draw",
+    emblem: "🍀",
     description: "Lowest average mulligans taken per game.",
     compute(ctx) {
       const winner = topPlayer(ctx.eventStatsByPlayer, rows => avgField(rows, "mulligans_taken"), { minGames: MIN_GAMES_FOR_RATE, ascending: true });
@@ -1823,6 +1835,7 @@ const ACHIEVEMENTS = [
   {
     id: "most-confident",
     title: "Big Ego",
+    emblem: "😎",
     description: "Highest average self-rating.",
     compute(ctx) {
       const winner = topPlayer(ctx.eventStatsByPlayer, rows => avgField(rows, "self_rating"), { minGames: MIN_GAMES_FOR_RATE });
@@ -1832,6 +1845,7 @@ const ACHIEVEMENTS = [
   {
     id: "denial",
     title: "Denial",
+    emblem: "🙈",
     description: "Highest average self-rating in games they lost.",
     compute(ctx) {
       // self_rating lives in game_event_stats, result lives in
@@ -1849,6 +1863,7 @@ const ACHIEVEMENTS = [
   {
     id: "combat-wins",
     title: "Timmy Award",
+    emblem: "⚔️",
     description: "Most wins by combat damage.",
     compute(ctx) {
       const winner = topPlayer(winsByCondition(ctx.gameResults, wc => wc === "combat"), rows => rows.length);
@@ -1858,6 +1873,7 @@ const ACHIEVEMENTS = [
   {
     id: "altwin-wins",
     title: "Johnny Award",
+    emblem: "🧠",
     description: "Most wins by a non-combat win condition.",
     compute(ctx) {
       const winner = topPlayer(winsByCondition(ctx.gameResults, wc => !!wc && wc !== "combat"), rows => rows.length);
@@ -1867,6 +1883,7 @@ const ACHIEVEMENTS = [
   {
     id: "front-runner",
     title: "Front Runner",
+    emblem: "🏃",
     description: "Best win rate in games they went first.",
     compute(ctx) {
       const wentFirst = groupByPlayer(ctx.gameResults.filter(r => r.starting_player_id === r.player_id));
@@ -1879,6 +1896,7 @@ const ACHIEVEMENTS = [
   {
     id: "closest-call",
     title: "Nine Lives",
+    emblem: "🐈",
     description: "Won with the lowest life total remaining.",
     compute(ctx) {
       const resultByKey = new Map(ctx.gameResults.map(r => [`${r.game_id}:${r.player_id}`, r.result]));
@@ -1894,6 +1912,7 @@ const ACHIEVEMENTS = [
   {
     id: "untouchable",
     title: "Untouchable",
+    emblem: "🛡️",
     description: "Won with the highest life total remaining.",
     compute(ctx) {
       const resultByKey = new Map(ctx.gameResults.map(r => [`${r.game_id}:${r.player_id}`, r.result]));
@@ -1909,6 +1928,7 @@ const ACHIEVEMENTS = [
   {
     id: "bridesmaid",
     title: "Bridesmaid",
+    emblem: "🥈",
     description: "Most 2nd-place finishes across the season.",
     compute(ctx) {
       const winner = topPlayer(groupByPlayer(ctx.gameResults.filter(r => r.place === 2)), rows => rows.length);
@@ -1918,6 +1938,7 @@ const ACHIEVEMENTS = [
   {
     id: "wooden-spoon",
     title: "Wooden Spoon",
+    emblem: "🥄",
     description: "Most last-place finishes across the season.",
     compute(ctx) {
       const winner = topPlayer(groupByPlayer(ctx.gameResults.filter(r => r.place === r.pod_size)), rows => rows.length);
@@ -1927,6 +1948,7 @@ const ACHIEVEMENTS = [
   {
     id: "longest-survivor",
     title: "Last One Standing",
+    emblem: "🧍",
     description: "Highest average turn of elimination in games they lost.",
     compute(ctx) {
       const winner = topPlayer(groupByPlayer(ctx.gameResults.filter(r => r.result === 0)), rows => avgField(rows, "tov"), { minGames: MIN_GAMES_FOR_RATE });
@@ -1936,6 +1958,7 @@ const ACHIEVEMENTS = [
   {
     id: "early-exit",
     title: "Early Exit",
+    emblem: "🚪",
     description: "Lowest average turn of elimination in games they lost.",
     compute(ctx) {
       const winner = topPlayer(groupByPlayer(ctx.gameResults.filter(r => r.result === 0)), rows => avgField(rows, "tov"), { minGames: MIN_GAMES_FOR_RATE, ascending: true });
@@ -1945,6 +1968,7 @@ const ACHIEVEMENTS = [
   {
     id: "most-decks",
     title: "Brewmaster",
+    emblem: "🎴",
     description: "Most different decks piloted across the season.",
     compute(ctx) {
       const byPlayer = new Map();
@@ -2016,6 +2040,7 @@ async function handleAchievements(request, env) {
   const achievements = ACHIEVEMENTS.map(a => ({
     id: a.id,
     title: a.title,
+    emblem: a.emblem,
     description: a.description,
     winner: a.compute(ctx),
   }));

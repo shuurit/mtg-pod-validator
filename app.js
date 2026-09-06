@@ -461,7 +461,11 @@ function renderAchievements(achievements) {
 
     const icon = document.createElement("span");
     icon.className = "trophy-icon";
-    icon.textContent = "🏆";
+    // A distinct emoji per achievement (see ACHIEVEMENTS in relay.js) --
+    // with 22 cards on screen, a repeated generic trophy told a viewer
+    // nothing at a glance. Falls back to the trophy only if an older
+    // cached response predates this field.
+    icon.textContent = achievement.emblem || "🏆";
     icon.setAttribute("aria-hidden", "true");
     card.appendChild(icon);
 
