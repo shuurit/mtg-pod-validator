@@ -8,7 +8,7 @@
      older copy (GitHub Pages' cache headers otherwise mean a pull-to-
      refresh, which only re-fetches data, can leave a stale script running
      for a while) -- bump N here whenever either file changes. -->
-<link rel="stylesheet" href="style.css?v=12">
+<link rel="stylesheet" href="style.css?v=13">
 
 <!-- Home-screen icon (iOS "Add to Home Screen" + Android/Chrome install).
      Generated from icon-source.png via scripts/generate_icons.py -- rerun
@@ -33,6 +33,9 @@
 <div class="tab-bg" id="bg-games-to-update"></div>
 <div class="tab-bg" id="bg-update-app"></div>
 <div class="tab-bg" id="bg-winrates"></div>
+<!-- Reuses bg-winrates.webp -- no dedicated Achievements artwork exists
+     yet, and this is the other read-only stats tab, closest in tone. -->
+<div class="tab-bg" id="bg-achievements"></div>
 <!-- Visible by default, hidden once a signed-in session is confirmed --
      fails closed: nothing else on the page loads or fetches live data
      until then (see renderAuthGate/checkAuthSession in app.js), rather
@@ -98,6 +101,7 @@
     <button class="tab-btn" data-tab="games-to-update">Games to Update <span class="tab-badge" id="gtu-tab-badge" hidden></span></button>
     <button class="tab-btn" data-tab="update-app">New Player(s)/Deck(s) <span class="tab-badge" id="uta-tab-badge" hidden></span></button>
     <button class="tab-btn" data-tab="winrates">Player Win Rates</button>
+    <button class="tab-btn" data-tab="achievements">Achievements</button>
   </nav>
 
   <div id="tab-pod" class="tab-panel">
@@ -162,6 +166,19 @@
       <p class="hint" id="winrates-note"></p>
     </section>
   </div>
+
+  <div id="tab-achievements" class="tab-panel" hidden>
+    <section class="card">
+      <h2>Achievements</h2>
+      <p class="hint">Read-only, computed from playgroup.gg's own per-game event log. Season 3 is the only season with a full history so far.</p>
+      <div class="row align-center">
+        <label for="achievements-season-select">Season</label>
+        <select id="achievements-season-select"></select>
+      </div>
+      <p class="hint" id="achievements-status">Shuffling up…</p>
+      <div id="achievements-list"></div>
+    </section>
+  </div>
 </div>
 
 <!-- Touch-only mirror of #main-tabs above (hidden there via (pointer:
@@ -188,6 +205,10 @@
   <button class="bottom-tab-btn" data-tab="winrates">
     <span class="bottom-tab-icon" aria-hidden="true">📊</span>
     <span class="bottom-tab-label">Rates</span>
+  </button>
+  <button class="bottom-tab-btn" data-tab="achievements">
+    <span class="bottom-tab-icon" aria-hidden="true">🏆</span>
+    <span class="bottom-tab-label">Trophies</span>
   </button>
 </nav>
 
@@ -218,6 +239,6 @@
   </div>
 </div>
 
-<script src="app.js?v=13"></script>
+<script src="app.js?v=14"></script>
 </body>
 </html>

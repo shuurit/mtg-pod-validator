@@ -129,6 +129,13 @@ const MAX_DECK_CHECKS_PER_RUN = 32;
 const MAX_COMMANDER_LOOKUPS_PER_RUN = 12;
 const COMMANDER_NAME_MAX_AGE_MS = 21 * 24 * 60 * 60 * 1000; // 21 days
 
+// POST /achievements/backfill's own per-run cap, same reasoning as the two
+// above -- each game backfilled is one pgFetch call, well under Workers'
+// 50-subrequest limit even on its own, but capped so this stays callable
+// again rather than assuming the whole historical backlog always fits in
+// one run.
+const MAX_EVENT_STATS_BACKFILL_PER_RUN = 30;
+
 // See computePlaygroupGames -- a game's league classification is trusted
 // forever once it's older than this, but stays open to correction while
 // still within it (re-verified at most once per RECLASSIFY_MIN_INTERVAL_MS).
@@ -727,7 +734,72 @@ async function handleGamesWrite(request, env, ctx, session) {
     })
   );
 
+  // Fire-and-forget, same reasoning as the Discord dispatch above -- a
+  // failed/slow playgroup.gg event-log fetch here should never block or
+  // fail the actual game submission, since none of game_event_stats feeds
+  // the power-spread math (see schema.sql).
+  ctx.waitUntil(
+    computeAndStoreGameEventStats(env, gameId, payload.playgroupGameId ?? null).catch(err => {
+      console.error(`Failed to compute event stats for game ${gameId}:`, err);
+    })
+  );
+
   return jsonResponse({ ok: true, gameId, seasonId, gameNum, results: responseResults }, 201);
+}
+
+// Fetches one game's full event log from playgroup.gg and sums each
+// player's damage_dealt (normal_damage + commander_damage events),
+// healing_done, and knockouts (kill events), then stores one row per
+// participant in game_event_stats -- see that table's comment in
+// schema.sql for why this is computed once and stored rather than
+// re-summed on every /achievements read. Matches event.user_id and
+// participation.user_id (playgroup.gg's own ids) back to a player_id via
+// getUserIdToPlayerIdMap; a participant with no linked playgroup_user_id
+// (shouldn't happen for anyone this app tracks, but not asserted) is
+// silently skipped rather than failing the whole game's stats.
+// ON CONFLICT so this is safe to rerun -- both the backfill pass and a
+// resubmitted/corrected game rely on that.
+async function computeAndStoreGameEventStats(env, gameId, playgroupGameId) {
+  if (!playgroupGameId) return;
+
+  const res = await pgFetch(`/playgroups/${PLAYGROUP_ID}/games/${playgroupGameId}?include_events=true`, env);
+  if (!res.ok) {
+    console.error(`event-stats fetch failed for game ${playgroupGameId}: HTTP ${res.status}`);
+    return;
+  }
+  const raw = await res.json();
+  const userIdToPlayerId = await getUserIdToPlayerIdMap(env);
+
+  const totals = {}; // playerId -> { damage_dealt, healing_done, knockouts }
+  const bump = (playerId, field, amount) => {
+    if (!totals[playerId]) totals[playerId] = { damage_dealt: 0, healing_done: 0, knockouts: 0 };
+    totals[playerId][field] += amount;
+  };
+  for (const e of raw.events || []) {
+    const playerId = userIdToPlayerId[e.user_id];
+    if (!playerId) continue;
+    if (e.kind === "normal_damage" || e.kind === "commander_damage") bump(playerId, "damage_dealt", e.amount || 0);
+    else if (e.kind === "healing") bump(playerId, "healing_done", e.amount || 0);
+    else if (e.kind === "kill") bump(playerId, "knockouts", 1);
+  }
+
+  const stmts = [];
+  for (const p of raw.participations || []) {
+    const playerId = userIdToPlayerId[p.user_id];
+    if (!playerId) continue;
+    const t = totals[playerId] || { damage_dealt: 0, healing_done: 0, knockouts: 0 };
+    stmts.push(env.DB.prepare(`
+      INSERT INTO game_event_stats (game_id, player_id, damage_dealt, healing_done, knockouts, fun_rating, salt_rating, mulligans_taken)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (game_id, player_id) DO UPDATE SET
+        damage_dealt = excluded.damage_dealt, healing_done = excluded.healing_done, knockouts = excluded.knockouts,
+        fun_rating = excluded.fun_rating, salt_rating = excluded.salt_rating, mulligans_taken = excluded.mulligans_taken
+    `).bind(
+      gameId, playerId, t.damage_dealt, t.healing_done, t.knockouts,
+      p.fun_rating ?? null, p.salt_rating ?? null, p.mulligans_taken ?? null
+    ));
+  }
+  if (stmts.length > 0) await env.DB.batch(stmts);
 }
 
 // New players + new decks for existing players, in one combined write --
@@ -913,6 +985,18 @@ async function getUserIdToPlayerMap(env) {
   ).all();
   const map = {};
   for (const row of results) map[row.playgroup_user_id] = row.name;
+  return map;
+}
+
+// Same shape as getUserIdToPlayerMap above, but the D1 player id rather
+// than the display name -- what computeAndStoreGameEventStats needs to
+// write game_event_stats rows (player_id, not player name).
+async function getUserIdToPlayerIdMap(env) {
+  const { results } = await env.DB.prepare(
+    "SELECT id, playgroup_user_id FROM players WHERE playgroup_user_id IS NOT NULL"
+  ).all();
+  const map = {};
+  for (const row of results) map[row.playgroup_user_id] = row.id;
   return map;
 }
 
@@ -1542,6 +1626,103 @@ async function handleDeckWinRates(env) {
   return jsonResponse(data, 200, { "Cache-Control": "no-store" });
 }
 
+// ---------- GET /achievements, POST /achievements/backfill ----------
+
+// A small, deliberately extensible list rather than one hardcoded query --
+// adding a second achievement later means adding an entry here, not a
+// redesign. `rows` is every game_event_stats row (joined with player name)
+// for one season; `compute` returns the single winner or null if the
+// season has no rows yet. Ships with exactly one for now: the "I hate my
+// friends" concept already prototyped by hand against real Season 3 data
+// (see the mtg-pod-validator backlog) before any of this table/endpoint
+// existed -- most total damage dealt across the season.
+const ACHIEVEMENTS = [
+  {
+    id: "most-damage",
+    title: "I Hate My Friends",
+    description: "Most total damage dealt across the season.",
+    unit: "damage",
+    compute(rows) {
+      const byPlayer = new Map();
+      for (const r of rows) {
+        const entry = byPlayer.get(r.player_id) || { playerId: r.player_id, name: r.name, value: 0 };
+        entry.value += r.damage_dealt;
+        byPlayer.set(r.player_id, entry);
+      }
+      const ranked = [...byPlayer.values()].sort((a, b) => b.value - a.value);
+      return ranked[0] || null;
+    },
+  },
+];
+
+// season query param defaults to the most recent season (highest id) --
+// there's only ever one season active at a time in practice, so "most
+// recent" and "current" agree today; this just avoids the client having
+// to know a season id up front for the common case.
+async function handleAchievements(request, env) {
+  const url = new URL(request.url);
+  const seasonParam = url.searchParams.get("season");
+
+  const { results: seasons } = await env.DB.prepare("SELECT id, label FROM seasons ORDER BY id").all();
+  if (seasons.length === 0) {
+    return jsonResponse({ seasons: [], seasonId: null, achievements: [] }, 200, { "Cache-Control": "no-store" });
+  }
+
+  const seasonId = seasonParam ? Number(seasonParam) : seasons[seasons.length - 1].id;
+  if (!seasons.some(s => s.id === seasonId)) {
+    return jsonResponse({ error: `Unknown season ${seasonId}` }, 400);
+  }
+
+  const { results: rows } = await env.DB.prepare(`
+    SELECT s.player_id, p.name, s.damage_dealt, s.healing_done, s.knockouts
+    FROM game_event_stats s
+    JOIN games g ON g.id = s.game_id
+    JOIN players p ON p.id = s.player_id
+    WHERE g.season_id = ?
+  `).bind(seasonId).all();
+
+  const achievements = ACHIEVEMENTS.map(a => ({
+    id: a.id,
+    title: a.title,
+    description: a.description,
+    unit: a.unit,
+    winner: a.compute(rows),
+  }));
+
+  return jsonResponse({ seasons, seasonId, achievements }, 200, { "Cache-Control": "no-store" });
+}
+
+// One-time (or safe-to-rerun) pass for games logged before
+// game_event_stats existed -- every game with a known playgroup_game_id
+// that has no stats row yet, oldest first, capped per call (see
+// MAX_EVENT_STATS_BACKFILL_PER_RUN). `remaining: true` means call this
+// again to pick up where it left off. computeAndStoreGameEventStats's own
+// ON CONFLICT makes this idempotent, so a partial failure just means the
+// next call retries whatever's still missing.
+async function handleAchievementsBackfill(env) {
+  const { results: rows } = await env.DB.prepare(`
+    SELECT g.id AS game_id, g.playgroup_game_id
+    FROM games g
+    WHERE g.playgroup_game_id IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM game_event_stats s WHERE s.game_id = g.id)
+    ORDER BY g.id
+    LIMIT ?
+  `).bind(MAX_EVENT_STATS_BACKFILL_PER_RUN).all();
+
+  let processed = 0;
+  const errors = [];
+  for (const row of rows) {
+    try {
+      await computeAndStoreGameEventStats(env, row.game_id, row.playgroup_game_id);
+      processed++;
+    } catch (err) {
+      errors.push({ gameId: row.game_id, error: String(err.message || err) });
+    }
+  }
+
+  return jsonResponse({ processed, remaining: rows.length === MAX_EVENT_STATS_BACKFILL_PER_RUN, errors }, 200);
+}
+
 // ---------- router ----------
 
 export default {
@@ -1624,6 +1805,14 @@ export default {
 
     if (request.method === "GET" && url.pathname === "/deck-win-rates") {
       return handleDeckWinRates(env);
+    }
+
+    if (request.method === "GET" && url.pathname === "/achievements") {
+      return handleAchievements(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/achievements/backfill") {
+      return handleAchievementsBackfill(env);
     }
 
     if (request.method === "GET" && url.pathname === "/debug/game") {

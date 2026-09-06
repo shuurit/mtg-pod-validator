@@ -24,6 +24,7 @@ const DECK_BRACKET_RELAY_URL = RELAY_BASE_URL + "/decks/bracket";
 const DECK_POTENTIAL_BRACKET4_RELAY_URL = RELAY_BASE_URL + "/decks/potential-bracket-4";
 const AUTH_ME_RELAY_URL = RELAY_BASE_URL + "/auth/me";
 const AUTH_LOGOUT_RELAY_URL = RELAY_BASE_URL + "/auth/logout";
+const ACHIEVEMENTS_RELAY_URL = RELAY_BASE_URL + "/achievements";
 
 // Discord OAuth sign-in. Client ID is public (it's part of the login URL
 // below), matches the constant of the same name in relay.js -- the Client
@@ -384,6 +385,125 @@ async function syncFromD1() {
     }
     const gtuStatus = document.getElementById("gtu-status");
     if (gtuStatus) gtuStatus.textContent = `Couldn't load live data — Games to Update needs it to know what's already logged.`;
+  }
+}
+
+// ---------- Achievements ----------
+// Season standings computed server-side (GET /achievements, relay.js) from
+// playgroup.gg's own event log -- nothing here is computed client-side,
+// unlike Player Win Rates' live formula preview, since there's no
+// pre-submit case that needs one. selectedAchievementsSeasonId tracks
+// the season <select>'s own current choice, not necessarily the server's
+// default -- kept separate so switching seasons re-fetches that season
+// specifically rather than always re-asking for "the latest."
+let selectedAchievementsSeasonId = null;
+
+async function loadAchievements() {
+  const statusEl = document.getElementById("achievements-status");
+  const listEl = document.getElementById("achievements-list");
+  try {
+    const url = selectedAchievementsSeasonId
+      ? `${ACHIEVEMENTS_RELAY_URL}?season=${selectedAchievementsSeasonId}`
+      : ACHIEVEMENTS_RELAY_URL;
+    const res = await fetch(url, { cache: "no-store", headers: authHeaders() });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    selectedAchievementsSeasonId = data.seasonId;
+    renderAchievementsSeasonSelect(data.seasons, data.seasonId);
+    renderAchievements(data.achievements);
+    if (statusEl) statusEl.hidden = true;
+  } catch (err) {
+    if (listEl) listEl.innerHTML = "";
+    if (statusEl) {
+      statusEl.hidden = false;
+      statusEl.textContent = `Couldn't load achievements (${err.message}).`;
+    }
+  }
+}
+
+function renderAchievementsSeasonSelect(seasons, seasonId) {
+  const sel = document.getElementById("achievements-season-select");
+  if (!sel) return;
+  sel.innerHTML = "";
+  for (const season of seasons) {
+    const opt = document.createElement("option");
+    opt.value = season.id;
+    opt.textContent = season.label;
+    sel.appendChild(opt);
+  }
+  sel.value = seasonId;
+}
+
+// One trophy card per achievement (just one for now -- most damage dealt,
+// see ACHIEVEMENTS in relay.js). `winner` is null when the season has no
+// game_event_stats rows at all yet (e.g. a brand-new season, or an old one
+// pre-dating the backfill) -- a genuine empty state, not an error.
+function renderAchievements(achievements) {
+  const container = document.getElementById("achievements-list");
+  container.innerHTML = "";
+
+  if (achievements.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "hint";
+    empty.textContent = "No achievements defined yet.";
+    container.appendChild(empty);
+    return;
+  }
+
+  for (const achievement of achievements) {
+    const card = document.createElement("div");
+    card.className = "trophy-card";
+
+    const icon = document.createElement("span");
+    icon.className = "trophy-icon";
+    icon.textContent = "🏆";
+    icon.setAttribute("aria-hidden", "true");
+    card.appendChild(icon);
+
+    const body = document.createElement("div");
+    body.className = "trophy-body";
+
+    const title = document.createElement("div");
+    title.className = "trophy-title";
+    title.textContent = achievement.title;
+    body.appendChild(title);
+
+    const description = document.createElement("div");
+    description.className = "trophy-description";
+    description.textContent = achievement.description;
+    body.appendChild(description);
+
+    if (achievement.winner) {
+      const winnerRow = document.createElement("div");
+      winnerRow.className = "trophy-winner";
+      const name = document.createElement("span");
+      name.className = "trophy-winner-name";
+      name.textContent = achievement.winner.name;
+      const value = document.createElement("span");
+      value.className = "trophy-winner-value";
+      value.textContent = `${achievement.winner.value.toLocaleString()} ${achievement.unit}`;
+      winnerRow.appendChild(name);
+      winnerRow.appendChild(value);
+      body.appendChild(winnerRow);
+    } else {
+      const empty = document.createElement("div");
+      empty.className = "trophy-empty";
+      empty.textContent = "No data for this season yet.";
+      body.appendChild(empty);
+    }
+
+    card.appendChild(body);
+    container.appendChild(card);
+  }
+}
+
+function initAchievementsTab() {
+  const sel = document.getElementById("achievements-season-select");
+  if (sel) {
+    sel.addEventListener("change", () => {
+      selectedAchievementsSeasonId = sel.value ? Number(sel.value) : null;
+      loadAchievements();
+    });
   }
 }
 
@@ -3696,9 +3816,12 @@ checkAuthSession().then(() => {
     renderSkeletonCards(document.getElementById("gtu-game-list"), 2, ["medium", "short"]);
     renderSkeletonCards(document.getElementById("uta-list"), 2, ["medium", "short"]);
     renderSkeletonCards(document.getElementById("winrates-table"), 4, ["short", "medium"]);
+    renderSkeletonCards(document.getElementById("achievements-list"), 1, ["medium", "short"]);
+    initAchievementsTab();
     syncFromD1();
     refreshPlaygroupGames();
     loadRosterDiff();
+    loadAchievements();
   }
 });
 
@@ -3725,7 +3848,7 @@ async function refreshEverything() {
   // three now-guaranteed-401 requests every time a signed-out visitor
   // switches back to the tab.
   if (!currentUser) return;
-  await Promise.all([syncFromD1(), refreshPlaygroupGames(), loadRosterDiff()]);
+  await Promise.all([syncFromD1(), refreshPlaygroupGames(), loadRosterDiff(), loadAchievements()]);
 }
 
 // Only fires on an actual open/return to the app, not a timer -- catches

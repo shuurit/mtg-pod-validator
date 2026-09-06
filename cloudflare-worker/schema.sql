@@ -156,3 +156,30 @@ CREATE INDEX idx_decks_player ON decks(player_id);
 CREATE INDEX idx_games_season ON games(season_id);
 CREATE INDEX idx_game_results_player ON game_results(player_id);
 CREATE INDEX idx_game_results_deck ON game_results(deck_id);
+
+-- Per-player, per-game stats summed from playgroup.gg's own event log
+-- (normal_damage/commander_damage/healing/kill events) plus its
+-- participations' self-reported fields -- see
+-- computeAndStoreGameEventStats in relay.js. Computed once, either at
+-- write time (handleGamesWrite, which already resolves playgroup_game_id)
+-- or via the one-time POST /achievements/backfill pass for games logged
+-- before this table existed -- same "compute once, store the result"
+-- pattern game_results already uses for its own formula columns, never
+-- recomputed live on every read. Added for the Seasonal Achievements
+-- feature (GET /achievements); none of these columns feed the
+-- power-spread math.
+CREATE TABLE game_event_stats (
+  game_id INTEGER NOT NULL REFERENCES games(id),
+  player_id INTEGER NOT NULL REFERENCES players(id),
+  damage_dealt INTEGER NOT NULL DEFAULT 0,
+  healing_done INTEGER NOT NULL DEFAULT 0,
+  knockouts INTEGER NOT NULL DEFAULT 0,
+  -- Straight from playgroup.gg's participations array, not derived --
+  -- self-reported per player per game. Nullable, not "0 means none":
+  -- confirmed against a real game that mulligans_taken in particular is
+  -- often null (not consistently recorded).
+  fun_rating INTEGER,
+  salt_rating INTEGER,
+  mulligans_taken INTEGER,
+  PRIMARY KEY (game_id, player_id)
+);

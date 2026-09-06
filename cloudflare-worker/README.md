@@ -90,12 +90,24 @@ works without one.
   precomputed.
 - `GET /deck-win-rates` — games/wins/win-rate per deck, and per player
   (subtotal). Used by the Discord scripts (`scripts/discord_report.py`).
+- `GET /achievements?season=<id>` — season standings for a small,
+  extensible list of achievements (currently one: most total damage dealt)
+  computed from `game_event_stats`. `season` defaults to the most recent
+  season. Powers the app's Achievements tab.
+- `POST /achievements/backfill` — one-time (safe-to-rerun) pass that fills
+  in `game_event_stats` for games logged before that table existed, by
+  re-fetching each one's event log from playgroup.gg. Capped per call
+  (`MAX_EVENT_STATS_BACKFILL_PER_RUN`); call again if the response says
+  `remaining: true`.
 - `POST /games` — logs a game: resolves the season from playgroup.gg's
   *current* active league (never trusted from the client, auto-creating a
   season the first time a league is seen), resolves each participant's
   player/deck by exact name match, computes and stores every per-game
   formula value, then fires the `post-discord` dispatch (fire-and-forget)
-  described below.
+  described below. Also fires a second fire-and-forget task that fetches
+  this game's event log from playgroup.gg and stores its `game_event_stats`
+  row (see `GET /achievements` above) — a failure there never fails the
+  game submission itself.
 - `POST /roster` — adds a new player (with their starting decks) and/or
   new decks for existing players, in one combined write.
 
