@@ -930,6 +930,66 @@ td.num {
   .power-chip::after { display: none; }
 }
 
+/* "Everyone's power at a glance" -- see buildPowerOverviewStrip in app.js.
+   One pill per player above the collapsible list below (expandedPlayerId
+   stays single-open there for phone-friendly card heights, which is
+   exactly why this exists). Wraps to multiple lines on a narrow screen
+   rather than scrolling sideways, same reasoning as the rest of this app's
+   wide-content handling. */
+.power-overview-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.power-overview-card {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  border-radius: 999px;
+  padding: 5px 10px 5px 12px;
+  cursor: pointer;
+}
+.power-overview-card:hover {
+  border-color: var(--accent);
+}
+
+.power-overview-name {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.power-overview-dots {
+  display: flex;
+  gap: 3px;
+}
+
+/* Smaller sibling of .power-chip, same tier thresholds and colors
+   (powerTierClass takes a prefix specifically so these two never drift
+   apart) -- a pill, not a circle, since the number here is 2-3 digits
+   inside a much tighter footprint than the coin above affords. */
+.power-overview-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.power-overview-dot-low { background: var(--accent-soft); color: var(--accent); }
+.power-overview-dot-mid { background: var(--good-bg); color: var(--good); }
+.power-overview-dot-high { background: var(--warn-bg); color: var(--warn); }
+.power-overview-dot-max { background: var(--bad-bg); color: var(--bad); }
+
 /* Shared sort control -- see buildSortBar in app.js. Functionally
    identical to the sortable <th>s a table used to have, just rendered as
    plain buttons since neither list below (deck plates, win-rate cards) is

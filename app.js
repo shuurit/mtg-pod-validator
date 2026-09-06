@@ -570,6 +570,57 @@ function buildPowerChip(power) {
   return chip;
 }
 
+// A single compact row above the per-player list itself (see
+// renderPlayersTable) so the whole group's power spread reads at a glance
+// without expanding every row -- expandedPlayerId stays deliberately
+// single-open below for phone-friendly card heights, which otherwise means
+// there's no way to eyeball everyone at once. One pill per player, one
+// small dot per active deck inside it (reusing powerTierClass's thresholds,
+// same as buildPowerChip) -- clicking a pill expands that player's own
+// card and scrolls it into view rather than duplicating any deck detail
+// here. Skipped entirely at 1 or fewer players: nothing to compare yet.
+function buildPowerOverviewStrip() {
+  if (podPlayers.length <= 1) return null;
+
+  const strip = document.createElement("div");
+  strip.className = "power-overview-strip";
+
+  for (const player of podPlayers) {
+    const activeDecks = player.decks.filter(d => !d.archived);
+    if (activeDecks.length === 0) continue;
+
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "power-overview-card";
+    card.addEventListener("click", () => {
+      expandedPlayerId = player.id;
+      renderPlayersTable();
+      document.getElementById(`player-block-${player.id}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+
+    const name = document.createElement("span");
+    name.className = "power-overview-name";
+    name.textContent = player.name;
+    card.appendChild(name);
+
+    const dots = document.createElement("span");
+    dots.className = "power-overview-dots";
+    for (const deck of activeDecks) {
+      const dot = document.createElement("span");
+      dot.className = `power-overview-dot ${powerTierClass(deck.power, "power-overview-dot")}`;
+      dot.textContent = formatPower(deck.power);
+      dot.title = deck.name;
+      dots.appendChild(dot);
+    }
+    card.appendChild(dots);
+
+    strip.appendChild(card);
+  }
+
+  return strip;
+}
+
 // POSTs decks.potential_bracket_4 (see schema.sql) and refreshes -- the
 // curated flag that decides whether Games to Update ever shows this deck's
 // early-combo checkbox at all. A rare, deliberate toggle, not a per-game
@@ -816,6 +867,9 @@ function renderPlayersTable() {
     return;
   }
 
+  const overviewStrip = buildPowerOverviewStrip();
+  if (overviewStrip) container.appendChild(overviewStrip);
+
   for (const player of podPlayers) {
     const isExpanded = expandedPlayerId === player.id;
     // Archived on playgroup.gg means retired -- not shown here, and not
@@ -824,6 +878,8 @@ function renderPlayersTable() {
 
     const block = document.createElement("div");
     block.className = "player-block";
+    // Scroll target for buildPowerOverviewStrip's pills above.
+    block.id = `player-block-${player.id}`;
 
     const header = document.createElement("div");
     header.className = "player-block-header";
