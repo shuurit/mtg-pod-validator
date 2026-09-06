@@ -749,6 +749,11 @@ header h1 {
   justify-content: center;
   gap: 10px;
   flex-wrap: wrap;
+  /* The illustrated-badge path has no .trophy-description above this to
+     supply spacing (title+description are baked into the image itself
+     now) -- margin here instead of relying on a sibling that isn't always
+     there. */
+  margin-top: 10px;
 }
 
 .trophy-winner-name {
@@ -765,6 +770,7 @@ header h1 {
 .trophy-empty {
   color: var(--muted);
   font-size: 0.9rem;
+  margin-top: 10px; /* same reasoning as .trophy-winner's margin-top above */
 }
 .note-line:first-child {
   margin-top: 0;
