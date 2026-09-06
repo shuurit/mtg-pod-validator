@@ -90,10 +90,13 @@ works without one.
   precomputed.
 - `GET /deck-win-rates` — games/wins/win-rate per deck, and per player
   (subtotal). Used by the Discord scripts (`scripts/discord_report.py`).
-- `GET /achievements?season=<id>` — season standings for a small,
-  extensible list of achievements (currently one: most total damage dealt)
-  computed from `game_event_stats`. `season` defaults to the most recent
-  season. Powers the app's Achievements tab.
+- `GET /achievements?season=<id>` — season standings for an extensible
+  list of achievements (29 as of this writing) computed from
+  `game_event_stats` and `game_results`. `season` defaults to the most
+  recent season. Winners are withheld (`winner: null` for everything,
+  `seasonActive: true` in the response) while that season is still being
+  played, revealed once playgroup.gg's active league moves on. Powers the
+  app's Achievements tab.
 - `POST /achievements/backfill[?force=true]` — one-time (safe-to-rerun)
   pass that fills in `game_event_stats` for games logged before that table
   existed, by re-fetching each one's event log from playgroup.gg. Capped

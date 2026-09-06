@@ -206,5 +206,14 @@ CREATE TABLE game_event_stats (
   -- starting life, which real Commander games do allow) -- both are
   -- accurate, not errors.
   ending_life INTEGER,
+  -- pause_start/pause_stop and undo events, both previously uncaptured.
+  -- pauses_called counts pause_start events attributed to whoever called
+  -- them; pause_seconds pairs each pause_start with the next pause_stop
+  -- chronologically (not necessarily the same user_id -- anyone can
+  -- resume) and sums the duration, still attributed to whoever called the
+  -- pause. undos is a plain per-player event count.
+  pauses_called INTEGER NOT NULL DEFAULT 0,
+  pause_seconds INTEGER NOT NULL DEFAULT 0,
+  undos INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (game_id, player_id)
 );

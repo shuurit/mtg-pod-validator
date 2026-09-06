@@ -760,7 +760,10 @@ async function handleGamesWrite(request, env, ctx, session) {
 // ON CONFLICT so this is safe to rerun -- both the backfill pass and a
 // resubmitted/corrected game rely on that.
 function emptyEventTotals() {
-  return { damage_dealt: 0, healing_done: 0, knockouts: 0, damage_taken: 0, healing_received: 0, self_rating: null };
+  return {
+    damage_dealt: 0, healing_done: 0, knockouts: 0, damage_taken: 0, healing_received: 0, self_rating: null,
+    pauses_called: 0, pause_seconds: 0, undos: 0,
+  };
 }
 
 async function computeAndStoreGameEventStats(env, gameId, playgroupGameId) {
@@ -798,6 +801,30 @@ async function computeAndStoreGameEventStats(env, gameId, playgroupGameId) {
       // deriveGameFieldsFromRawGame in app.js already applies to kill
       // events via happened_at ordering.
       if (startingPlayerId === null && playerId) startingPlayerId = playerId;
+    } else if (e.kind === "undo") {
+      if (playerId) get(playerId).undos += 1;
+    } else if (e.kind === "pause_start") {
+      if (playerId) get(playerId).pauses_called += 1;
+    }
+  }
+
+  // Pause duration needs strict chronological pairing (a pause_start's
+  // matching pause_stop, whoever ends up resuming -- confirmed against a
+  // real game that it's usually but not always the same user_id), so this
+  // is its own pass over events sorted by happened_at rather than folded
+  // into the single pass above. Attributed to whoever CALLED the pause,
+  // not whoever ended it. An unmatched trailing pause_start (game data
+  // exported mid-pause) contributes nothing rather than guessing an end.
+  const sortedEvents = [...(raw.events || [])].sort((a, b) => new Date(a.happened_at) - new Date(b.happened_at));
+  let openPause = null;
+  for (const e of sortedEvents) {
+    if (e.kind === "pause_start") {
+      const playerId = userIdToPlayerId[e.user_id];
+      openPause = { startedAt: new Date(e.happened_at), playerId };
+    } else if (e.kind === "pause_stop" && openPause) {
+      const seconds = Math.max(0, Math.round((new Date(e.happened_at) - openPause.startedAt) / 1000));
+      if (openPause.playerId) get(openPause.playerId).pause_seconds += seconds;
+      openPause = null;
     }
   }
 
@@ -813,18 +840,21 @@ async function computeAndStoreGameEventStats(env, gameId, playgroupGameId) {
       INSERT INTO game_event_stats (
         game_id, player_id, damage_dealt, healing_done, knockouts,
         fun_rating, salt_rating, mulligans_taken, self_rating,
-        damage_taken, healing_received, ending_life
+        damage_taken, healing_received, ending_life,
+        pauses_called, pause_seconds, undos
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (game_id, player_id) DO UPDATE SET
         damage_dealt = excluded.damage_dealt, healing_done = excluded.healing_done, knockouts = excluded.knockouts,
         fun_rating = excluded.fun_rating, salt_rating = excluded.salt_rating, mulligans_taken = excluded.mulligans_taken,
         self_rating = excluded.self_rating, damage_taken = excluded.damage_taken,
-        healing_received = excluded.healing_received, ending_life = excluded.ending_life
+        healing_received = excluded.healing_received, ending_life = excluded.ending_life,
+        pauses_called = excluded.pauses_called, pause_seconds = excluded.pause_seconds, undos = excluded.undos
     `).bind(
       gameId, playerId, t.damage_dealt, t.healing_done, t.knockouts,
       p.fun_rating ?? null, p.salt_rating ?? null, p.mulligans_taken ?? null, t.self_rating,
-      t.damage_taken, t.healing_received, endingLife
+      t.damage_taken, t.healing_received, endingLife,
+      t.pauses_called, t.pause_seconds, t.undos
     ));
   }
 
@@ -1987,6 +2017,78 @@ const ACHIEVEMENTS = [
       return best && best.value > 0 ? { ...best, display: `${best.value} different deck${best.value === 1 ? "" : "s"}` } : null;
     },
   },
+  {
+    id: "most-popoffs",
+    title: "Went Off",
+    description: "Most pop-off turns across the season.",
+    compute(ctx) {
+      const winner = topPlayer(groupByPlayer(ctx.gameResults), rows => sumField(rows, "pop_off"));
+      return winner && winner.value > 0 ? { ...winner, display: `${winner.value} pop-off${winner.value === 1 ? "" : "s"}` } : null;
+    },
+  },
+  {
+    id: "most-disruptions",
+    title: "The Wrench",
+    description: "Most disruptions across the season.",
+    compute(ctx) {
+      const winner = topPlayer(groupByPlayer(ctx.gameResults), rows => sumField(rows, "disruptions"));
+      return winner && winner.value > 0 ? { ...winner, display: `${winner.value} disruption${winner.value === 1 ? "" : "s"}` } : null;
+    },
+  },
+  {
+    id: "best-recovery-rate",
+    title: "Comeback Kid",
+    description: "Best recovery rate after being disrupted.",
+    compute(ctx) {
+      const byPlayer = groupByPlayer(ctx.gameResults);
+      const winner = topPlayer(byPlayer, rows => {
+        const disruptions = sumField(rows, "disruptions");
+        if (disruptions === 0) return null; // never disrupted -- nothing to recover from, not a perfect score
+        return sumField(rows, "recoveries") / disruptions;
+      }, { minGames: MIN_GAMES_FOR_RATE });
+      if (!winner) return null;
+      const rows = byPlayer.find(p => p.playerId === winner.playerId).rows;
+      return { ...winner, display: `${Math.round(winner.value * 100)}% recovery rate (${sumField(rows, "disruptions")} disruptions)` };
+    },
+  },
+  {
+    id: "most-behind",
+    title: "Never Say Die",
+    description: "Most games clearly behind across the season.",
+    compute(ctx) {
+      const winner = topPlayer(groupByPlayer(ctx.gameResults), rows => sumField(rows, "games_clearly_behind"));
+      return winner && winner.value > 0 ? { ...winner, display: `${winner.value} game${winner.value === 1 ? "" : "s"} clearly behind` } : null;
+    },
+  },
+  {
+    id: "most-pauses",
+    title: "Hold Everything",
+    description: "Most pauses called across the season.",
+    compute(ctx) {
+      const winner = topPlayer(ctx.eventStatsByPlayer, rows => sumField(rows, "pauses_called"));
+      return winner && winner.value > 0 ? { ...winner, display: `${winner.value} pause${winner.value === 1 ? "" : "s"} called` } : null;
+    },
+  },
+  {
+    id: "longest-pause",
+    title: "Bio Break Champion",
+    description: "Most total time spent paused across the season.",
+    compute(ctx) {
+      const winner = topPlayer(ctx.eventStatsByPlayer, rows => sumField(rows, "pause_seconds"));
+      if (!winner || winner.value <= 0) return null;
+      const minutes = winner.value / 60;
+      return { ...winner, display: `${minutes.toFixed(1)} min paused` };
+    },
+  },
+  {
+    id: "most-undos",
+    title: "Second-Guesser",
+    description: "Most undos across the season.",
+    compute(ctx) {
+      const winner = topPlayer(ctx.eventStatsByPlayer, rows => sumField(rows, "undos"));
+      return winner && winner.value > 0 ? { ...winner, display: `${winner.value} undo${winner.value === 1 ? "" : "s"}` } : null;
+    },
+  },
 ];
 
 // One season's worth of raw material every achievement above draws from --
@@ -2001,7 +2103,8 @@ async function gatherAchievementContext(env, seasonId) {
     env.DB.prepare(`
       SELECT s.game_id, s.player_id, p.name, s.damage_dealt, s.healing_done, s.knockouts,
              s.fun_rating, s.salt_rating, s.mulligans_taken, s.self_rating,
-             s.damage_taken, s.healing_received, s.ending_life
+             s.damage_taken, s.healing_received, s.ending_life,
+             s.pauses_called, s.pause_seconds, s.undos
       FROM game_event_stats s
       JOIN games g ON g.id = s.game_id
       JOIN players p ON p.id = s.player_id
@@ -2009,6 +2112,7 @@ async function gatherAchievementContext(env, seasonId) {
     `).bind(seasonId).all(),
     env.DB.prepare(`
       SELECT gr.game_id, gr.player_id, p.name, gr.place, gr.result, gr.tov, gr.deck_id,
+             gr.pop_off, gr.disruptions, gr.recoveries, gr.games_clearly_behind,
              g.pod_size, g.win_con, g.starting_player_id
       FROM game_results gr
       JOIN games g ON g.id = gr.game_id
