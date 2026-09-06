@@ -696,9 +696,21 @@ header h1 {
 }
 
 .trophy-icon {
-  font-size: 1.8rem;
+  font-size: 1.8rem; /* only used by the plain-emoji fallback, see app.js */
   line-height: 1;
   flex: 0 0 auto;
+}
+
+/* The illustrated badges already have their own irregular spiky-crowned
+   silhouette baked in (cropped + chroma-keyed from source art, not a
+   plain circle) -- no border-radius clip here, that would just cut the
+   crown points off. Sized bigger than the old emoji was, since the
+   illustration is the point now, not a supporting icon next to the text. */
+.trophy-icon-img {
+  display: block;
+  width: 56px;
+  height: 56px;
+  object-fit: contain;
 }
 
 .trophy-body {

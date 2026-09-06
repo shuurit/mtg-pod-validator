@@ -1711,9 +1711,13 @@ const MIN_GAMES_FOR_RATE = 3;
 
 // A small, deliberately extensible list rather than one hardcoded query --
 // adding another achievement means adding an entry here, not a redesign.
-// `emblem` is a single distinguishing icon (see renderAchievements in
-// app.js) -- with 22 of these on one screen, a repeated generic trophy for
-// every card told a viewer nothing. Each `compute(ctx)` returns
+// `emblem` is a path (relative to the static site's own root, not this
+// Worker) to a custom-illustrated badge PNG -- see renderAchievements in
+// app.js and the /emblems directory. Cropped and chroma-keyed (black ->
+// transparent) from one big AI-generated "badge grid" image, not drawn by
+// hand -- replaced an earlier emoji-per-card version, which itself
+// replaced a single repeated generic trophy icon. Each `compute(ctx)`
+// returns
 // {playerId, name, value, display} for the current season's winner, or
 // null if there's not enough data yet (a genuine empty state, not an
 // error). `display` is the exact string the frontend shows, computed here
@@ -1724,7 +1728,7 @@ const ACHIEVEMENTS = [
   {
     id: "most-damage",
     title: "I Hate My Friends",
-    emblem: "💥",
+    emblem: "emblems/most-damage.png",
     description: "Most total damage dealt across the season.",
     compute(ctx) {
       const winner = topPlayer(ctx.eventStatsByPlayer, rows => sumField(rows, "damage_dealt"));
@@ -1734,7 +1738,7 @@ const ACHIEVEMENTS = [
   {
     id: "most-damage-game",
     title: "Overkill",
-    emblem: "☠️",
+    emblem: "emblems/most-damage-game.png",
     description: "Most damage dealt in a single game.",
     compute(ctx) {
       let best = null;
@@ -1747,7 +1751,7 @@ const ACHIEVEMENTS = [
   {
     id: "most-healing",
     title: "The Medic",
-    emblem: "⚕️",
+    emblem: "emblems/most-healing.png",
     description: "Most total healing done across the season.",
     compute(ctx) {
       const winner = topPlayer(ctx.eventStatsByPlayer, rows => sumField(rows, "healing_done"));
@@ -1757,7 +1761,7 @@ const ACHIEVEMENTS = [
   {
     id: "healing-ratio",
     title: "The Pacifist",
-    emblem: "🕊️",
+    emblem: "emblems/healing-ratio.png",
     description: "Most healing done per point of damage dealt.",
     compute(ctx) {
       const winner = topPlayer(ctx.eventStatsByPlayer, rows => {
@@ -1772,7 +1776,7 @@ const ACHIEVEMENTS = [
   {
     id: "most-knockouts",
     title: "Grim Reaper",
-    emblem: "💀",
+    emblem: "emblems/most-knockouts.png",
     description: "Most knockouts across the season.",
     compute(ctx) {
       const winner = topPlayer(ctx.eventStatsByPlayer, rows => sumField(rows, "knockouts"));
@@ -1782,7 +1786,7 @@ const ACHIEVEMENTS = [
   {
     id: "most-knockouts-game",
     title: "One-Man Army",
-    emblem: "🎖️",
+    emblem: "emblems/most-knockouts-game.png",
     description: "Most knockouts in a single game.",
     compute(ctx) {
       let best = null;
@@ -1795,7 +1799,7 @@ const ACHIEVEMENTS = [
   {
     id: "most-fun",
     title: "Life of the Party",
-    emblem: "🎉",
+    emblem: "emblems/most-fun.png",
     description: "Highest average self-reported fun rating.",
     compute(ctx) {
       const winner = topPlayer(ctx.eventStatsByPlayer, rows => avgField(rows, "fun_rating"), { minGames: MIN_GAMES_FOR_RATE });
@@ -1805,7 +1809,7 @@ const ACHIEVEMENTS = [
   {
     id: "saltiest",
     title: "Tilted",
-    emblem: "🧂",
+    emblem: "emblems/saltiest.png",
     description: "Highest average self-reported salt rating.",
     compute(ctx) {
       const winner = topPlayer(ctx.eventStatsByPlayer, rows => avgField(rows, "salt_rating"), { minGames: MIN_GAMES_FOR_RATE });
@@ -1815,7 +1819,7 @@ const ACHIEVEMENTS = [
   {
     id: "most-mulligans",
     title: "Bad Hands",
-    emblem: "✋",
+    emblem: "emblems/most-mulligans.png",
     description: "Most mulligans taken across the season.",
     compute(ctx) {
       const winner = topPlayer(ctx.eventStatsByPlayer, rows => sumField(rows, "mulligans_taken"));
@@ -1825,7 +1829,7 @@ const ACHIEVEMENTS = [
   {
     id: "fewest-mulligans",
     title: "Lucky Draw",
-    emblem: "🍀",
+    emblem: "emblems/fewest-mulligans.png",
     description: "Lowest average mulligans taken per game.",
     compute(ctx) {
       const winner = topPlayer(ctx.eventStatsByPlayer, rows => avgField(rows, "mulligans_taken"), { minGames: MIN_GAMES_FOR_RATE, ascending: true });
@@ -1835,7 +1839,7 @@ const ACHIEVEMENTS = [
   {
     id: "most-confident",
     title: "Big Ego",
-    emblem: "😎",
+    emblem: "emblems/most-confident.png",
     description: "Highest average self-rating.",
     compute(ctx) {
       const winner = topPlayer(ctx.eventStatsByPlayer, rows => avgField(rows, "self_rating"), { minGames: MIN_GAMES_FOR_RATE });
@@ -1845,7 +1849,7 @@ const ACHIEVEMENTS = [
   {
     id: "denial",
     title: "Denial",
-    emblem: "🙈",
+    emblem: "emblems/denial.png",
     description: "Highest average self-rating in games they lost.",
     compute(ctx) {
       // self_rating lives in game_event_stats, result lives in
@@ -1863,7 +1867,7 @@ const ACHIEVEMENTS = [
   {
     id: "combat-wins",
     title: "Timmy Award",
-    emblem: "⚔️",
+    emblem: "emblems/combat-wins.png",
     description: "Most wins by combat damage.",
     compute(ctx) {
       const winner = topPlayer(winsByCondition(ctx.gameResults, wc => wc === "combat"), rows => rows.length);
@@ -1873,7 +1877,7 @@ const ACHIEVEMENTS = [
   {
     id: "altwin-wins",
     title: "Johnny Award",
-    emblem: "🧠",
+    emblem: "emblems/altwin-wins.png",
     description: "Most wins by a non-combat win condition.",
     compute(ctx) {
       const winner = topPlayer(winsByCondition(ctx.gameResults, wc => !!wc && wc !== "combat"), rows => rows.length);
@@ -1883,7 +1887,7 @@ const ACHIEVEMENTS = [
   {
     id: "front-runner",
     title: "Front Runner",
-    emblem: "🏃",
+    emblem: "emblems/front-runner.png",
     description: "Best win rate in games they went first.",
     compute(ctx) {
       const wentFirst = groupByPlayer(ctx.gameResults.filter(r => r.starting_player_id === r.player_id));
@@ -1896,7 +1900,7 @@ const ACHIEVEMENTS = [
   {
     id: "closest-call",
     title: "Nine Lives",
-    emblem: "🐈",
+    emblem: "emblems/closest-call.png",
     description: "Won with the lowest life total remaining.",
     compute(ctx) {
       const resultByKey = new Map(ctx.gameResults.map(r => [`${r.game_id}:${r.player_id}`, r.result]));
@@ -1912,7 +1916,7 @@ const ACHIEVEMENTS = [
   {
     id: "untouchable",
     title: "Untouchable",
-    emblem: "🛡️",
+    emblem: "emblems/untouchable.png",
     description: "Won with the highest life total remaining.",
     compute(ctx) {
       const resultByKey = new Map(ctx.gameResults.map(r => [`${r.game_id}:${r.player_id}`, r.result]));
@@ -1928,7 +1932,7 @@ const ACHIEVEMENTS = [
   {
     id: "bridesmaid",
     title: "Bridesmaid",
-    emblem: "🥈",
+    emblem: "emblems/bridesmaid.png",
     description: "Most 2nd-place finishes across the season.",
     compute(ctx) {
       const winner = topPlayer(groupByPlayer(ctx.gameResults.filter(r => r.place === 2)), rows => rows.length);
@@ -1938,7 +1942,7 @@ const ACHIEVEMENTS = [
   {
     id: "wooden-spoon",
     title: "Wooden Spoon",
-    emblem: "🥄",
+    emblem: "emblems/wooden-spoon.png",
     description: "Most last-place finishes across the season.",
     compute(ctx) {
       const winner = topPlayer(groupByPlayer(ctx.gameResults.filter(r => r.place === r.pod_size)), rows => rows.length);
@@ -1948,7 +1952,7 @@ const ACHIEVEMENTS = [
   {
     id: "longest-survivor",
     title: "Last One Standing",
-    emblem: "🧍",
+    emblem: "emblems/longest-survivor.png",
     description: "Highest average turn of elimination in games they lost.",
     compute(ctx) {
       const winner = topPlayer(groupByPlayer(ctx.gameResults.filter(r => r.result === 0)), rows => avgField(rows, "tov"), { minGames: MIN_GAMES_FOR_RATE });
@@ -1958,7 +1962,7 @@ const ACHIEVEMENTS = [
   {
     id: "early-exit",
     title: "Early Exit",
-    emblem: "🚪",
+    emblem: "emblems/early-exit.png",
     description: "Lowest average turn of elimination in games they lost.",
     compute(ctx) {
       const winner = topPlayer(groupByPlayer(ctx.gameResults.filter(r => r.result === 0)), rows => avgField(rows, "tov"), { minGames: MIN_GAMES_FOR_RATE, ascending: true });
@@ -1968,7 +1972,7 @@ const ACHIEVEMENTS = [
   {
     id: "most-decks",
     title: "Brewmaster",
-    emblem: "🎴",
+    emblem: "emblems/most-decks.png",
     description: "Most different decks piloted across the season.",
     compute(ctx) {
       const byPlayer = new Map();

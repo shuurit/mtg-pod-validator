@@ -459,14 +459,24 @@ function renderAchievements(achievements) {
     const card = document.createElement("div");
     card.className = "trophy-card";
 
+    // A custom-illustrated badge per achievement (see ACHIEVEMENTS in
+    // relay.js and the /emblems directory) -- with 22 cards on screen, a
+    // repeated generic trophy told a viewer nothing at a glance. `emblem`
+    // is a relative path; falls back to a plain trophy emoji only if an
+    // older cached response predates this field (a bare emoji renders
+    // fine as textContent, an <img> would just show a broken-image icon).
     const icon = document.createElement("span");
     icon.className = "trophy-icon";
-    // A distinct emoji per achievement (see ACHIEVEMENTS in relay.js) --
-    // with 22 cards on screen, a repeated generic trophy told a viewer
-    // nothing at a glance. Falls back to the trophy only if an older
-    // cached response predates this field.
-    icon.textContent = achievement.emblem || "🏆";
     icon.setAttribute("aria-hidden", "true");
+    if (achievement.emblem) {
+      const img = document.createElement("img");
+      img.className = "trophy-icon-img";
+      img.src = achievement.emblem;
+      img.alt = "";
+      icon.appendChild(img);
+    } else {
+      icon.textContent = "🏆";
+    }
     card.appendChild(icon);
 
     const body = document.createElement("div");
