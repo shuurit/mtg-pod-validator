@@ -762,7 +762,7 @@ async function handleGamesWrite(request, env, ctx, session) {
 function emptyEventTotals() {
   return {
     damage_dealt: 0, healing_done: 0, knockouts: 0, damage_taken: 0, healing_received: 0, self_rating: null,
-    pauses_called: 0, pause_seconds: 0, undos: 0,
+    pauses_called: 0, pause_seconds: 0, undos: 0, longest_turn_seconds: 0,
   };
 }
 
@@ -815,8 +815,21 @@ async function computeAndStoreGameEventStats(env, gameId, playgroupGameId) {
   // into the single pass above. Attributed to whoever CALLED the pause,
   // not whoever ended it. An unmatched trailing pause_start (game data
   // exported mid-pause) contributes nothing rather than guessing an end.
+  //
+  // Turn duration rides the same sorted pass: each pass_turn marks the end
+  // of the turn that started at the previous pass_turn (or start_game, for
+  // the very first turn) -- attributed to whoever's pass_turn it is, since
+  // that's whose turn just elapsed. Raw wall-clock time, not adjusted for
+  // pauses -- confirmed against a real ~7-hour game that a long turn is
+  // usually the whole table slowing down together late in a marathon
+  // session, not one player stalling, so this is a fun/quirky stat like
+  // Bio Break Champion, not a rigorous one. No start_game event at all
+  // (shouldn't happen, not asserted) means no turn timing for this game
+  // rather than guessing an anchor.
   const sortedEvents = [...(raw.events || [])].sort((a, b) => new Date(a.happened_at) - new Date(b.happened_at));
   let openPause = null;
+  const startGameEvent = sortedEvents.find(e => e.kind === "start_game");
+  let turnStartedAt = startGameEvent ? new Date(startGameEvent.happened_at) : null;
   for (const e of sortedEvents) {
     if (e.kind === "pause_start") {
       const playerId = userIdToPlayerId[e.user_id];
@@ -825,6 +838,15 @@ async function computeAndStoreGameEventStats(env, gameId, playgroupGameId) {
       const seconds = Math.max(0, Math.round((new Date(e.happened_at) - openPause.startedAt) / 1000));
       if (openPause.playerId) get(openPause.playerId).pause_seconds += seconds;
       openPause = null;
+    } else if (e.kind === "pass_turn" && turnStartedAt) {
+      const happenedAt = new Date(e.happened_at);
+      const seconds = Math.max(0, Math.round((happenedAt - turnStartedAt) / 1000));
+      const playerId = userIdToPlayerId[e.user_id];
+      if (playerId) {
+        const t = get(playerId);
+        if (seconds > t.longest_turn_seconds) t.longest_turn_seconds = seconds;
+      }
+      turnStartedAt = happenedAt;
     }
   }
 
@@ -841,20 +863,21 @@ async function computeAndStoreGameEventStats(env, gameId, playgroupGameId) {
         game_id, player_id, damage_dealt, healing_done, knockouts,
         fun_rating, salt_rating, mulligans_taken, self_rating,
         damage_taken, healing_received, ending_life,
-        pauses_called, pause_seconds, undos
+        pauses_called, pause_seconds, undos, longest_turn_seconds
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (game_id, player_id) DO UPDATE SET
         damage_dealt = excluded.damage_dealt, healing_done = excluded.healing_done, knockouts = excluded.knockouts,
         fun_rating = excluded.fun_rating, salt_rating = excluded.salt_rating, mulligans_taken = excluded.mulligans_taken,
         self_rating = excluded.self_rating, damage_taken = excluded.damage_taken,
         healing_received = excluded.healing_received, ending_life = excluded.ending_life,
-        pauses_called = excluded.pauses_called, pause_seconds = excluded.pause_seconds, undos = excluded.undos
+        pauses_called = excluded.pauses_called, pause_seconds = excluded.pause_seconds, undos = excluded.undos,
+        longest_turn_seconds = excluded.longest_turn_seconds
     `).bind(
       gameId, playerId, t.damage_dealt, t.healing_done, t.knockouts,
       p.fun_rating ?? null, p.salt_rating ?? null, p.mulligans_taken ?? null, t.self_rating,
       t.damage_taken, t.healing_received, endingLife,
-      t.pauses_called, t.pause_seconds, t.undos
+      t.pauses_called, t.pause_seconds, t.undos, t.longest_turn_seconds
     ));
   }
 
@@ -2103,6 +2126,22 @@ const ACHIEVEMENTS = [
       return winner && winner.value > 0 ? { ...winner, display: `${winner.value} undo${winner.value === 1 ? "" : "s"}` } : null;
     },
   },
+  {
+    id: "longest-turn",
+    title: "Analysis Paralysis",
+    description: "Longest single turn across the season.",
+    compute(ctx) {
+      let best = null;
+      for (const r of ctx.eventStats) {
+        if (!best || r.longest_turn_seconds > best.value) best = { playerId: r.player_id, name: r.name, value: r.longest_turn_seconds };
+      }
+      if (!best || best.value <= 0) return null;
+      const minutes = Math.floor(best.value / 60);
+      const seconds = best.value % 60;
+      const display = minutes > 0 ? `${minutes}m ${seconds}s turn` : `${seconds}s turn`;
+      return { ...best, display };
+    },
+  },
 ];
 
 // One season's worth of raw material every achievement above draws from --
@@ -2118,7 +2157,7 @@ async function gatherAchievementContext(env, seasonId) {
       SELECT s.game_id, s.player_id, p.name, s.damage_dealt, s.healing_done, s.knockouts,
              s.fun_rating, s.salt_rating, s.mulligans_taken, s.self_rating,
              s.damage_taken, s.healing_received, s.ending_life,
-             s.pauses_called, s.pause_seconds, s.undos
+             s.pauses_called, s.pause_seconds, s.undos, s.longest_turn_seconds
       FROM game_event_stats s
       JOIN games g ON g.id = s.game_id
       JOIN players p ON p.id = s.player_id

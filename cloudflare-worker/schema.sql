@@ -215,5 +215,12 @@ CREATE TABLE game_event_stats (
   pauses_called INTEGER NOT NULL DEFAULT 0,
   pause_seconds INTEGER NOT NULL DEFAULT 0,
   undos INTEGER NOT NULL DEFAULT 0,
+  -- Longest single pass_turn-to-pass_turn gap this player had in this
+  -- game (seconds), raw wall-clock time, not pause-adjusted. Confirmed
+  -- against a real ~7-hour game that a long turn usually means the whole
+  -- table slowed down together late in a marathon session, not one player
+  -- stalling -- a fun/quirky stat, not a rigorous one. 0 (not null) when
+  -- the game has no start_game event to anchor the first turn from.
+  longest_turn_seconds INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (game_id, player_id)
 );
