@@ -1789,7 +1789,7 @@ function sumField(rows, field) {
 // already loaded an older crop just kept serving it from cache, since the
 // filename itself never changed). Bump this any time /emblems/*.png files
 // get new content, even though their filenames stay the same.
-const EMBLEM_CACHE_BUST = "3";
+const EMBLEM_CACHE_BUST = "4";
 function emblemUrl(path) {
   return path ? `${path}?v=${EMBLEM_CACHE_BUST}` : path;
 }
@@ -2106,6 +2106,7 @@ const ACHIEVEMENTS = [
   {
     id: "most-popoffs",
     title: "Went Off",
+    emblem: "emblems/most-popoffs.png",
     description: "Most pop-off turns across the season.",
     compute(ctx) {
       const winner = topPlayer(groupByPlayer(ctx.gameResults), rows => sumField(rows, "pop_off"));
@@ -2115,6 +2116,7 @@ const ACHIEVEMENTS = [
   {
     id: "most-disruptions",
     title: "The Wrench",
+    emblem: "emblems/most-disruptions.png",
     description: "Most disruptions across the season.",
     compute(ctx) {
       const winner = topPlayer(groupByPlayer(ctx.gameResults), rows => sumField(rows, "disruptions"));
@@ -2124,6 +2126,7 @@ const ACHIEVEMENTS = [
   {
     id: "best-recovery-rate",
     title: "Comeback Kid",
+    emblem: "emblems/best-recovery-rate.png",
     description: "Best recovery rate after being disrupted.",
     compute(ctx) {
       const byPlayer = groupByPlayer(ctx.gameResults);
@@ -2140,6 +2143,7 @@ const ACHIEVEMENTS = [
   {
     id: "most-behind",
     title: "Never Say Die",
+    emblem: "emblems/most-behind.png",
     description: "Most games clearly behind across the season.",
     compute(ctx) {
       const winner = topPlayer(groupByPlayer(ctx.gameResults), rows => sumField(rows, "games_clearly_behind"));
@@ -2149,6 +2153,7 @@ const ACHIEVEMENTS = [
   {
     id: "most-pauses",
     title: "Hold Everything",
+    emblem: "emblems/most-pauses.png",
     description: "Most pauses called across the season.",
     compute(ctx) {
       const winner = topPlayer(ctx.eventStatsByPlayer, rows => sumField(rows, "pauses_called"));
@@ -2158,6 +2163,7 @@ const ACHIEVEMENTS = [
   {
     id: "longest-pause",
     title: "Bio Break Champion",
+    emblem: "emblems/longest-pause.png",
     description: "Most total time spent paused across the season.",
     compute(ctx) {
       const winner = topPlayer(ctx.eventStatsByPlayer, rows => sumField(rows, "pause_seconds"));
@@ -2169,6 +2175,7 @@ const ACHIEVEMENTS = [
   {
     id: "most-undos",
     title: "Second-Guesser",
+    emblem: "emblems/most-undos.png",
     description: "Most undos across the season.",
     compute(ctx) {
       const winner = topPlayer(ctx.eventStatsByPlayer, rows => sumField(rows, "undos"));
