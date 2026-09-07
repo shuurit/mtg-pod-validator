@@ -1314,12 +1314,17 @@ function updateSeatDisplay(wrap, i) {
   // mana -- once a deck is actually picked, not merely a player. See the
   // "Tap for Mana" concept review; only the seat's own rotation shipped,
   // not that concept's colored mana glyph/pool, since a deck's color is
-  // exactly the thing this table keeps masked until the reveal.
-  seatEl.classList.toggle("tapped", !!(player && slot.deckId));
+  // exactly the thing this table keeps masked until the reveal. Untapped
+  // again the moment Check Deck Power Spread flags this slot as out of
+  // range (see runValidation) -- a deck IS still picked, but it's the
+  // wrong one, and the seat should look like it needs attention again
+  // rather than still reading as "done."
+  seatEl.classList.toggle("tapped", !!(player && slot.deckId && !slot.outOfRange));
   seatEl.querySelector(".seat-avatar").textContent = player ? player.name.charAt(0).toUpperCase() : "+";
   seatEl.querySelector(".seat-name").textContent = player ? player.name : "Add player";
-  seatEl.querySelector(".seat-state").textContent =
-    !player ? `Seat ${i + 1}` : (slot.deckId ? "🔒 Deck selected" : "Pick a deck");
+  seatEl.querySelector(".seat-state").textContent = !player
+    ? `Seat ${i + 1}`
+    : (!slot.deckId ? "Pick a deck" : (slot.outOfRange ? "⚠️ Pick a new deck" : "🔒 Deck selected"));
 }
 
 // One seat around the table -- evenly spaced starting from the top,
@@ -1342,7 +1347,7 @@ function buildSeatEl(i) {
   seatEl.className = "seat" +
     (player ? " filled" : " empty") +
     (editingSeatIndex === i ? " editing" : "") +
-    (player && slot.deckId ? " tapped" : "");
+    (player && slot.deckId && !slot.outOfRange ? " tapped" : "");
   seatEl.dataset.seatIndex = i;
   seatEl.style.left = `${x}px`;
   seatEl.style.top = `${y}px`;
@@ -1363,7 +1368,9 @@ function buildSeatEl(i) {
 
   const stateEl = document.createElement("span");
   stateEl.className = "seat-state";
-  stateEl.textContent = !player ? `Seat ${i + 1}` : (slot.deckId ? "🔒 Deck selected" : "Pick a deck");
+  stateEl.textContent = !player
+    ? `Seat ${i + 1}`
+    : (!slot.deckId ? "Pick a deck" : (slot.outOfRange ? "⚠️ Pick a new deck" : "🔒 Deck selected"));
   seatEl.appendChild(stateEl);
 
   seatEl.addEventListener("click", () => {
@@ -1837,6 +1844,16 @@ function runValidation() {
 
   const evaluated = evaluatePod(entries);
   evaluated.forEach((entry, i) => { podSelections[i].outOfRange = !entry.compatible; });
+
+  // Untap (or leave untapped) every seat to match the outOfRange flags
+  // just set above -- round-table view only (podCount > 6 falls back to
+  // the plain list, which has no tapped/untapped concept at all). Without
+  // this, a seat kept reading as "🔒 Deck selected" after a failed check,
+  // giving no visual nudge that specifically that pick needs to change.
+  const tableWrap = document.querySelector(".table-wrap");
+  if (tableWrap) {
+    evaluated.forEach((entry, i) => updateSeatDisplay(tableWrap, i));
+  }
 
   // Drawn from the exact same evaluated data as the rows below -- see
   // buildPowerGauge for why this never shows more than the rows already do.
