@@ -1347,6 +1347,18 @@ td.num {
   cursor: pointer;
   font-family: inherit;
 }
+/* button:active's own transform (below, a generic press-down effect for
+   every plain button in the app) has higher specificity than .seat alone
+   (element+pseudo-class beats a bare class) and was winning outright --
+   replacing .seat's translate(-50%, -50%) instead of adding to it, which
+   is what actually centers each seat on its own left/top coordinate.
+   Confirmed the hard way: tapping a seat made it visibly jump toward the
+   bottom-right by roughly half its own size the instant it registered as
+   pressed, right before the click handler even ran. This re-specifies
+   both transforms together so centering survives the press effect. */
+.seat:active {
+  transform: translate(-50%, -50%) translateY(1px);
+}
 .seat-avatar {
   width: 50px;
   height: 50px;
