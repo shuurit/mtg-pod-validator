@@ -1287,6 +1287,28 @@ async function handleDebugGame(request, env) {
   });
 }
 
+// Same reasoning as handleDebugGame above -- raw pass-through of one
+// playgroup.gg user's deck list exactly as their API returns it, no
+// filtering/reshaping. handleRosterDiff (below) calls this same
+// playgroup.gg endpoint but whitelists specific fields onto its own
+// response shape, so a new field playgroup.gg adds would be silently
+// dropped there -- this route exists specifically so a new field is
+// visible before deciding whether/how to surface it. Not used by the app.
+async function handleDebugDecks(request, env) {
+  const url = new URL(request.url);
+  const userId = url.searchParams.get("user_id");
+  if (!userId || !/^\d+$/.test(userId)) {
+    return jsonResponse({ error: "?user_id=<numeric playgroup.gg user id> is required" }, 400);
+  }
+
+  const res = await pgFetch(`/users/${userId}/decks?include_archived=true`, env);
+  const body = await res.text();
+  return new Response(body, {
+    status: res.status,
+    headers: { ...corsHeaders(), "Content-Type": "application/json", "Cache-Control": "no-store" },
+  });
+}
+
 // ---------- GET /roster-diff : who/what is on playgroup.gg but not yet tracked ----------
 
 // playgroup.gg's Deck.color_identity is an unordered array (e.g. ["G","U"]) --
@@ -2367,6 +2389,10 @@ export default {
 
     if (request.method === "GET" && url.pathname === "/debug/game") {
       return handleDebugGame(request, env);
+    }
+
+    if (request.method === "GET" && url.pathname === "/debug/decks") {
+      return handleDebugDecks(request, env);
     }
 
     if (request.method === "POST" && url.pathname === "/games") {

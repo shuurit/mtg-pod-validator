@@ -76,6 +76,13 @@ works without one.
   classification). Not used by the main data endpoints above, but *is*
   used by the app's Games to Update tab to pre-fill Place/KOs/TOV from the
   event log — otherwise purely a manual debugging aid.
+- `GET /debug/decks?user_id=<playgroup.gg user id>` — same idea as
+  `/debug/game`, for one user's deck list instead: raw pass-through of
+  exactly what playgroup.gg returns (games_won/games_lost/win_rate_percentage/
+  most_popular_wincon/etc., none of it filtered onto `/roster-diff`'s own
+  whitelisted shape). Not used by the app at all — purely a manual
+  debugging aid for checking what fields playgroup.gg's deck API actually
+  has before deciding whether/how to surface something new.
 - `GET /players` — every player and their decks, with each deck's current
   power (most recent logged game's calculated strength, falling back to
   its baseline). What app.js's Deck Strength Validator and Games to Update
