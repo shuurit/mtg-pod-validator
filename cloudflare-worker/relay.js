@@ -1309,6 +1309,33 @@ async function handleDebugDecks(request, env) {
   });
 }
 
+// Same reasoning again -- raw pass-through of the playgroup's games list,
+// unfiltered by /playgroup-games' own active-league classification (which
+// a brand new game might not have been assigned yet) or handlePlaygroupGames'
+// tracked-players-only reshaping. Sorted newest first so the most
+// recently played game is always results[0], not used by the app.
+async function handleDebugGamesList(request, env) {
+  const url = new URL(request.url);
+  const limit = url.searchParams.get("limit") || "10";
+
+  const res = await pgFetch(`/playgroups/${PLAYGROUP_ID}/games?limit=${encodeURIComponent(limit)}`, env);
+  const body = await res.text();
+  let sorted = body;
+  try {
+    const games = JSON.parse(body);
+    if (Array.isArray(games)) {
+      sorted = JSON.stringify(games.sort((a, b) => b.started_at.localeCompare(a.started_at)));
+    }
+  } catch {
+    // Fall through and return whatever playgroup.gg sent, unsorted --
+    // an error here shouldn't hide the raw response from view.
+  }
+  return new Response(sorted, {
+    status: res.status,
+    headers: { ...corsHeaders(), "Content-Type": "application/json", "Cache-Control": "no-store" },
+  });
+}
+
 // ---------- GET /roster-diff : who/what is on playgroup.gg but not yet tracked ----------
 
 // playgroup.gg's Deck.color_identity is an unordered array (e.g. ["G","U"]) --
@@ -2393,6 +2420,10 @@ export default {
 
     if (request.method === "GET" && url.pathname === "/debug/decks") {
       return handleDebugDecks(request, env);
+    }
+
+    if (request.method === "GET" && url.pathname === "/debug/games-list") {
+      return handleDebugGamesList(request, env);
     }
 
     if (request.method === "POST" && url.pathname === "/games") {

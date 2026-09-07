@@ -83,6 +83,14 @@ works without one.
   whitelisted shape). Not used by the app at all — purely a manual
   debugging aid for checking what fields playgroup.gg's deck API actually
   has before deciding whether/how to surface something new.
+- `GET /debug/games-list?limit=<n>` — same idea again, for the playgroup's
+  raw games list: unfiltered by `/playgroup-games`' active-league
+  classification (which a brand new game might not have yet) or its
+  tracked-players-only reshaping, sorted newest first. Existed to answer
+  "is this game playgroup.gg says just finished actually visible via the
+  API yet" without waiting on classification — `/playgroup-games?recheck=<id>`
+  is still the real way to pull a specific unclassified game into the
+  app once you know its id. Not used by the app.
 - `GET /players` — every player and their decks, with each deck's current
   power (most recent logged game's calculated strength, falling back to
   its baseline). What app.js's Deck Strength Validator and Games to Update
