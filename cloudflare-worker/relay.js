@@ -2283,6 +2283,10 @@ const ACHIEVEMENTS = [
     },
   },
 ];
+// Valid achievementId values for POST /achievements/vote -- guards against
+// voting on a typo'd or since-removed id ever landing a row in
+// achievement_votes.
+const ACHIEVEMENT_IDS = new Set(ACHIEVEMENTS.map(a => a.id));
 
 // One season's worth of raw material every achievement above draws from --
 // gathered once per request, not once per achievement, since several
@@ -2345,7 +2349,7 @@ async function gatherAchievementContext(env, seasonId) {
 // itself fails, this fails toward HIDDEN, not revealed -- wrongly hiding
 // a finished season's winners for a moment is a much smaller cost than
 // spoiling an in-progress one.
-async function handleAchievements(request, env) {
+async function handleAchievements(request, env, session) {
   const url = new URL(request.url);
   const seasonParam = url.searchParams.get("season");
 
@@ -2376,12 +2380,73 @@ async function handleAchievements(request, env) {
     achievements = ACHIEVEMENTS.map(a => ({ id: a.id, title: a.title, emblem: emblemUrl(a.emblem), description: a.description, winner: a.compute(ctx) }));
   }
 
+  // Keep/cut votes -- not season-scoped (an achievement is either worth
+  // keeping in the lineup or not, regardless of which season's winner it's
+  // currently withholding), so this doesn't factor seasonId in at all.
+  const voteTallies = await getAchievementVoteTallies(env, session.playerId);
+  for (const a of achievements) {
+    a.votes = voteTallies[a.id] || { keep: 0, cut: 0, mine: null };
+  }
+
   return jsonResponse({
     seasons: seasons.map(({ id, label }) => ({ id, label })),
     seasonId,
     seasonActive,
     achievements,
   }, 200, { "Cache-Control": "no-store" });
+}
+
+// Tallies every achievement_votes row into {keep, cut, mine} per
+// achievement_id -- one query, since the whole table is at most
+// (achievement count) x (player count) rows, nowhere near worth paginating.
+// mine reflects myPlayerId's own vote ("keep"/"cut"/null), for highlighting
+// their current pick client-side.
+async function getAchievementVoteTallies(env, myPlayerId) {
+  const { results } = await env.DB.prepare("SELECT achievement_id, player_id, vote FROM achievement_votes").all();
+  const byAchievement = {};
+  for (const row of results) {
+    const bucket = (byAchievement[row.achievement_id] ||= { keep: 0, cut: 0, mine: null });
+    if (row.vote === 1) bucket.keep++;
+    else if (row.vote === -1) bucket.cut++;
+    if (row.player_id === myPlayerId) bucket.mine = row.vote === 1 ? "keep" : "cut";
+  }
+  return byAchievement;
+}
+
+// POST /achievements/vote -- one player's keep/cut opinion on one
+// achievement, for deciding which of the season's achievements are worth
+// keeping before the season ends. `vote: null` retracts a prior vote
+// (deletes the row) rather than storing a third "no opinion" value;
+// "keep"/"cut" upsert via ON CONFLICT so casting again just changes this
+// player's own vote, never adds a second row for them.
+async function handleAchievementVote(request, env, session) {
+  let payload;
+  try {
+    payload = await request.json();
+  } catch {
+    return jsonResponse({ error: "Invalid JSON" }, 400);
+  }
+  const { achievementId, vote } = payload || {};
+  if (!ACHIEVEMENT_IDS.has(achievementId)) {
+    return jsonResponse({ error: `Unknown achievement ${achievementId}` }, 400);
+  }
+  if (vote !== "keep" && vote !== "cut" && vote !== null) {
+    return jsonResponse({ error: 'vote must be "keep", "cut", or null' }, 400);
+  }
+
+  if (vote === null) {
+    await env.DB.prepare("DELETE FROM achievement_votes WHERE achievement_id = ? AND player_id = ?")
+      .bind(achievementId, session.playerId).run();
+  } else {
+    await env.DB.prepare(`
+      INSERT INTO achievement_votes (achievement_id, player_id, vote)
+      VALUES (?, ?, ?)
+      ON CONFLICT (achievement_id, player_id) DO UPDATE SET vote = excluded.vote
+    `).bind(achievementId, session.playerId, vote === "keep" ? 1 : -1).run();
+  }
+
+  const tallies = await getAchievementVoteTallies(env, session.playerId);
+  return jsonResponse({ votes: tallies[achievementId] || { keep: 0, cut: 0, mine: null } }, 200);
 }
 
 // One-time (or safe-to-rerun) pass for games logged before
@@ -2509,7 +2574,11 @@ export default {
     }
 
     if (request.method === "GET" && url.pathname === "/achievements") {
-      return handleAchievements(request, env);
+      return handleAchievements(request, env, session);
+    }
+
+    if (request.method === "POST" && url.pathname === "/achievements/vote") {
+      return handleAchievementVote(request, env, session);
     }
 
     if (request.method === "POST" && url.pathname === "/achievements/backfill") {

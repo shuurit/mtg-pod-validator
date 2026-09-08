@@ -230,3 +230,17 @@ CREATE TABLE game_event_stats (
   shortest_turn_seconds INTEGER,
   PRIMARY KEY (game_id, player_id)
 );
+
+-- One row per (achievement, player) who's voted on whether that achievement
+-- (identified by its ACHIEVEMENTS id in relay.js, e.g. "most-damage" -- not
+-- a table of its own, so no foreign key) should stay in the lineup or get
+-- cut before the season ends. vote is 1 (keep) or -1 (cut), never both --
+-- voting again just overwrites this player's prior vote (see
+-- handleAchievementVote's ON CONFLICT), and retracting a vote entirely
+-- deletes the row rather than storing a third "no opinion" value.
+CREATE TABLE achievement_votes (
+  achievement_id TEXT NOT NULL,
+  player_id INTEGER NOT NULL REFERENCES players(id),
+  vote INTEGER NOT NULL,
+  PRIMARY KEY (achievement_id, player_id)
+);

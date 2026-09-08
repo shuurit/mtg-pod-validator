@@ -25,6 +25,7 @@ const DECK_POTENTIAL_BRACKET4_RELAY_URL = RELAY_BASE_URL + "/decks/potential-bra
 const AUTH_ME_RELAY_URL = RELAY_BASE_URL + "/auth/me";
 const AUTH_LOGOUT_RELAY_URL = RELAY_BASE_URL + "/auth/logout";
 const ACHIEVEMENTS_RELAY_URL = RELAY_BASE_URL + "/achievements";
+const ACHIEVEMENT_VOTE_RELAY_URL = RELAY_BASE_URL + "/achievements/vote";
 
 // Discord OAuth sign-in. Client ID is public (it's part of the login URL
 // below), matches the constant of the same name in relay.js -- the Client
@@ -521,8 +522,62 @@ function renderAchievements(achievements, seasonActive) {
       body.appendChild(empty);
     }
 
+    // Keep/cut voting -- deciding which achievements are worth keeping
+    // before the season ends, not tied to whether the winner's revealed
+    // yet. Server is the source of truth for both tallies and this
+    // player's own vote (achievement.votes, from GET /achievements), so a
+    // click posts and re-renders from the response rather than guessing
+    // the new counts locally.
+    const voteRow = document.createElement("div");
+    voteRow.className = "trophy-vote";
+    const keepBtn = document.createElement("button");
+    keepBtn.type = "button";
+    keepBtn.className = "vote-btn vote-keep";
+    const cutBtn = document.createElement("button");
+    cutBtn.type = "button";
+    cutBtn.className = "vote-btn vote-cut";
+    applyVoteTally(keepBtn, cutBtn, achievement.votes);
+    keepBtn.addEventListener("click", () => castAchievementVote(achievement.id, "keep", keepBtn, cutBtn));
+    cutBtn.addEventListener("click", () => castAchievementVote(achievement.id, "cut", keepBtn, cutBtn));
+    voteRow.appendChild(keepBtn);
+    voteRow.appendChild(cutBtn);
+    body.appendChild(voteRow);
+
     card.appendChild(body);
     container.appendChild(card);
+  }
+}
+
+function applyVoteTally(keepBtn, cutBtn, votes) {
+  keepBtn.textContent = `👍 Keep (${votes.keep})`;
+  cutBtn.textContent = `👎 Cut (${votes.cut})`;
+  keepBtn.classList.toggle("active", votes.mine === "keep");
+  cutBtn.classList.toggle("active", votes.mine === "cut");
+}
+
+// Clicking a vote button toggles it off (vote: null) if it's already this
+// player's vote, or casts/switches to it otherwise -- relay.js overwrites
+// this player's prior vote rather than adding a second one either way.
+async function castAchievementVote(achievementId, choice, keepBtn, cutBtn) {
+  const alreadyThis = (choice === "keep" && keepBtn.classList.contains("active"))
+    || (choice === "cut" && cutBtn.classList.contains("active"));
+  const vote = alreadyThis ? null : choice;
+  keepBtn.disabled = true;
+  cutBtn.disabled = true;
+  try {
+    const res = await fetch(ACHIEVEMENT_VOTE_RELAY_URL, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ achievementId, vote }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    applyVoteTally(keepBtn, cutBtn, data.votes);
+  } catch (err) {
+    console.error("Failed to cast achievement vote:", err);
+  } finally {
+    keepBtn.disabled = false;
+    cutBtn.disabled = false;
   }
 }
 

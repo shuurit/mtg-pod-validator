@@ -115,7 +115,16 @@ works without one.
   recent season. Winners are withheld (`winner: null` for everything,
   `seasonActive: true` in the response) while that season is still being
   played, revealed once playgroup.gg's active league moves on. Powers the
-  app's Achievements tab.
+  app's Achievements tab. Each achievement also carries `votes: {keep, cut,
+  mine}` from `achievement_votes` (not season-scoped) — see
+  `POST /achievements/vote` below.
+- `POST /achievements/vote` — body `{achievementId, vote}` where `vote` is
+  `"keep"`, `"cut"`, or `null` to retract; casts (or changes) the signed-in
+  player's own keep/cut opinion on one achievement, for deciding which of
+  the season's achievements are worth keeping before it ends. Upserts on
+  `(achievement_id, player_id)`, so voting again just changes this player's
+  prior vote. Returns the updated `{keep, cut, mine}` tally for that
+  achievement.
 - `POST /achievements/backfill[?force=true]` — one-time (safe-to-rerun)
   pass that fills in `game_event_stats` for games logged before that table
   existed, by re-fetching each one's event log from playgroup.gg. Capped

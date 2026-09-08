@@ -772,6 +772,40 @@ header h1 {
   font-size: 0.9rem;
   margin-top: 10px; /* same reasoning as .trophy-winner's margin-top above */
 }
+
+/* Keep/cut voting -- see castAchievementVote in app.js. Small pill buttons,
+   not the default button size, since these sit inside an already-compact
+   trophy card alongside 21+ others. */
+.trophy-vote {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.vote-btn {
+  padding: 5px 10px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+}
+
+.vote-btn.vote-keep.active {
+  background: var(--good-bg);
+  color: var(--good);
+  border-color: var(--good);
+}
+
+.vote-btn.vote-cut.active {
+  background: var(--bad-bg);
+  color: var(--bad);
+  border-color: var(--bad-border);
+}
+
+.vote-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
 .note-line:first-child {
   margin-top: 0;
 }
