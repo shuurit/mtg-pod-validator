@@ -99,15 +99,19 @@ works without one.
   every stored formula value. What app.js's Games to Update/Player Win
   Rates read (scoped client-side to the current season).
 - `GET /rankings` — Player Adjusted Win Rate per player, scoped to the
-  current season. Not currently used by anything (app.js computes it
-  client-side instead, since it also needs the same formula for a live
-  pre-submit preview) — kept for any future consumer that wants it
-  precomputed.
+  current season. app.js still computes its own copy client-side (it also
+  needs the same formula for a live pre-submit preview), but
+  `computeRankingsData` underneath this route is no longer unused — the
+  Season Champion achievement (`GET /achievements`) calls it directly
+  (season-scoped, not just "current") so that achievement crowns the same
+  player the Player Win Rates tab would call #1, not a second opinion
+  computed a different way.
 - `GET /deck-win-rates` — games/wins/win-rate per deck, and per player
   (subtotal). Used by the Discord scripts (`scripts/discord_report.py`).
 - `GET /achievements?season=<id>` — season standings for an extensible
-  list of achievements (29 as of this writing) computed from
-  `game_event_stats` and `game_results`. `season` defaults to the most
+  list of achievements (31 as of this writing) computed from
+  `game_event_stats`, `game_results`, and (for Season Champion)
+  `computeRankingsData`'s Player Adjusted Win Rate. `season` defaults to the most
   recent season. Winners are withheld (`winner: null` for everything,
   `seasonActive: true` in the response) while that season is still being
   played, revealed once playgroup.gg's active league moves on. Powers the

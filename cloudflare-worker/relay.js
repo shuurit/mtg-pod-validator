@@ -1664,22 +1664,22 @@ function computePlayerAdjustedWinRate(rows) {
   return { rate: B, wins: C, losses: D };
 }
 
-async function computeRankingsData(env) {
-  const { results: playerRows } = await env.DB.prepare("SELECT name FROM players ORDER BY id").all();
-  // Scoped to the most-recently-created season only -- same "one season
-  // at a time" rule app.js's gameLogRowsFromD1 and discord_report.py's
-  // current_season_games already established (Player Adjusted Ranks has
-  // never combined seasons). Previously unscoped, which happened to read
-  // right only because D1 held just one season's worth of game_results;
-  // fixed now so it stays correct once Season 4 exists alongside it.
+// seasonId is required -- made season-selectable (rather than always
+// MAX(season_id)) so GET /achievements can rank a specific past season
+// too, same as every other achievement already supports via its own
+// ?season= param. Same "one season at a time" rule app.js's
+// gameLogRowsFromD1 and discord_report.py's current_season_games already
+// established (Player Adjusted Ranks has never combined seasons).
+async function computeRankingsData(env, seasonId) {
+  const { results: playerRows } = await env.DB.prepare("SELECT id, name FROM players ORDER BY id").all();
   const { results: gameRows } = await env.DB.prepare(`
     SELECT p.name AS player, gr.result,
            gr.adjusted_pod_size_score AS j, gr.knockout_score AS k, gr.win_probability AS m
     FROM game_results gr
     JOIN players p ON p.id = gr.player_id
     JOIN games g ON g.id = gr.game_id
-    WHERE g.season_id = (SELECT MAX(season_id) FROM games)
-  `).all();
+    WHERE g.season_id = ?
+  `).bind(seasonId).all();
 
   const byPlayer = {};
   for (const row of gameRows) {
@@ -1687,7 +1687,7 @@ async function computeRankingsData(env) {
   }
 
   const rankings = playerRows
-    .map(p => ({ player: p.name, ...computePlayerAdjustedWinRate(byPlayer[p.name] || []) }))
+    .map(p => ({ playerId: p.id, player: p.name, ...computePlayerAdjustedWinRate(byPlayer[p.name] || []) }))
     .sort((a, b) => b.rate - a.rate);
 
   return { generated_at: new Date().toISOString(), rankings };
@@ -1696,7 +1696,8 @@ async function computeRankingsData(env) {
 async function handleRankings(env) {
   let data;
   try {
-    data = await computeRankingsData(env);
+    const latest = await env.DB.prepare("SELECT MAX(season_id) AS id FROM games").first();
+    data = await computeRankingsData(env, latest.id);
   } catch (err) {
     return jsonResponse({ error: "Failed to compute rankings from D1", detail: err.message }, 500);
   }
@@ -1841,6 +1842,21 @@ const MIN_GAMES_FOR_RATE = 3;
 // since these span plain counts, ratios, percentages, and averages that
 // don't share one format.
 const ACHIEVEMENTS = [
+  {
+    id: "season-champion",
+    title: "Season Champion",
+    description: "Highest Player Adjusted Win Rate across the season.",
+    compute(ctx) {
+      const top = ctx.rankings[0];
+      if (!top || top.wins + top.losses === 0) return null;
+      return {
+        playerId: top.playerId,
+        name: top.player,
+        value: top.rate,
+        display: `${(top.rate * 100).toFixed(1)}% (${top.wins}-${top.losses})`,
+      };
+    },
+  },
   {
     id: "most-damage",
     title: "I Hate My Friends",
@@ -2208,7 +2224,7 @@ const ACHIEVEMENTS = [
 // place/tov/win_con/starting_player_id via the joins below) -- see
 // schema.sql for both.
 async function gatherAchievementContext(env, seasonId) {
-  const [eventStatsRes, gameResultsRes] = await Promise.all([
+  const [eventStatsRes, gameResultsRes, rankingsData] = await Promise.all([
     env.DB.prepare(`
       SELECT s.game_id, s.player_id, p.name, s.damage_dealt, s.healing_done, s.knockouts,
              s.fun_rating, s.salt_rating, s.mulligans_taken, s.self_rating,
@@ -2228,10 +2244,20 @@ async function gatherAchievementContext(env, seasonId) {
       JOIN players p ON p.id = gr.player_id
       WHERE g.season_id = ?
     `).bind(seasonId).all(),
+    // Reuses the same Player Adjusted Win Rate formula the (currently
+    // otherwise-unused) GET /rankings already computes -- verified exact
+    // against the spreadsheet's own cached values, so "Season Champion"
+    // below crowns the same player the Player Win Rates tab would call
+    // #1, not a second, different opinion about who's winning.
+    computeRankingsData(env, seasonId),
   ]);
   const eventStats = eventStatsRes.results;
   const gameResults = gameResultsRes.results;
-  return { eventStats, gameResults, eventStatsByPlayer: groupByPlayer(eventStats) };
+  return {
+    eventStats, gameResults,
+    eventStatsByPlayer: groupByPlayer(eventStats),
+    rankings: rankingsData.rankings,
+  };
 }
 
 // season query param defaults to the most recent season (highest id) --
