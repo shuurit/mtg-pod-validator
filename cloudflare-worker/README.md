@@ -116,15 +116,25 @@ works without one.
   `seasonActive: true` in the response) while that season is still being
   played, revealed once playgroup.gg's active league moves on. Powers the
   app's Achievements tab. Each achievement also carries `votes: {keep, cut,
-  mine}` from `achievement_votes` (not season-scoped) — see
-  `POST /achievements/vote` below.
+  mine}` from `achievement_votes` (not season-scoped); the response also
+  carries top-level `votingOpen` (`Date.now() < ACHIEVEMENT_VOTING_DEADLINE`)
+  — see `POST /achievements/vote` below.
 - `POST /achievements/vote` — body `{achievementId, vote}` where `vote` is
   `"keep"`, `"cut"`, or `null` to retract; casts (or changes) the signed-in
   player's own keep/cut opinion on one achievement, for deciding which of
   the season's achievements are worth keeping before it ends. Upserts on
   `(achievement_id, player_id)`, so voting again just changes this player's
   prior vote. Returns the updated `{keep, cut, mine}` tally for that
-  achievement.
+  achievement. Returns 403 once `ACHIEVEMENT_VOTING_DEADLINE` (a hardcoded
+  one-time cutoff, currently 2026-09-15) has passed — the app switches the
+  Keep/Cut buttons to a read-only tally at that point rather than letting a
+  vote fail silently.
+- `POST /achievements/comment` — body `{comment}`; free-text feedback about
+  the achievements list overall (not tied to a specific achievement or
+  gated by the voting deadline above), stored in `achievement_comments`.
+  Write-only — nothing reads it back or renders it anywhere in the app;
+  read it directly with `wrangler d1 execute` when deciding what to
+  actually keep or cut.
 - `POST /achievements/backfill[?force=true]` — one-time (safe-to-rerun)
   pass that fills in `game_event_stats` for games logged before that table
   existed, by re-fetching each one's event log from playgroup.gg. Capped

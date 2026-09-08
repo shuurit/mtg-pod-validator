@@ -806,6 +806,43 @@ header h1 {
   opacity: 0.6;
   cursor: default;
 }
+
+/* Read-only tally shown once voting has closed (see renderAchievements) --
+   same colors as the interactive .vote-btn.active states, just plain text
+   instead of buttons, so there's nothing left to click. */
+.trophy-vote-final {
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 12px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.trophy-vote-final .vote-keep-count { color: var(--good); }
+.trophy-vote-final .vote-cut-count { color: var(--bad); }
+
+/* Write-only feedback box above the achievements grid -- see
+   POST /achievements/comment in relay.js. Plain prose font, not the
+   monospace default textarea styling elsewhere in the app (that one's for
+   pasting raw data, this is for a sentence or two). */
+.achievements-feedback {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.achievements-feedback label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.achievements-comment-input {
+  font-family: inherit;
+}
 .note-line:first-child {
   margin-top: 0;
 }

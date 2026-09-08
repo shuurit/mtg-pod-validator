@@ -2288,6 +2288,17 @@ const ACHIEVEMENTS = [
 // achievement_votes.
 const ACHIEVEMENT_IDS = new Set(ACHIEVEMENTS.map(a => a.id));
 
+// One-time cutoff for the keep/cut voting pass -- a hardcoded absolute
+// date, not a relative "N days from now" offset, since a relative offset
+// recomputed at every Worker reload/deploy would keep pushing the deadline
+// forward instead of ever actually closing. Extending or re-running voting
+// later is a one-line change here, not a toggle -- this is a single
+// cleanup pass to decide the lineup before the season ends, not a
+// recurring feature. Midnight Mountain time (games are played in Mountain
+// time -- see the longest-turn achievement above), a week out from when
+// this was added.
+const ACHIEVEMENT_VOTING_DEADLINE = new Date("2026-09-15T06:00:00Z");
+
 // One season's worth of raw material every achievement above draws from --
 // gathered once per request, not once per achievement, since several
 // achievements share the same two row sets. eventStats comes from
@@ -2393,6 +2404,7 @@ async function handleAchievements(request, env, session) {
     seasonId,
     seasonActive,
     achievements,
+    votingOpen: Date.now() < ACHIEVEMENT_VOTING_DEADLINE.getTime(),
   }, 200, { "Cache-Control": "no-store" });
 }
 
@@ -2433,6 +2445,9 @@ async function handleAchievementVote(request, env, session) {
   if (vote !== "keep" && vote !== "cut" && vote !== null) {
     return jsonResponse({ error: 'vote must be "keep", "cut", or null' }, 400);
   }
+  if (Date.now() >= ACHIEVEMENT_VOTING_DEADLINE.getTime()) {
+    return jsonResponse({ error: "Voting on achievements has closed" }, 403);
+  }
 
   if (vote === null) {
     await env.DB.prepare("DELETE FROM achievement_votes WHERE achievement_id = ? AND player_id = ?")
@@ -2447,6 +2462,34 @@ async function handleAchievementVote(request, env, session) {
 
   const tallies = await getAchievementVoteTallies(env, session.playerId);
   return jsonResponse({ votes: tallies[achievementId] || { keep: 0, cut: 0, mine: null } }, 200);
+}
+
+const MAX_ACHIEVEMENT_COMMENT_LENGTH = 2000;
+
+// POST /achievements/comment -- free-text feedback about the achievements
+// list overall, not tied to a specific achievement or gated by the voting
+// deadline above (there's no reason to cut off comments just because the
+// keep/cut tally has locked). Write-only: nothing here or anywhere else in
+// the app reads achievement_comments back -- it's read directly via
+// wrangler d1 execute when deciding what to actually keep/cut.
+async function handleAchievementComment(request, env, session) {
+  let payload;
+  try {
+    payload = await request.json();
+  } catch {
+    return jsonResponse({ error: "Invalid JSON" }, 400);
+  }
+  const comment = typeof payload?.comment === "string" ? payload.comment.trim() : "";
+  if (!comment) {
+    return jsonResponse({ error: "comment is required" }, 400);
+  }
+  if (comment.length > MAX_ACHIEVEMENT_COMMENT_LENGTH) {
+    return jsonResponse({ error: `comment must be ${MAX_ACHIEVEMENT_COMMENT_LENGTH} characters or fewer` }, 400);
+  }
+
+  await env.DB.prepare("INSERT INTO achievement_comments (player_id, comment) VALUES (?, ?)")
+    .bind(session.playerId, comment).run();
+  return jsonResponse({ ok: true }, 200);
 }
 
 // One-time (or safe-to-rerun) pass for games logged before
@@ -2579,6 +2622,10 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/achievements/vote") {
       return handleAchievementVote(request, env, session);
+    }
+
+    if (request.method === "POST" && url.pathname === "/achievements/comment") {
+      return handleAchievementComment(request, env, session);
     }
 
     if (request.method === "POST" && url.pathname === "/achievements/backfill") {

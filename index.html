@@ -8,7 +8,7 @@
      older copy (GitHub Pages' cache headers otherwise mean a pull-to-
      refresh, which only re-fetches data, can leave a stale script running
      for a while) -- bump N here whenever either file changes. -->
-<link rel="stylesheet" href="style.css?v=21">
+<link rel="stylesheet" href="style.css?v=22">
 
 <!-- Home-screen icon (iOS "Add to Home Screen" + Android/Chrome install).
      Generated from icon-source.png via scripts/generate_icons.py -- rerun
@@ -175,6 +175,19 @@
         <label for="achievements-season-select">Season</label>
         <select id="achievements-season-select"></select>
       </div>
+      <p class="hint" id="achievements-voting-closed-notice" hidden>Voting on which achievements to keep has closed.</p>
+      <!-- Write-only feedback -- goes straight to achievement_comments in
+           D1 (see POST /achievements/comment, relay.js), never read back or
+           listed anywhere in this app. Read directly via wrangler d1
+           execute. -->
+      <div class="achievements-feedback">
+        <label for="achievements-comment-input">Have thoughts on the achievements list? Leave a note for Matt.</label>
+        <textarea id="achievements-comment-input" class="achievements-comment-input" rows="2" maxlength="2000" placeholder="Anything you'd add, cut, or change..."></textarea>
+        <div class="row align-center">
+          <button type="button" id="achievements-comment-submit">Send</button>
+          <span class="hint" id="achievements-comment-status" hidden></span>
+        </div>
+      </div>
       <p class="hint" id="achievements-status">Shuffling up…</p>
       <div id="achievements-list"></div>
     </section>
@@ -239,6 +252,6 @@
   </div>
 </div>
 
-<script src="app.js?v=24"></script>
+<script src="app.js?v=25"></script>
 </body>
 </html>

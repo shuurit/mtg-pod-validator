@@ -244,3 +244,17 @@ CREATE TABLE achievement_votes (
   vote INTEGER NOT NULL,
   PRIMARY KEY (achievement_id, player_id)
 );
+
+-- Free-text feedback about the achievements list overall -- not tied to
+-- any one achievement, and never read back or rendered anywhere in the
+-- app (see POST /achievements/comment); read directly via wrangler d1
+-- execute when actually deciding what to keep/cut. One row per submission
+-- rather than upserted per player like achievement_votes -- there's no
+-- single "current" comment to replace, so multiple submissions over time
+-- just accumulate.
+CREATE TABLE achievement_comments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  player_id INTEGER NOT NULL REFERENCES players(id),
+  comment TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);

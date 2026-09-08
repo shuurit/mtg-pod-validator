@@ -26,6 +26,7 @@ const AUTH_ME_RELAY_URL = RELAY_BASE_URL + "/auth/me";
 const AUTH_LOGOUT_RELAY_URL = RELAY_BASE_URL + "/auth/logout";
 const ACHIEVEMENTS_RELAY_URL = RELAY_BASE_URL + "/achievements";
 const ACHIEVEMENT_VOTE_RELAY_URL = RELAY_BASE_URL + "/achievements/vote";
+const ACHIEVEMENT_COMMENT_RELAY_URL = RELAY_BASE_URL + "/achievements/comment";
 
 // Discord OAuth sign-in. Client ID is public (it's part of the login URL
 // below), matches the constant of the same name in relay.js -- the Client
@@ -411,7 +412,9 @@ async function loadAchievements() {
     const data = await res.json();
     selectedAchievementsSeasonId = data.seasonId;
     renderAchievementsSeasonSelect(data.seasons, data.seasonId);
-    renderAchievements(data.achievements, data.seasonActive);
+    renderAchievements(data.achievements, data.seasonActive, data.votingOpen);
+    const closedNotice = document.getElementById("achievements-voting-closed-notice");
+    if (closedNotice) closedNotice.hidden = data.votingOpen !== false;
     if (statusEl) statusEl.hidden = true;
   } catch (err) {
     if (listEl) listEl.innerHTML = "";
@@ -451,7 +454,7 @@ function renderAchievementsSeasonSelect(seasons, seasonId) {
 // data yet" for an already-concluded season -- two different states that
 // both arrive as winner: null, so the message has to come from
 // seasonActive, not from the achievement itself.
-function renderAchievements(achievements, seasonActive) {
+function renderAchievements(achievements, seasonActive, votingOpen) {
   const container = document.getElementById("achievements-list");
   container.innerHTML = "";
 
@@ -527,21 +530,37 @@ function renderAchievements(achievements, seasonActive) {
     // yet. Server is the source of truth for both tallies and this
     // player's own vote (achievement.votes, from GET /achievements), so a
     // click posts and re-renders from the response rather than guessing
-    // the new counts locally.
-    const voteRow = document.createElement("div");
-    voteRow.className = "trophy-vote";
-    const keepBtn = document.createElement("button");
-    keepBtn.type = "button";
-    keepBtn.className = "vote-btn vote-keep";
-    const cutBtn = document.createElement("button");
-    cutBtn.type = "button";
-    cutBtn.className = "vote-btn vote-cut";
-    applyVoteTally(keepBtn, cutBtn, achievement.votes);
-    keepBtn.addEventListener("click", () => castAchievementVote(achievement.id, "keep", keepBtn, cutBtn));
-    cutBtn.addEventListener("click", () => castAchievementVote(achievement.id, "cut", keepBtn, cutBtn));
-    voteRow.appendChild(keepBtn);
-    voteRow.appendChild(cutBtn);
-    body.appendChild(voteRow);
+    // the new counts locally. Once votingOpen is false (relay.js's
+    // ACHIEVEMENT_VOTING_DEADLINE has passed), the tally is shown as plain
+    // read-only text instead of buttons -- there's nothing left to click.
+    if (votingOpen === false) {
+      const finalTally = document.createElement("div");
+      finalTally.className = "trophy-vote-final";
+      const keepCount = document.createElement("span");
+      keepCount.className = "vote-keep-count";
+      keepCount.textContent = `👍 ${achievement.votes.keep}`;
+      const cutCount = document.createElement("span");
+      cutCount.className = "vote-cut-count";
+      cutCount.textContent = `👎 ${achievement.votes.cut}`;
+      finalTally.appendChild(keepCount);
+      finalTally.appendChild(cutCount);
+      body.appendChild(finalTally);
+    } else {
+      const voteRow = document.createElement("div");
+      voteRow.className = "trophy-vote";
+      const keepBtn = document.createElement("button");
+      keepBtn.type = "button";
+      keepBtn.className = "vote-btn vote-keep";
+      const cutBtn = document.createElement("button");
+      cutBtn.type = "button";
+      cutBtn.className = "vote-btn vote-cut";
+      applyVoteTally(keepBtn, cutBtn, achievement.votes);
+      keepBtn.addEventListener("click", () => castAchievementVote(achievement.id, "keep", keepBtn, cutBtn));
+      cutBtn.addEventListener("click", () => castAchievementVote(achievement.id, "cut", keepBtn, cutBtn));
+      voteRow.appendChild(keepBtn);
+      voteRow.appendChild(cutBtn);
+      body.appendChild(voteRow);
+    }
 
     card.appendChild(body);
     container.appendChild(card);
@@ -587,6 +606,37 @@ function initAchievementsTab() {
     sel.addEventListener("change", () => {
       selectedAchievementsSeasonId = sel.value ? Number(sel.value) : null;
       loadAchievements();
+    });
+  }
+
+  const commentInput = document.getElementById("achievements-comment-input");
+  const commentBtn = document.getElementById("achievements-comment-submit");
+  const commentStatus = document.getElementById("achievements-comment-status");
+  if (commentBtn && commentInput) {
+    commentBtn.addEventListener("click", async () => {
+      const comment = commentInput.value.trim();
+      if (!comment) return;
+      commentBtn.disabled = true;
+      try {
+        const res = await fetch(ACHIEVEMENT_COMMENT_RELAY_URL, {
+          method: "POST",
+          headers: authHeaders(),
+          body: JSON.stringify({ comment }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        commentInput.value = "";
+        if (commentStatus) {
+          commentStatus.hidden = false;
+          commentStatus.textContent = "Sent, thanks!";
+        }
+      } catch (err) {
+        if (commentStatus) {
+          commentStatus.hidden = false;
+          commentStatus.textContent = `Couldn't send that (${err.message}).`;
+        }
+      } finally {
+        commentBtn.disabled = false;
+      }
     });
   }
 }
