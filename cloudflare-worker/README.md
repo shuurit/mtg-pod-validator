@@ -102,15 +102,15 @@ works without one.
   current season. app.js still computes its own copy client-side (it also
   needs the same formula for a live pre-submit preview), but
   `computeRankingsData` underneath this route is no longer unused — the
-  Season Champion achievement (`GET /achievements`) calls it directly
+  First Strike achievement (`GET /achievements`) calls it directly
   (season-scoped, not just "current") so that achievement crowns the same
   player the Player Win Rates tab would call #1, not a second opinion
   computed a different way.
 - `GET /deck-win-rates` — games/wins/win-rate per deck, and per player
   (subtotal). Used by the Discord scripts (`scripts/discord_report.py`).
 - `GET /achievements?season=<id>` — season standings for an extensible
-  list of achievements (31 as of this writing) computed from
-  `game_event_stats`, `game_results`, and (for Season Champion)
+  list of achievements (33 as of this writing) computed from
+  `game_event_stats`, `game_results`, and (for First Strike)
   `computeRankingsData`'s Player Adjusted Win Rate. `season` defaults to the most
   recent season. Winners are withheld (`winner: null` for everything,
   `seasonActive: true` in the response) while that season is still being

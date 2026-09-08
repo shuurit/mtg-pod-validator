@@ -1844,7 +1844,7 @@ const MIN_GAMES_FOR_RATE = 3;
 const ACHIEVEMENTS = [
   {
     id: "season-champion",
-    title: "Season Champion",
+    title: "First Strike",
     description: "Highest Player Adjusted Win Rate across the season.",
     compute(ctx) {
       const top = ctx.rankings[0];
@@ -2212,6 +2212,26 @@ const ACHIEVEMENTS = [
       const seconds = best.value % 60;
       const display = minutes > 0 ? `${minutes}m ${seconds}s turn` : `${seconds}s turn`;
       return { ...best, display };
+    },
+  },
+  {
+    id: "most-games",
+    title: "Vigilance",
+    description: "Most games played across the season.",
+    compute(ctx) {
+      const winner = topPlayer(groupByPlayer(ctx.gameResults), rows => rows.length);
+      if (!winner || winner.value <= 0) return null;
+      return { ...winner, display: `${winner.value} game${winner.value === 1 ? "" : "s"} played` };
+    },
+  },
+  {
+    id: "fewest-games",
+    title: "Phased Out",
+    description: "Fewest games played across the season.",
+    compute(ctx) {
+      const winner = topPlayer(groupByPlayer(ctx.gameResults), rows => rows.length, { ascending: true });
+      if (!winner || winner.value <= 0) return null;
+      return { ...winner, display: `${winner.value} game${winner.value === 1 ? "" : "s"} played` };
     },
   },
 ];
