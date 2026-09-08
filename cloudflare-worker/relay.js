@@ -2162,12 +2162,11 @@ const ACHIEVEMENTS = [
   },
   {
     id: "most-disruptions",
-    title: "The Wrench",
-    emblem: "emblems/most-disruptions.png",
-    description: "Most disruptions across the season.",
+    title: "Punching Bag",
+    description: "Most times disrupted across the season.",
     compute(ctx) {
       const winner = topPlayer(groupByPlayer(ctx.gameResults), rows => sumField(rows, "disruptions"));
-      return winner && winner.value > 0 ? { ...winner, display: `${winner.value} disruption${winner.value === 1 ? "" : "s"}` } : null;
+      return winner && winner.value > 0 ? { ...winner, display: `Disrupted ${winner.value} time${winner.value === 1 ? "" : "s"}` } : null;
     },
   },
   {
