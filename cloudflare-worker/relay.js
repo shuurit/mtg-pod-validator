@@ -1844,7 +1844,7 @@ const MIN_GAMES_FOR_RATE = 3;
 const ACHIEVEMENTS = [
   {
     id: "season-champion",
-    title: "First Strike",
+    title: "Most Likely to Win",
     description: "Highest Player Adjusted Win Rate across the season.",
     compute(ctx) {
       const top = ctx.rankings[0];
