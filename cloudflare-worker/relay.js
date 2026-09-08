@@ -1858,6 +1858,36 @@ const ACHIEVEMENTS = [
     },
   },
   {
+    id: "second-place",
+    title: "Silver Lining",
+    description: "2nd-highest Player Adjusted Win Rate across the season.",
+    compute(ctx) {
+      const second = ctx.rankings[1];
+      if (!second || second.wins + second.losses === 0) return null;
+      return {
+        playerId: second.playerId,
+        name: second.player,
+        value: second.rate,
+        display: `${(second.rate * 100).toFixed(1)}% (${second.wins}-${second.losses})`,
+      };
+    },
+  },
+  {
+    id: "third-place",
+    title: "Bronze Age",
+    description: "3rd-highest Player Adjusted Win Rate across the season.",
+    compute(ctx) {
+      const third = ctx.rankings[2];
+      if (!third || third.wins + third.losses === 0) return null;
+      return {
+        playerId: third.playerId,
+        name: third.player,
+        value: third.rate,
+        display: `${(third.rate * 100).toFixed(1)}% (${third.wins}-${third.losses})`,
+      };
+    },
+  },
+  {
     id: "most-damage",
     title: "I Hate My Friends",
     emblem: "emblems/most-damage.png",
