@@ -762,7 +762,7 @@ async function handleGamesWrite(request, env, ctx, session) {
 function emptyEventTotals() {
   return {
     damage_dealt: 0, healing_done: 0, knockouts: 0, damage_taken: 0, healing_received: 0, self_rating: null,
-    pauses_called: 0, pause_seconds: 0, undos: 0, longest_turn_seconds: 0,
+    pauses_called: 0, pause_seconds: 0, undos: 0, longest_turn_seconds: 0, shortest_turn_seconds: null,
   };
 }
 
@@ -845,6 +845,7 @@ async function computeAndStoreGameEventStats(env, gameId, playgroupGameId) {
       if (playerId) {
         const t = get(playerId);
         if (seconds > t.longest_turn_seconds) t.longest_turn_seconds = seconds;
+        if (t.shortest_turn_seconds === null || seconds < t.shortest_turn_seconds) t.shortest_turn_seconds = seconds;
       }
       turnStartedAt = happenedAt;
     }
@@ -863,21 +864,21 @@ async function computeAndStoreGameEventStats(env, gameId, playgroupGameId) {
         game_id, player_id, damage_dealt, healing_done, knockouts,
         fun_rating, salt_rating, mulligans_taken, self_rating,
         damage_taken, healing_received, ending_life,
-        pauses_called, pause_seconds, undos, longest_turn_seconds
+        pauses_called, pause_seconds, undos, longest_turn_seconds, shortest_turn_seconds
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (game_id, player_id) DO UPDATE SET
         damage_dealt = excluded.damage_dealt, healing_done = excluded.healing_done, knockouts = excluded.knockouts,
         fun_rating = excluded.fun_rating, salt_rating = excluded.salt_rating, mulligans_taken = excluded.mulligans_taken,
         self_rating = excluded.self_rating, damage_taken = excluded.damage_taken,
         healing_received = excluded.healing_received, ending_life = excluded.ending_life,
         pauses_called = excluded.pauses_called, pause_seconds = excluded.pause_seconds, undos = excluded.undos,
-        longest_turn_seconds = excluded.longest_turn_seconds
+        longest_turn_seconds = excluded.longest_turn_seconds, shortest_turn_seconds = excluded.shortest_turn_seconds
     `).bind(
       gameId, playerId, t.damage_dealt, t.healing_done, t.knockouts,
       p.fun_rating ?? null, p.salt_rating ?? null, p.mulligans_taken ?? null, t.self_rating,
       t.damage_taken, t.healing_received, endingLife,
-      t.pauses_called, t.pause_seconds, t.undos, t.longest_turn_seconds
+      t.pauses_called, t.pause_seconds, t.undos, t.longest_turn_seconds, t.shortest_turn_seconds
     ));
   }
 
@@ -2245,6 +2246,23 @@ const ACHIEVEMENTS = [
     },
   },
   {
+    id: "shortest-turn",
+    title: "Speedrun",
+    description: "Shortest single turn across the season.",
+    compute(ctx) {
+      let best = null;
+      for (const r of ctx.eventStats) {
+        if (r.shortest_turn_seconds === null || r.shortest_turn_seconds === undefined) continue;
+        if (!best || r.shortest_turn_seconds < best.value) best = { playerId: r.player_id, name: r.name, value: r.shortest_turn_seconds };
+      }
+      if (!best) return null;
+      const minutes = Math.floor(best.value / 60);
+      const seconds = best.value % 60;
+      const display = minutes > 0 ? `${minutes}m ${seconds}s turn` : `${seconds}s turn`;
+      return { ...best, display };
+    },
+  },
+  {
     id: "most-games",
     title: "Vigilance",
     description: "Most games played across the season.",
@@ -2279,7 +2297,7 @@ async function gatherAchievementContext(env, seasonId) {
       SELECT s.game_id, s.player_id, p.name, s.damage_dealt, s.healing_done, s.knockouts,
              s.fun_rating, s.salt_rating, s.mulligans_taken, s.self_rating,
              s.damage_taken, s.healing_received, s.ending_life,
-             s.pauses_called, s.pause_seconds, s.undos, s.longest_turn_seconds
+             s.pauses_called, s.pause_seconds, s.undos, s.longest_turn_seconds, s.shortest_turn_seconds
       FROM game_event_stats s
       JOIN games g ON g.id = s.game_id
       JOIN players p ON p.id = s.player_id
@@ -2377,7 +2395,8 @@ async function handleAchievements(request, env) {
 // of whether it already has a game_event_stats row -- needed the first
 // time a new column gets added to what computeAndStoreGameEventStats
 // captures (self_rating/damage_taken/healing_received/ending_life/
-// win_con/starting_player_id all arrived after the initial backfill), since
+// win_con/starting_player_id/shortest_turn_seconds all arrived after the
+// initial backfill), since
 // the default NOT EXISTS check would otherwise skip every game that
 // already ran once. Safe either way: computeAndStoreGameEventStats's own
 // ON CONFLICT DO UPDATE overwrites in place, never duplicates.

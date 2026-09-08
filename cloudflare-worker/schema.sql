@@ -222,5 +222,11 @@ CREATE TABLE game_event_stats (
   -- stalling -- a fun/quirky stat, not a rigorous one. 0 (not null) when
   -- the game has no start_game event to anchor the first turn from.
   longest_turn_seconds INTEGER NOT NULL DEFAULT 0,
+  -- Shortest single pass_turn-to-pass_turn gap this player had in this
+  -- game (seconds), same raw wall-clock measurement as longest_turn_seconds
+  -- above. Nullable (not 0-as-sentinel like longest_turn_seconds): a real
+  -- turn genuinely can take 0 seconds (nothing to do, pass immediately),
+  -- so null is what means "no turn timing for this game" here, not 0.
+  shortest_turn_seconds INTEGER,
   PRIMARY KEY (game_id, player_id)
 );
