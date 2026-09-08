@@ -3994,6 +3994,13 @@ consumeAuthRedirect();
 wireAuthControl();
 initPullToRefresh();
 
+// Registers unconditionally (not gated behind sign-in) -- installability
+// is a property of the page shell itself. See sw.js for what it actually
+// caches (just the shell, network-first).
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").catch((err) => console.error("Service worker registration failed:", err));
+}
+
 // Every relay route except sign-in itself now requires a session (see
 // relay.js), so there's no point calling any of these -- let alone
 // showing the tables/forms they populate -- until checkAuthSession
