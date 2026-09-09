@@ -1799,7 +1799,15 @@ function sumField(rows, field) {
 // what let two real typos ("Mest wins ky...", "Most 2od-place...") ship
 // silently in art nobody proofread as text. Real HTML text can't drift
 // from the title/description above it or carry a typo an image can hide.
-const EMBLEM_CACHE_BUST = "5";
+//
+// v6: re-cropped the 32 badges that came from one shared grid image. Its
+// spiky frames touch or overlap between adjacent badges (confirmed by
+// measuring: some columns have literally 0-6px of separation), so the
+// first pass's rigid per-cell rectangle sometimes grabbed a sliver of a
+// neighboring badge's frame along with the real one. Re-cropped with a
+// nearest-seed (watershed) split instead of a fixed grid, so a touching
+// pixel is assigned to whichever badge it actually belongs to.
+const EMBLEM_CACHE_BUST = "6";
 function emblemUrl(path) {
   return path ? `${path}?v=${EMBLEM_CACHE_BUST}` : path;
 }
