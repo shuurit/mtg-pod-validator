@@ -737,14 +737,12 @@ header h1 {
 }
 
 /* Achievements tab -- see renderAchievements in app.js. A responsive grid,
-   not a vertical stack -- 22 achievements as single-column cards would be
+   not a vertical stack -- 36 achievements as single-column cards would be
    an enormous scroll. Column count follows content width, same reasoning
-   as every other card grid in this app. Wider minimum than before: the
-   badge art now includes its own full name ribbon (see .trophy-emblem),
-   which needs real width to stay legible. */
+   as every other card grid in this app. */
 #achievements-list {
   display: grid;
-  /* 140px, not the badge's natural 200px: at a 375px phone the grid has
+  /* 140px, not the badge's natural ~185px: at a 375px phone the grid has
      313px to work with, so a 150px minimum lands one pixel short of two
      columns and drops all 36 trophies into a single 6800px column. */
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
@@ -754,9 +752,8 @@ header h1 {
 
 /* Same border+radius-only convention as .wr-card/.deck-plate above, one
    card per achievement. Column layout (badge on top, centered) rather
-   than the old icon-beside-text row -- the badge is the focal point now
-   that it carries its own name ribbon, not a small supporting icon next
-   to a plain-text heading. */
+   than the old icon-beside-text row -- the badge is the focal point,
+   title and description as real text right below it. */
 .trophy-card {
   display: flex;
   flex-direction: column;
@@ -781,16 +778,18 @@ header h1 {
   display: block;
 }
 
-/* The full badge -- circle art plus its own name ribbon, both baked in --
-   cropped and chroma-keyed from source art (see the /emblems directory),
-   not drawn. No border-radius clip: the art's own irregular silhouette
-   (spiky crown, ribbon flaring past the circle's edges) would just get
-   cut off by a plain circular mask. Sized for the ribbon text to stay
-   readable, which a small supporting-icon size couldn't manage. */
+/* Pure decorative circle art, cropped from source (see the /emblems
+   directory) -- no title or description baked in any more (see the
+   EMBLEM_CACHE_BUST v5 comment in relay.js for why that changed). No
+   border-radius clip: the art's own irregular silhouette (an ornate
+   star-pointed frame past the circle's edge) would just get cut off by a
+   plain circular mask. Capped narrower than the old ribbon-inclusive
+   crop -- a name ribbon needed real width to stay legible; plain art
+   doesn't. */
 .trophy-emblem {
   display: block;
   width: 100%;
-  max-width: 200px;
+  max-width: 150px;
   height: auto;
 }
 
@@ -799,9 +798,6 @@ header h1 {
   min-width: 0;
 }
 
-/* Only used by the plain-emoji fallback -- the illustrated badge's own
-   ribbon carries the title otherwise, so no separate heading repeats it
-   in a plainer font right below. */
 .trophy-title {
   font-family: var(--font-display);
   font-weight: 600;
@@ -826,10 +822,6 @@ header h1 {
   justify-content: center;
   gap: 10px;
   flex-wrap: wrap;
-  /* The illustrated-badge path has no .trophy-description above this to
-     supply spacing (title+description are baked into the image itself
-     now) -- margin here instead of relying on a sibling that isn't always
-     there. */
   margin-top: 10px;
 }
 

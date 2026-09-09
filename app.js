@@ -620,15 +620,15 @@ function renderAchievements(achievements, seasonActive, votingOpen) {
     const card = document.createElement("div");
     card.className = "trophy-card";
 
-    // The full badge -- circle art, name ribbon, AND the description text,
-    // all baked into one image cropped from the source art (see
-    // ACHIEVEMENTS in relay.js and the /emblems directory) -- so this
-    // replaces a separate HTML heading and description entirely, not just
-    // the heading. alt carries both, since a screen reader has no other
-    // way to get either piece now. Falls back to a plain trophy emoji +
-    // real HTML heading/description only if an older cached response
-    // predates the `emblem` field, or for an achievement that doesn't
-    // have art yet (see the 7 added after the original 22).
+    // The badge art is plain decoration now -- circle art only, no title
+    // or description baked in (see ACHIEVEMENTS in relay.js and the
+    // /emblems directory). It used to carry both as text painted into the
+    // image, which is exactly what went stale and wrong when "The Wrench"
+    // got renamed to "Punching Bag" (the art still read THE WRENCH), and
+    // let two real typos ship silently in art nobody proofread as text.
+    // Real HTML title/description below the art can't drift from it or
+    // hide a typo, so every card renders them the same way regardless of
+    // whether it has emblem art -- only the visual above them differs.
     const body = document.createElement("div");
     body.className = "trophy-body";
 
@@ -636,7 +636,7 @@ function renderAchievements(achievements, seasonActive, votingOpen) {
       const img = document.createElement("img");
       img.className = "trophy-emblem";
       img.src = achievement.emblem;
-      img.alt = `${achievement.title} — ${achievement.description}`;
+      img.alt = "";
       card.appendChild(img);
     } else {
       // Drawn sigil rather than a trophy emoji: this stands in for missing
@@ -646,15 +646,16 @@ function renderAchievements(achievements, seasonActive, votingOpen) {
       icon.className = "trophy-icon";
       icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.2 20 12l-8 8.8L4 12z"></path><path d="M12 7.6 16.2 12 12 16.4 7.8 12z"></path></svg>';
       card.appendChild(icon);
-      const title = document.createElement("div");
-      title.className = "trophy-title";
-      title.textContent = achievement.title;
-      card.appendChild(title);
-      const description = document.createElement("div");
-      description.className = "trophy-description";
-      description.textContent = achievement.description;
-      body.appendChild(description);
     }
+
+    const title = document.createElement("div");
+    title.className = "trophy-title";
+    title.textContent = achievement.title;
+    card.appendChild(title);
+    const description = document.createElement("div");
+    description.className = "trophy-description";
+    description.textContent = achievement.description;
+    body.appendChild(description);
 
     if (achievement.winner) {
       const winnerRow = document.createElement("div");

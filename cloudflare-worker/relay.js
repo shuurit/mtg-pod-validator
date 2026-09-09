@@ -1785,13 +1785,21 @@ function sumField(rows, field) {
 // Cache-busts the /emblems/*.png files the same way index.html's own
 // ?v=N busts app.js/style.css -- unlike those two, the emblem PNGs have
 // no build step to bump a version number in, so this is a plain constant
-// bumped by hand whenever the underlying image content changes (it's
-// changed twice already: original tight crop -> ribbon included -> full
-// description included -- confirmed the hard way that a phone which had
-// already loaded an older crop just kept serving it from cache, since the
-// filename itself never changed). Bump this any time /emblems/*.png files
-// get new content, even though their filenames stay the same.
-const EMBLEM_CACHE_BUST = "4";
+// bumped by hand whenever the underlying image content changes (confirmed
+// the hard way that a phone which had already loaded an older crop just
+// kept serving it from cache, since the filename itself never changed).
+// Bump this any time /emblems/*.png files get new content, even though
+// their filenames stay the same.
+//
+// v5: every achievement's art replaced in one pass, and the art itself
+// changed shape -- it's plain circular art now, with no title/description
+// baked in (see renderAchievements in app.js). That used to be baked into
+// the image, which is exactly what went stale and wrong when "The Wrench"
+// got renamed to "Punching Bag" (the old art still read THE WRENCH), and
+// what let two real typos ("Mest wins ky...", "Most 2od-place...") ship
+// silently in art nobody proofread as text. Real HTML text can't drift
+// from the title/description above it or carry a typo an image can hide.
+const EMBLEM_CACHE_BUST = "5";
 function emblemUrl(path) {
   return path ? `${path}?v=${EMBLEM_CACHE_BUST}` : path;
 }
@@ -1846,6 +1854,7 @@ const ACHIEVEMENTS = [
   {
     id: "season-champion",
     title: "Most Likely to Win",
+    emblem: "emblems/season-champion.png",
     description: "Highest Player Adjusted Win Rate across the season.",
     compute(ctx) {
       const top = ctx.rankings[0];
@@ -1861,6 +1870,7 @@ const ACHIEVEMENTS = [
   {
     id: "second-place",
     title: "Silver Lining",
+    emblem: "emblems/second-place.png",
     description: "2nd-highest Player Adjusted Win Rate across the season.",
     compute(ctx) {
       const second = ctx.rankings[1];
@@ -1876,6 +1886,7 @@ const ACHIEVEMENTS = [
   {
     id: "third-place",
     title: "Bronze Age",
+    emblem: "emblems/third-place.png",
     description: "3rd-highest Player Adjusted Win Rate across the season.",
     compute(ctx) {
       const third = ctx.rankings[2];
@@ -2163,6 +2174,7 @@ const ACHIEVEMENTS = [
   {
     id: "most-disruptions",
     title: "Punching Bag",
+    emblem: "emblems/most-disruptions.png",
     description: "Most times disrupted across the season.",
     compute(ctx) {
       const winner = topPlayer(groupByPlayer(ctx.gameResults), rows => sumField(rows, "disruptions"));
@@ -2231,6 +2243,7 @@ const ACHIEVEMENTS = [
   {
     id: "longest-turn",
     title: "Analysis Paralysis",
+    emblem: "emblems/longest-turn.png",
     description: "Longest single turn across the season.",
     compute(ctx) {
       let best = null;
@@ -2247,6 +2260,7 @@ const ACHIEVEMENTS = [
   {
     id: "shortest-turn",
     title: "Speedrun",
+    emblem: "emblems/shortest-turn.png",
     description: "Shortest single turn across the season.",
     compute(ctx) {
       let best = null;
@@ -2264,6 +2278,7 @@ const ACHIEVEMENTS = [
   {
     id: "most-games",
     title: "Vigilance",
+    emblem: "emblems/most-games.png",
     description: "Most games played across the season.",
     compute(ctx) {
       const winner = topPlayer(groupByPlayer(ctx.gameResults), rows => rows.length);
@@ -2274,6 +2289,7 @@ const ACHIEVEMENTS = [
   {
     id: "fewest-games",
     title: "Phased Out",
+    emblem: "emblems/fewest-games.png",
     description: "Fewest games played across the season.",
     compute(ctx) {
       const winner = topPlayer(groupByPlayer(ctx.gameResults), rows => rows.length, { ascending: true });
