@@ -17,7 +17,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="style.css?v=29">
+<link rel="stylesheet" href="style.css?v=30">
 
 <!-- Home-screen icon (iOS "Add to Home Screen" + Android/Chrome install).
      Generated from icon-source.png via scripts/generate_icons.py -- rerun
@@ -271,8 +271,9 @@
 <div id="reveal-modal" class="modal-overlay" hidden>
   <div class="modal-card">
     <button id="reveal-modal-close" class="icon-btn modal-close" aria-label="Close">&#10005;</button>
-    <h2>Ready to Play!</h2>
-    <div id="reveal-color-strip" class="reveal-strip" aria-hidden="true"></div>
+    <h2>Ready to Play</h2>
+    <p class="reveal-summary" id="reveal-summary" hidden></p>
+    <div id="reveal-color-strip" class="reveal-strip" role="img"></div>
     <div id="reveal-modal-grid" class="reveal-grid"></div>
     <a id="reveal-modal-to-game" class="primary to-game-btn" target="_blank" rel="noopener">To the Game!</a>
   </div>
@@ -292,6 +293,6 @@
   </div>
 </div>
 
-<script src="app.js?v=31"></script>
+<script src="app.js?v=32"></script>
 </body>
 </html>

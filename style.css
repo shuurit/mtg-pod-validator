@@ -8,13 +8,18 @@
   --font-display: "Saira Condensed", "Arial Narrow", "Segoe UI", sans-serif;
   --font-body: "IBM Plex Sans", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
 
-  --bg: #f5f3ee;
-  --bg-accent: #efece3;
-  --card-bg: #ffffff;
+  /* Light is the deliberate counterpart to the dark theme's ink ground,
+     not a washed-out copy of it: warm paper rather than white, so the
+     same fixed mana colours and the violet accent sit on it the way they
+     sit on the dark. Card stays lighter than the page so panels still
+     lift, which a flat cream-on-cream lost. */
+  --bg: #f3efe5;
+  --bg-accent: #ece7da;
+  --card-bg: #fdfbf7;
   --ink: #201d18;
   --muted: #5a5347;
-  --border: #e4dfd2;
-  --border-soft: #ece7da;
+  --border: #e2dbca;
+  --border-soft: #ece7db;
   --accent: #6b46f0;
   --accent-strong: #5934d6;
   --accent-soft: rgba(107, 70, 240, 0.09);
@@ -36,7 +41,7 @@
   /* Same color as --bg, alpha'd -- layered over each tab's background
      image so it still reads as "this app's page," light or dark, rather
      than the artwork fighting the theme. */
-  --bg-scrim: rgba(245, 243, 238, 0.83);
+  --bg-scrim: rgba(243, 239, 229, 0.86);
   --card-bg-translucent: rgba(255, 255, 255, 0.25);
 
   /* Magic's own five mana colors -- see buildIdentityCoin in app.js.
@@ -1515,8 +1520,22 @@ td.num {
   border: 6px solid var(--card-bg);
   box-shadow: var(--shadow-md), inset 0 0 0 1px var(--border);
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 8px;
+}
+
+/* Seats-ready count under the validate button. Says nothing about power
+   -- see updatePodProgress in app.js for why that matters here. */
+.pod-progress {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
 }
 /* ID + class beats .primary's own rules regardless of source order --
    .table-center-btn only overrides shape/size, .primary still supplies
@@ -1802,10 +1821,25 @@ td.num {
 
 .modal-card h2 {
   margin: 0 0 4px;
-  font-size: 1.2rem;
+  font-family: var(--font-display);
+  font-size: 2.1rem;
   font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
   padding-right: 30px;
 }
+
+/* The number the pod just passed on. Safe to state plainly here and only
+   here: everything this table masks (see .slot-deck-masked) is already
+   revealed by the time this modal opens. */
+.reveal-summary {
+  margin: 0 0 8px;
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.reveal-summary[hidden] { display: none; }
 
 .modal-close {
   position: absolute;
@@ -1819,13 +1853,32 @@ td.num {
 .reveal-strip {
   display: flex;
   gap: 4px;
-  margin: 2px 0 4px;
+  margin: 2px 0 8px;
 }
-.reveal-strip span {
+/* Each bar grows in proportion to how many decks at the table play that
+   colour (flex-grow is set per bar in showRevealModal), so the strip
+   reads as this pod's actual colour balance rather than a flat legend. */
+.reveal-strip-bar {
   flex: 1 1 0;
-  height: 5px;
-  border-radius: 3px;
+  min-width: 0;
+  height: 20px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  overflow: hidden;
 }
+/* White is the only mana colour light enough to take dark text; the other
+   four are mid-to-dark fills where dark type would disappear (black most
+   obviously, but blue and green fail it too). */
+.reveal-strip-bar-w { color: rgba(0, 0, 0, 0.62); }
+.reveal-strip-bar-u,
+.reveal-strip-bar-b,
+.reveal-strip-bar-r,
+.reveal-strip-bar-g { color: rgba(255, 255, 255, 0.86); }
 .reveal-strip[hidden] { display: none; }
 
 .reveal-grid {

@@ -1616,7 +1616,30 @@ function updateSeatDisplay(wrap, i) {
   seatEl.querySelector(".seat-name").textContent = player ? player.name : "Add player";
   seatEl.querySelector(".seat-state").textContent = !player
     ? `Seat ${i + 1}`
-    : (!slot.deckId ? "Pick a deck" : (slot.outOfRange ? "⚠️ Pick a new deck" : "🔒 Deck selected"));
+    : (!slot.deckId ? "Pick a deck" : (slot.outOfRange ? "Pick a new deck" : "Deck locked in"));
+  updatePodProgress(wrap);
+}
+
+// How far the table is from being ready, shown under the validate button
+// in the felt centre. Deliberately a COUNT OF SEATS and nothing else: the
+// concept this came from put a live power spread here, which would have
+// quietly undone the masking the rest of this table is built around (see
+// .slot-deck-masked) -- watching that number move as each player picks
+// would let anyone at the table infer the deck that just got chosen.
+// Seats filled leaks nothing, and it's the part you actually can't see at
+// a glance once the seats are tapped.
+function updatePodProgress(wrap) {
+  const el = wrap.querySelector("#pod-progress");
+  if (!el) return;
+  const total = podSelections.length;
+  const ready = podSelections.filter(s => s.playerId && s.deckId).length;
+  if (ready === 0) {
+    el.textContent = `${total} seats`;
+  } else if (ready < total) {
+    el.textContent = `${ready} of ${total} seats ready`;
+  } else {
+    el.textContent = "All seats ready";
+  }
 }
 
 // One seat around the table -- evenly spaced starting from the top,
@@ -1660,9 +1683,12 @@ function buildSeatEl(i) {
 
   const stateEl = document.createElement("span");
   stateEl.className = "seat-state";
+  // Kept identical to updateSeatDisplay's copy -- this builds the seat and
+  // that one refreshes it in place, so any wording that drifts between the
+  // two shows up as the label changing on its own after a re-check.
   stateEl.textContent = !player
     ? `Seat ${i + 1}`
-    : (!slot.deckId ? "Pick a deck" : (slot.outOfRange ? "⚠️ Pick a new deck" : "🔒 Deck selected"));
+    : (!slot.deckId ? "Pick a deck" : (slot.outOfRange ? "Pick a new deck" : "Deck locked in"));
   seatEl.appendChild(stateEl);
 
   seatEl.addEventListener("click", () => {
@@ -1726,11 +1752,19 @@ function renderPodTable(container, validateBtn) {
     felt.appendChild(validateBtn);
   }
 
+  // Seats-ready count under the button -- see updatePodProgress for why
+  // this is a seat count and deliberately not a live power spread.
+  const progress = document.createElement("div");
+  progress.id = "pod-progress";
+  progress.className = "pod-progress";
+  felt.appendChild(progress);
+
   for (let i = 0; i < podCount; i++) {
     wrap.appendChild(buildSeatEl(i));
   }
 
   container.appendChild(wrap);
+  updatePodProgress(wrap);
 
   if (editingSeatIndex !== null) {
     container.appendChild(buildSeatEditor(editingSeatIndex, wrap));
@@ -1839,19 +1873,55 @@ function showRevealModal(evaluated) {
   // bars regardless of pod size, since there are only 5 colors to combine.
   if (colorStrip) {
     colorStrip.innerHTML = "";
-    const podColors = new Set();
+    // Weighted by how many decks at the table actually play each colour,
+    // not just which colours appear -- a pod where three decks are green
+    // and one splashes red should look like that, which an even five-bar
+    // strip couldn't show. Skips entries with no captured colour identity
+    // entirely rather than treating "unknown" as "colorless" -- the two
+    // aren't the same claim. Naturally capped at 5 bars regardless of pod
+    // size, since there are only 5 colors to combine.
+    const colorCounts = new Map();
     for (const entry of evaluated) {
-      if (typeof entry.colorIdentity === "string") {
-        for (const c of entry.colorIdentity) podColors.add(c);
+      if (typeof entry.colorIdentity !== "string") continue;
+      for (const c of new Set(entry.colorIdentity)) {
+        colorCounts.set(c, (colorCounts.get(c) || 0) + 1);
       }
     }
-    const ordered = WUBRG_ORDER.filter(c => podColors.has(c));
+    const ordered = WUBRG_ORDER.filter(c => colorCounts.has(c));
     for (const c of ordered) {
+      const count = colorCounts.get(c);
       const bar = document.createElement("span");
+      bar.className = `reveal-strip-bar reveal-strip-bar-${c.toLowerCase()}`;
       bar.style.background = `var(${PIP_COLOR_VAR[c]})`;
+      bar.style.flexGrow = String(count);
+      bar.textContent = count > 1 ? `${c} ${count}` : c;
       colorStrip.appendChild(bar);
     }
     colorStrip.hidden = ordered.length === 0;
+    colorStrip.setAttribute(
+      "aria-label",
+      ordered.length
+        ? `Colours at this table: ${ordered.map(c => `${WUBRG_NAMES[c]} ${colorCounts.get(c)}`).join(", ")}`
+        : ""
+    );
+  }
+
+  // Post-reveal, so the spread is safe to state outright -- this is the
+  // number the pod just passed on, and it's the whole reason the table
+  // agreed to sit down. Scoped to judged (non-exempt) decks, same as the
+  // banner on the results card.
+  const revealSummary = document.getElementById("reveal-summary");
+  if (revealSummary) {
+    const judgedPowers = evaluated.filter(e => !e.newDeck).map(e => e.power);
+    if (judgedPowers.length) {
+      const lo = Math.min(...judgedPowers);
+      const hi = Math.max(...judgedPowers);
+      revealSummary.textContent =
+        `Spread ${(hi - lo).toFixed(1)} · ${lo.toFixed(1)}–${hi.toFixed(1)} · ${evaluated.length} seat${evaluated.length === 1 ? "" : "s"}`;
+      revealSummary.hidden = false;
+    } else {
+      revealSummary.hidden = true;
+    }
   }
 
   // Sized so the whole popup fits the viewport with no scrolling, for any
