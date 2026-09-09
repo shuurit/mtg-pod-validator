@@ -161,7 +161,7 @@ let podSelections = []; // { playerId, deckId, outOfRange } per slot
 // way playerId/deckId already are) would be meaningless without it.
 let lastCeiling = null;
 // Which seat's player/deck picker is open in the round-table view of Set
-// Up Pod (see renderPodTable) -- only one at a time, same single-open
+// Up Pod (see buildDealRow) -- only one at a time, same single-open
 // pattern as expandedPlayerId/bracketEditingDeckIds below. null means every
 // seat is just showing its own (masked) state, nothing being edited. Reset
 // whenever podCount changes out from under it (a stale index past the new
@@ -1483,345 +1483,276 @@ function resetPodSetup() {
 // masked button's reveal-click, which changes nothing yet) -- the round
 // table uses it to update a seat's own display live, without re-rendering
 // the whole picker out from under whoever's mid-edit.
-function buildSlotPicker(slot, onChange) {
-  const playerSelect = document.createElement("select");
-  const blankPlayerOpt = document.createElement("option");
-  blankPlayerOpt.value = "";
-  blankPlayerOpt.textContent = "Select player…";
-  playerSelect.appendChild(blankPlayerOpt);
-  for (const p of podPlayers) {
-    const opt = document.createElement("option");
-    opt.value = p.id;
-    opt.textContent = p.name;
-    // A <select>'s .value (and so slot.playerId, read from it) is always
-    // a string, but real D1 player ids are integers -- String() on both
-    // sides here (and at every other p.id/d.id comparison against a
-    // slot value below) so this works whether ids are D1 integers or
-    // the fallback roster's string slugs, without assuming either.
-    if (String(p.id) === slot.playerId) opt.selected = true;
-    playerSelect.appendChild(opt);
-  }
-
-  const deckSelect = document.createElement("select");
-
-  // Once a deck is picked, the select is swapped out for this masked
-  // stand-in so nobody reading the screen over a player's shoulder can
-  // see the deck's name or power -- not even the player, once they've
-  // moved on. Tapping it re-reveals the select to change the pick.
-  const maskedBtn = document.createElement("button");
-  maskedBtn.type = "button";
-  maskedBtn.className = "slot-deck-masked";
-  maskedBtn.innerHTML = `${uiIcon("lock")}<span>Deck selected — tap to change</span>`;
-
-  function syncDeckVisibility() {
-    const masked = !!slot.deckId;
-    deckSelect.hidden = masked;
-    maskedBtn.hidden = !masked;
-  }
-
-  function refreshDeckOptions() {
-    deckSelect.innerHTML = "";
-    const player = podPlayers.find(p => String(p.id) === slot.playerId);
-    const blank = document.createElement("option");
-    blank.value = "";
-    blank.textContent = player ? "Select deck…" : "—";
-    deckSelect.appendChild(blank);
-    deckSelect.disabled = !player;
-    if (player) {
-      // Archived on playgroup.gg means retired -- not offered here at all,
-      // same reasoning as Players & Decks below.
-      const activeDecks = player.decks.filter(d => !d.archived);
-      // A slot the last check flagged as over the pod's range only offers
-      // decks that would actually bring it back in range, so re-picking
-      // can't just land on another incompatible deck. Falls back to the
-      // full list if nothing qualifies (e.g. this player has no deck that
-      // low) rather than leaving the select with nothing pickable at all.
-      const restricted = slot.outOfRange && lastCeiling !== null
-        ? activeDecks.filter(d => d.power <= lastCeiling)
-        : null;
-      const decks = restricted && restricted.length > 0 ? restricted : activeDecks;
-      for (const d of decks) {
-        const opt = document.createElement("option");
-        opt.value = d.id;
-        opt.textContent = d.name;
-        if (String(d.id) === slot.deckId) opt.selected = true;
-        deckSelect.appendChild(opt);
-      }
-    }
-    syncDeckVisibility();
-  }
-
-  function markStaleIfChecked() {
-    const resultsSection = document.getElementById("results-section");
-    if (!resultsSection || resultsSection.hidden) return;
-    document.getElementById("validate-btn").classList.add("glow");
-    const staleRow = document.querySelector(`.result-row[data-player-id="${slot.playerId}"]`);
-    if (staleRow) staleRow.classList.add("pending-recheck");
-  }
-
-  playerSelect.addEventListener("change", () => {
-    slot.playerId = playerSelect.value;
-    slot.deckId = "";
-    refreshDeckOptions();
-    if (onChange) onChange();
-  });
-
-  deckSelect.addEventListener("change", () => {
-    slot.deckId = deckSelect.value;
-    syncDeckVisibility();
-    markStaleIfChecked();
-    if (onChange) onChange();
-  });
-
-  maskedBtn.addEventListener("click", () => {
-    // Rebuilt fresh (not just unhidden) so a slot flagged out-of-range by
-    // the last check shows its filtered, range-restricted options rather
-    // than whatever was already rendered before that check ran.
-    refreshDeckOptions();
-    deckSelect.hidden = false;
-    maskedBtn.hidden = true;
-    deckSelect.focus();
-  });
-
-  refreshDeckOptions();
-
-  return { playerSelect, deckSelect, maskedBtn };
+// The decks a seat may actually pick from. Archived on playgroup.gg means
+// retired -- never offered, same reasoning as Players & Decks. A seat the
+// last check flagged as over the pod's range only offers decks that would
+// bring it back in range, so re-picking can't land on another
+// incompatible deck; falls back to the full list when this player has
+// nothing that low, rather than offering nothing pickable at all.
+function decksAvailableForSlot(slot) {
+  const player = podPlayers.find(p => String(p.id) === slot.playerId);
+  if (!player) return [];
+  const activeDecks = player.decks.filter(d => !d.archived);
+  const restricted = slot.outOfRange && lastCeiling !== null
+    ? activeDecks.filter(d => d.power <= lastCeiling)
+    : null;
+  return restricted && restricted.length > 0 ? restricted : activeDecks;
 }
 
-// Plain vertical list, one row per seat -- what Set Up Pod always looked
-// like, kept as-is for pods bigger than the round table can stay legible
-// at (see renderPodSlots). Nothing about this changed in the seat-picker
-// rework beyond factoring its picker out into buildSlotPicker above.
-function renderPodSlotsLinear(container) {
-  for (let i = 0; i < podCount; i++) {
-    const slot = podSelections[i];
-    const row = document.createElement("div");
-    row.className = "slot";
-    const label = document.createElement("div");
-    label.className = "slot-label";
-    label.textContent = `Player ${i + 1}`;
-    const { playerSelect, deckSelect, maskedBtn } = buildSlotPicker(slot);
-    row.append(label, playerSelect, deckSelect, maskedBtn);
-    container.appendChild(row);
-  }
+// Changing a pick after a check has run leaves the results card showing a
+// verdict for a pod that no longer exists -- this flags the button and the
+// affected row rather than letting it go quietly stale.
+function markPodCheckStale(slot) {
+  const resultsSection = document.getElementById("results-section");
+  if (!resultsSection || resultsSection.hidden) return;
+  document.getElementById("validate-btn").classList.add("glow");
+  const staleRow = document.querySelector(`.result-row[data-player-id="${slot.playerId}"]`);
+  if (staleRow) staleRow.classList.add("pending-recheck");
 }
 
-// Updates one seat button's own face (avatar initial, name, masked/pick
-// state) in place -- called from a picker's onChange so a seat reflects
-// what was just picked immediately, the same way the linear list's masked
-// button already appears the instant a deck's chosen, without tearing
-// down and rebuilding the open editor underneath whoever's still using it.
-function updateSeatDisplay(wrap, i) {
-  const seatEl = wrap.querySelector(`.seat[data-seat-index="${i}"]`);
-  if (!seatEl) return;
+// The first seat still missing a player or a deck, or null when the pod's
+// complete. Drives the deal cadence: finishing one seat opens the next.
+function nextIncompleteSeat() {
+  for (let i = 0; i < podSelections.length; i++) {
+    if (!podSelections[i].playerId || !podSelections[i].deckId) return i;
+  }
+  return null;
+}
+
+// One seat, as a row. Collapsed it's a single line; the open one expands
+// in place to whatever that seat still needs -- players to choose from, or
+// that player's decks. Only one row is ever open (editingSeatIndex).
+//
+// A settled row shows the player and a lock, never the deck: the deck a
+// player picked stays hidden from everyone including them, which is the
+// same rule the round table enforced by masking its picker.
+function buildDealRow(i) {
   const slot = podSelections[i];
   const player = podPlayers.find(p => String(p.id) === slot.playerId);
-  seatEl.classList.toggle("filled", !!player);
-  seatEl.classList.toggle("empty", !player);
-  // Tapped -- the same quarter-turn a permanent makes when it's tapped for
-  // mana -- once a deck is actually picked, not merely a player. See the
-  // "Tap for Mana" concept review; only the seat's own rotation shipped,
-  // not that concept's colored mana glyph/pool, since a deck's color is
-  // exactly the thing this table keeps masked until the reveal. Untapped
-  // again the moment Check Deck Power Spread flags this slot as out of
-  // range (see runValidation) -- a deck IS still picked, but it's the
-  // wrong one, and the seat should look like it needs attention again
-  // rather than still reading as "done."
-  seatEl.classList.toggle("tapped", !!(player && slot.deckId && !slot.outOfRange));
-  seatEl.querySelector(".seat-avatar").textContent = player ? player.name.charAt(0).toUpperCase() : "+";
-  seatEl.querySelector(".seat-name").textContent = player ? player.name : "Add player";
-  seatEl.querySelector(".seat-state").textContent = !player
-    ? `Seat ${i + 1}`
-    : (!slot.deckId ? "Pick a deck" : (slot.outOfRange ? "Pick a new deck" : "Deck locked in"));
-  updatePodProgress(wrap);
-}
+  const expanded = editingSeatIndex === i;
+  const settled = !!(player && slot.deckId);
 
-// How far the table is from being ready, shown under the validate button
-// in the felt centre. Deliberately a COUNT OF SEATS and nothing else: the
-// concept this came from put a live power spread here, which would have
-// quietly undone the masking the rest of this table is built around (see
-// .slot-deck-masked) -- watching that number move as each player picks
-// would let anyone at the table infer the deck that just got chosen.
-// Seats filled leaks nothing, and it's the part you actually can't see at
-// a glance once the seats are tapped.
-function updatePodProgress(wrap) {
-  const el = wrap.querySelector("#pod-progress");
-  if (!el) return;
-  const total = podSelections.length;
-  const ready = podSelections.filter(s => s.playerId && s.deckId).length;
-  if (ready === 0) {
-    el.textContent = `${total} seats`;
-  } else if (ready < total) {
-    el.textContent = `${ready} of ${total} seats ready`;
-  } else {
-    el.textContent = "All seats ready";
-  }
-}
+  const row = document.createElement("div");
+  row.className = "deal-row";
+  if (expanded) row.classList.add("deal-row-open");
+  else if (slot.outOfRange) row.classList.add("deal-row-flagged");
+  else if (settled) row.classList.add("deal-row-settled");
 
-// One seat around the table -- evenly spaced starting from the top,
-// clockwise, for however many seats this pod has (podCount, capped at 6
-// here; see renderPodSlots). A seat only ever shows who's sitting there
-// and whether their deck is picked, never the deck itself -- same masking
-// rule as the linear list's maskedBtn, just read off podSelections
-// directly instead of hiding/showing a sibling element.
-function buildSeatEl(i) {
-  const slot = podSelections[i];
-  const angleDeg = -90 + (360 / podCount) * i;
-  const angleRad = (angleDeg * Math.PI) / 180;
-  const radius = 108;
-  const x = 140 + radius * Math.cos(angleRad);
-  const y = 140 + radius * Math.sin(angleRad);
-  const player = podPlayers.find(p => String(p.id) === slot.playerId);
-
-  const seatEl = document.createElement("button");
-  seatEl.type = "button";
-  seatEl.className = "seat" +
-    (player ? " filled" : " empty") +
-    (editingSeatIndex === i ? " editing" : "") +
-    (player && slot.deckId && !slot.outOfRange ? " tapped" : "");
-  seatEl.dataset.seatIndex = i;
-  seatEl.style.left = `${x}px`;
-  seatEl.style.top = `${y}px`;
-  seatEl.setAttribute(
-    "aria-label",
-    player ? `${player.name}, seat ${i + 1} — tap to change` : `Seat ${i + 1}, empty — tap to add a player`
-  );
+  const head = document.createElement("button");
+  head.type = "button";
+  head.className = "deal-head";
+  head.addEventListener("click", () => {
+    editingSeatIndex = expanded ? null : i;
+    renderPodSlots();
+  });
 
   const avatar = document.createElement("span");
-  avatar.className = "seat-avatar";
+  avatar.className = "deal-avatar";
   avatar.textContent = player ? player.name.charAt(0).toUpperCase() : "+";
-  seatEl.appendChild(avatar);
+  head.appendChild(avatar);
 
+  const text = document.createElement("span");
+  text.className = "deal-text";
   const nameEl = document.createElement("span");
-  nameEl.className = "seat-name";
-  nameEl.textContent = player ? player.name : "Add player";
-  seatEl.appendChild(nameEl);
+  nameEl.className = "deal-name";
+  nameEl.textContent = player ? player.name : `Seat ${i + 1}`;
+  text.appendChild(nameEl);
 
   const stateEl = document.createElement("span");
-  stateEl.className = "seat-state";
-  // Kept identical to updateSeatDisplay's copy -- this builds the seat and
-  // that one refreshes it in place, so any wording that drifts between the
-  // two shows up as the label changing on its own after a re-check.
-  stateEl.textContent = !player
-    ? `Seat ${i + 1}`
-    : (!slot.deckId ? "Pick a deck" : (slot.outOfRange ? "Pick a new deck" : "Deck locked in"));
-  seatEl.appendChild(stateEl);
+  stateEl.className = "deal-state";
+  if (!player) {
+    stateEl.textContent = "Add a player";
+  } else if (slot.outOfRange) {
+    // outOfRange survives until the NEXT check (same as before this
+    // layout), and a flagged seat always still holds the deck that failed
+    // -- so "has a deck" can't be what distinguishes these two. repicked
+    // is set the moment this seat's deck actually changes, which is when
+    // the honest ask stops being "pick a new deck" and becomes "re-check".
+    stateEl.textContent = slot.repicked ? "Re-check the spread" : "Pick a new deck";
+  } else if (slot.deckId) {
+    stateEl.innerHTML = `${uiIcon("lock")}<span>Deck locked in</span>`;
+  } else {
+    stateEl.textContent = "Pick a deck";
+  }
+  text.appendChild(stateEl);
+  head.appendChild(text);
 
-  seatEl.addEventListener("click", () => {
-    editingSeatIndex = editingSeatIndex === i ? null : i;
-    renderPodSlots();
-  });
+  const action = document.createElement("span");
+  action.className = "deal-action";
+  action.textContent = expanded ? "Done" : (settled ? "Change" : "");
+  head.appendChild(action);
 
-  return seatEl;
+  row.appendChild(head);
+  if (expanded) row.appendChild(buildDealBody(i, slot, player));
+  return row;
 }
 
-// The picker for whichever seat is currently open -- a single shared
-// editor below the table rather than one embedded per seat, since 6 seats'
-// worth of inline forms packed around a small circle has nowhere legible
-// to expand into. Closing it (Done, or tapping the same seat again) is
-// explicit, same as the bracket editor elsewhere in this app never closes
-// itself on an outside click either.
-function buildSeatEditor(i, wrap) {
-  const slot = podSelections[i];
-  const panel = document.createElement("div");
-  panel.className = "seat-editor";
+function buildDealBody(i, slot, player) {
+  const body = document.createElement("div");
+  body.className = "deal-body";
 
-  const heading = document.createElement("div");
-  heading.className = "seat-editor-heading";
-  heading.textContent = `Seat ${i + 1}`;
-  panel.appendChild(heading);
+  // --- no player yet: who's in this seat ---
+  if (!player) {
+    const chips = document.createElement("div");
+    chips.className = "deal-chips";
+    for (const p of podPlayers) {
+      const seatedElsewhere = podSelections.some((s, j) => j !== i && s.playerId === String(p.id));
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "deal-chip" + (seatedElsewhere ? " deal-chip-taken" : "");
+      chip.disabled = seatedElsewhere;
 
-  const { playerSelect, deckSelect, maskedBtn } = buildSlotPicker(slot, () => updateSeatDisplay(wrap, i));
-  const pickerRow = document.createElement("div");
-  pickerRow.className = "seat-editor-row";
-  pickerRow.append(playerSelect, deckSelect, maskedBtn);
-  panel.appendChild(pickerRow);
+      const chipAvatar = document.createElement("span");
+      chipAvatar.className = "deal-chip-avatar";
+      chipAvatar.textContent = p.name.charAt(0).toUpperCase();
+      chip.appendChild(chipAvatar);
 
-  const doneBtn = document.createElement("button");
-  doneBtn.type = "button";
-  doneBtn.className = "seat-editor-done";
-  doneBtn.textContent = "Done";
-  doneBtn.addEventListener("click", () => {
-    editingSeatIndex = null;
+      const chipName = document.createElement("span");
+      chipName.textContent = p.name;
+      chip.appendChild(chipName);
+
+      if (seatedElsewhere) {
+        const tag = document.createElement("span");
+        tag.className = "deal-chip-tag";
+        tag.textContent = "seated";
+        chip.appendChild(tag);
+      }
+
+      chip.addEventListener("click", () => {
+        slot.playerId = String(p.id);
+        slot.deckId = "";
+        renderPodSlots();
+      });
+      chips.appendChild(chip);
+    }
+    body.appendChild(chips);
+    return body;
+  }
+
+  // --- player chosen: which of their decks ---
+  const decks = decksAvailableForSlot(slot);
+  const list = document.createElement("div");
+  list.className = "deal-decks";
+  for (const d of decks) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "deal-deck" + (String(d.id) === slot.deckId ? " deal-deck-current" : "");
+
+    const name = document.createElement("span");
+    name.className = "deal-deck-name";
+    name.textContent = d.name;
+    btn.appendChild(name);
+
+    // Games logged, not power -- power is the thing this screen keeps
+    // hidden, and how often a deck gets played is the one hint that
+    // helps you find it in a 17-deck list without leaking anything.
+    const games = document.createElement("span");
+    games.className = "deal-deck-games";
+    games.textContent = d.gamesLogged === 1 ? "1 game" : `${d.gamesLogged || 0} games`;
+    btn.appendChild(games);
+
+    btn.addEventListener("click", () => {
+      const changed = slot.deckId !== String(d.id);
+      slot.deckId = String(d.id);
+      if (slot.outOfRange && changed) slot.repicked = true;
+      markPodCheckStale(slot);
+      // Finishing a seat deals the next one rather than leaving you on a
+      // finished row -- and closes up entirely once the pod's full.
+      editingSeatIndex = nextIncompleteSeat();
+      renderPodSlots();
+    });
+    list.appendChild(btn);
+  }
+  body.appendChild(list);
+
+  const footer = document.createElement("div");
+  footer.className = "deal-body-footer";
+
+  const swap = document.createElement("button");
+  swap.type = "button";
+  swap.className = "deal-swap";
+  swap.textContent = "Someone else in this seat";
+  swap.addEventListener("click", () => {
+    slot.playerId = "";
+    slot.deckId = "";
     renderPodSlots();
   });
-  panel.appendChild(doneBtn);
+  footer.appendChild(swap);
 
-  return panel;
+  const note = document.createElement("span");
+  note.className = "deal-note";
+  note.innerHTML = `${uiIcon("lock")}<span>Hidden once you pick</span>`;
+  footer.appendChild(note);
+
+  body.appendChild(footer);
+  return body;
 }
 
-// Round table -- see the "Take a Seat" concept this came out of. The real
-// Check Deck Power Spread button (not a copy) gets moved into the felt's
-// center each render; renderPodSlots moves it back to its own row if the
-// pod ever grows past the table's seat cap, so there's exactly one button
-// with exactly one click listener regardless of which layout is showing.
-function renderPodTable(container, validateBtn) {
+// One segment per seat, filled as each one settles -- the at-a-glance
+// version of the count, and the only thing at the top of this screen that
+// isn't a seat.
+function buildDealProgress() {
   const wrap = document.createElement("div");
-  wrap.className = "table-wrap";
+  wrap.className = "deal-progress";
 
-  const felt = document.createElement("div");
-  felt.className = "table-felt";
-  wrap.appendChild(felt);
-
-  if (validateBtn) {
-    validateBtn.classList.add("table-center-btn");
-    felt.appendChild(validateBtn);
+  const track = document.createElement("div");
+  track.className = "deal-progress-track";
+  let ready = 0;
+  for (const slot of podSelections) {
+    const seg = document.createElement("span");
+    const settled = !!(slot.playerId && slot.deckId && !slot.outOfRange);
+    if (settled) ready++;
+    seg.className = "deal-seg" + (settled ? " deal-seg-on" : (slot.playerId ? " deal-seg-part" : ""));
+    track.appendChild(seg);
   }
+  wrap.appendChild(track);
 
-  // Seats-ready count under the button -- see updatePodProgress for why
-  // this is a seat count and deliberately not a live power spread.
-  const progress = document.createElement("div");
-  progress.id = "pod-progress";
-  progress.className = "pod-progress";
-  felt.appendChild(progress);
+  const label = document.createElement("span");
+  label.className = "deal-progress-label";
+  label.textContent = ready === podSelections.length ? "All seats ready" : `${ready} of ${podSelections.length}`;
+  wrap.appendChild(label);
 
+  return wrap;
+}
+
+// The pod builder: one row per seat, top to bottom, at every pod size.
+// Replaces the round table that used to live here (and the separate plain
+// list a pod of 7-8 fell back to) -- one layout to learn instead of two,
+// the controls open inside the row you tapped rather than in a panel
+// below the table, and the table itself is saved for the reveal.
+function renderPodDealIn(container) {
+  container.appendChild(buildDealProgress());
+
+  const rows = document.createElement("div");
+  rows.className = "deal-rows";
   for (let i = 0; i < podCount; i++) {
-    wrap.appendChild(buildSeatEl(i));
+    rows.appendChild(buildDealRow(i));
   }
-
-  container.appendChild(wrap);
-  updatePodProgress(wrap);
-
-  if (editingSeatIndex !== null) {
-    container.appendChild(buildSeatEditor(editingSeatIndex, wrap));
-  }
+  container.appendChild(rows);
 }
 
 function renderPodSlots() {
   const container = document.getElementById("pod-slots");
-  const validateBtn = document.getElementById("validate-btn");
-  const validateRow = document.getElementById("pod-validate-row");
-  // The real button may currently be living inside this container --
-  // renderPodTable moved it into the felt on the last render. Move it back
-  // to its own row FIRST: clearing the container below would otherwise
-  // destroy it along with everything else, since innerHTML="" removes
-  // descendants permanently, not just what this function itself rendered.
-  if (validateBtn && validateRow && container.contains(validateBtn)) {
-    validateBtn.classList.remove("table-center-btn");
-    validateRow.appendChild(validateBtn);
-  }
   container.innerHTML = "";
 
   const prevSelections = podSelections;
   podSelections = [];
   for (let i = 0; i < podCount; i++) {
     const prev = prevSelections[i] || {};
-    podSelections.push({ playerId: prev.playerId || "", deckId: prev.deckId || "", outOfRange: !!prev.outOfRange });
+    podSelections.push({ playerId: prev.playerId || "", deckId: prev.deckId || "", outOfRange: !!prev.outOfRange, repicked: !!prev.repicked });
   }
   // A seat that was open under the old count means nothing once the pod's
   // shrunk past it.
   if (editingSeatIndex !== null && editingSeatIndex >= podCount) editingSeatIndex = null;
-
-  // A round table stays legible up to 6 seats -- past that, seat labels
-  // start crowding each other at any table size that still fits a phone
-  // screen, so a bigger pod falls back to the plain list instead of
-  // forcing an ever-shrinking circle. This app supports pods up to 8.
-  if (podCount > 6) {
-    renderPodSlotsLinear(container);
-    return;
+  // Open the first seat on a pod nobody's touched yet, so the screen
+  // starts mid-flow instead of asking for a tap to begin. Deliberately
+  // only for a completely empty pod -- otherwise closing a row with Done
+  // would just spring it (or another) straight back open.
+  if (editingSeatIndex === null && podSelections.every(s => !s.playerId && !s.deckId)) {
+    editingSeatIndex = 0;
   }
 
-  renderPodTable(container, validateBtn);
+  renderPodDealIn(container);
 }
 
 // ---------- reveal modal (Scryfall commander art) ----------
@@ -2148,8 +2079,7 @@ function runValidation() {
   document.getElementById("validate-btn").classList.remove("glow");
   resultsDiv.innerHTML = "";
   resultsSection.hidden = false;
-  // The button lives inside the round table now (see renderPodTable), with
-  // its own result rendering in a separate card below -- on a phone that
+  // Results render in a separate card below the seats -- on a phone that
   // card can easily start below the fold, so tapping the button did
   // something invisible until you scrolled down to check. Same pattern
   // openGameForm already uses for the same reason (see its own
@@ -2221,17 +2151,19 @@ function runValidation() {
   }
 
   const evaluated = evaluatePod(entries);
-  evaluated.forEach((entry, i) => { podSelections[i].outOfRange = !entry.compatible; });
+  evaluated.forEach((entry, i) => {
+    podSelections[i].outOfRange = !entry.compatible;
+    // Every seat's verdict is fresh as of this check, so nothing is
+    // "already re-picked" any more.
+    podSelections[i].repicked = false;
+  });
 
-  // Untap (or leave untapped) every seat to match the outOfRange flags
-  // just set above -- round-table view only (podCount > 6 falls back to
-  // the plain list, which has no tapped/untapped concept at all). Without
-  // this, a seat kept reading as "🔒 Deck selected" after a failed check,
-  // giving no visual nudge that specifically that pick needs to change.
-  const tableWrap = document.querySelector(".table-wrap");
-  if (tableWrap) {
-    evaluated.forEach((entry, i) => updateSeatDisplay(tableWrap, i));
-  }
+  // Re-render the seats against the outOfRange flags just set above --
+  // without this a rejected pick kept reading as "Deck locked in", giving
+  // no nudge that specifically that seat needs to change, and its deck
+  // list wouldn't be narrowed to what actually fits (see
+  // decksAvailableForSlot). Leaves whichever row is open open.
+  renderPodSlots();
 
   // Drawn from the exact same evaluated data as the rows below -- see
   // buildPowerGauge for why this never shows more than the rows already do.
