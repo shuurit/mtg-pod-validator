@@ -2556,3 +2556,43 @@ input.gtu-in-prefilled {
   width: 15px;
   height: 15px;
 }
+
+/* Inline monochrome icons (see uiIcon in app.js) -- sized to sit on the
+   text baseline of whatever label they precede, inheriting currentColor
+   so an active/hover state drives the icon with no second rule. */
+.ui-icon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  vertical-align: -2px;
+}
+.ui-icon-heading {
+  width: 20px;
+  height: 20px;
+  vertical-align: -3px;
+  margin-right: 6px;
+}
+/* Icon + label pairs that used to be one emoji-prefixed text node. The
+   label keeps the truncation the whole control used to do itself -- once
+   this became a flex container, ellipsis had to move to the text child or
+   a long deck line would overflow instead of clipping. */
+.combo-badge,
+.slot-deck-masked {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.slot-deck-masked > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Centres the drawn icon in the 24px hit area the emoji glyph used to be
+   centred in by text-align alone. */
+.deck-edit-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}

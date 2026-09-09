@@ -1109,13 +1109,29 @@ async function togglePotentialBracket4(deck) {
 // when the deck has hit the 3-of-5 combo pattern (see computePlayersData's
 // comboFlagged). Playgroup Power stays its own table column (see
 // PLAYER_DECK_COLUMNS), not folded in here.
+// Small monochrome icons drawn inline rather than set as emoji glyphs.
+// Emoji render as a different picture (and in full colour) on every
+// platform, which reads as a sticker dropped into otherwise monochrome
+// UI -- and these three sit right next to text they're meant to modify.
+// Always aria-hidden: every caller already carries its own aria-label or
+// title, so the icon is decoration on top of a named control.
+const UI_ICON_PATHS = {
+  pencil: '<path d="M4 20.2l4.4-1 10.9-10.9a2 2 0 0 0 0-2.8l-.8-.8a2 2 0 0 0-2.8 0L4.9 15.8 4 20.2z"></path><path d="m14.9 6.1 3 3"></path>',
+  flame: '<path d="M12 22c3.8 0 6.4-2.5 6.4-5.9 0-4.1-3.5-6.3-4.7-10.2-.4-1.5-1.1-2.5-1.7-3.4-.3 2.2-1.6 3.5-3.1 5.3C7.4 9.7 6 11.5 6 16.1 6 19.5 8.2 22 12 22z"></path><path d="M12 22c1.8 0 3.1-1.2 3.1-3 0-2-1.6-2.9-2.3-5-.7 1.2-1.5 1.9-2.3 2.9-.9 1.1-1.6 1.4-1.6 2.1 0 1.8 1.3 3 3.1 3z"></path>',
+  lock: '<rect x="5" y="10.2" width="14" height="10.3" rx="2"></rect><path d="M8.2 10.2V7.4a3.8 3.8 0 0 1 7.6 0v2.8"></path>',
+};
+
+function uiIcon(name) {
+  return `<svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${UI_ICON_PATHS[name]}</svg>`;
+}
+
 function buildPowerCell(deck) {
   const cell = document.createElement("span");
   cell.className = "power-cell";
 
   const editBtn = document.createElement("button");
   editBtn.className = "deck-edit-btn";
-  editBtn.textContent = "✎";
+  editBtn.innerHTML = uiIcon("pencil");
   editBtn.setAttribute("aria-label", `Set ${deck.name}'s bracket`);
   editBtn.addEventListener("click", () => {
     bracketEditingDeckIds.add(deck.id);
@@ -1124,7 +1140,7 @@ function buildPowerCell(deck) {
 
   const comboToggleBtn = document.createElement("button");
   comboToggleBtn.className = "deck-edit-btn" + (deck.potentialBracket4 ? " deck-edit-btn-active" : "");
-  comboToggleBtn.textContent = "🔥";
+  comboToggleBtn.innerHTML = uiIcon("flame");
   comboToggleBtn.title = deck.potentialBracket4
     ? "Combo-tracked — click to stop asking about this deck's early combo each game"
     : "Not combo-tracked — click to start asking about this deck's early combo each game";
@@ -1140,7 +1156,7 @@ function buildPowerCell(deck) {
   if (deck.comboFlagged) {
     comboBadge = document.createElement("span");
     comboBadge.className = "combo-badge";
-    comboBadge.textContent = `🔥 ${deck.comboFlaggedCount}/${deck.comboWindowSize}`;
+    comboBadge.innerHTML = `${uiIcon("flame")}<span>${deck.comboFlaggedCount}/${deck.comboWindowSize}</span>`;
     comboBadge.title = `${deck.comboFlaggedCount} of this deck's last ${deck.comboWindowSize} logged games showed the early combo — consider marking Bracket 4.`;
   }
 
@@ -1495,7 +1511,7 @@ function buildSlotPicker(slot, onChange) {
   const maskedBtn = document.createElement("button");
   maskedBtn.type = "button";
   maskedBtn.className = "slot-deck-masked";
-  maskedBtn.textContent = "🔒 Deck selected — tap to change";
+  maskedBtn.innerHTML = `${uiIcon("lock")}<span>Deck selected — tap to change</span>`;
 
   function syncDeckVisibility() {
     const masked = !!slot.deckId;
@@ -3572,7 +3588,7 @@ function buildUtaDeckCard(deck) {
   const b4Btn = document.createElement("button");
   b4Btn.type = "button";
   b4Btn.className = "deck-edit-btn uta-deck-b4" + (state.potentialBracket4 ? " deck-edit-btn-active" : "");
-  b4Btn.textContent = "🔥";
+  b4Btn.innerHTML = uiIcon("flame");
   b4Btn.title = "Flag this deck as a potential Bracket 4 (early two-card combo) from its very first game";
   b4Btn.setAttribute("aria-label", `Flag ${deck.commander_name} as potential Bracket 4`);
   b4Btn.dataset.deckId = deck.id;
