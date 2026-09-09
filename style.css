@@ -1,4 +1,13 @@
 :root {
+  /* Two faces, two jobs. Display carries headings, stat numerals and
+     player names -- condensed, so a long name like "Player Adjusted Win
+     Rate" or a 5-letter player name sets at a size you can read across a
+     table without wrapping. Body carries everything read at normal
+     distance. Both fallbacks are chosen for close metrics so the
+     display=swap handoff (see index.html) doesn't visibly reflow. */
+  --font-display: "Saira Condensed", "Arial Narrow", "Segoe UI", sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+
   --bg: #f5f3ee;
   --bg-accent: #efece3;
   --card-bg: #ffffff;
@@ -52,13 +61,13 @@
    of what the user picked in-app. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #131217;
-    --bg-accent: #18171d;
-    --card-bg: #1c1b22;
-    --ink: #f3f1ec;
-    --muted: #b2ac9f;
-    --border: #34323b;
-    --border-soft: #29282f;
+    --bg: #0b0a10;
+    --bg-accent: #14121c;
+    --card-bg: #14121c;
+    --ink: #f2efe9;
+    --muted: #9e97ac;
+    --border: #241f30;
+    --border-soft: #1b1826;
     --accent: #a48bff;
     --accent-strong: #b9a4ff;
     --accent-soft: rgba(164, 139, 255, 0.14);
@@ -74,8 +83,8 @@
     --warn-border: #5c421c;
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
     --shadow-md: 0 14px 36px -16px rgba(0, 0, 0, 0.65);
-    --bg-scrim: rgba(19, 18, 23, 0.83);
-    --card-bg-translucent: rgba(28, 27, 34, 0.25);
+    --bg-scrim: rgba(11, 10, 16, 0.88);
+    --card-bg-translucent: rgba(20, 18, 28, 0.30);
   }
 }
 
@@ -85,13 +94,13 @@
    the avatar-menu theme toggle. Keep both blocks in sync if this palette
    ever changes. */
 :root[data-theme="dark"] {
-  --bg: #131217;
-  --bg-accent: #18171d;
-  --card-bg: #1c1b22;
-  --ink: #f3f1ec;
-  --muted: #b2ac9f;
-  --border: #34323b;
-  --border-soft: #29282f;
+  --bg: #0b0a10;
+  --bg-accent: #14121c;
+  --card-bg: #14121c;
+  --ink: #f2efe9;
+  --muted: #9e97ac;
+  --border: #241f30;
+  --border-soft: #1b1826;
   --accent: #a48bff;
   --accent-strong: #b9a4ff;
   --accent-soft: rgba(164, 139, 255, 0.14);
@@ -107,8 +116,8 @@
   --warn-border: #5c421c;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-md: 0 14px 36px -16px rgba(0, 0, 0, 0.65);
-  --bg-scrim: rgba(19, 18, 23, 0.83);
-  --card-bg-translucent: rgba(28, 27, 34, 0.25);
+  --bg-scrim: rgba(11, 10, 16, 0.88);
+  --card-bg-translucent: rgba(20, 18, 28, 0.30);
 }
 
 * { box-sizing: border-box; }
@@ -130,7 +139,7 @@ html {
 
 body {
   margin: 0;
-  font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--font-body);
   /* Solid var(--bg) fill removed -- the .tab-bg layers (behind everything,
      see below) are the real background now; this radial accent still
      sits on top of them, unlit corners stay transparent so the artwork
@@ -447,18 +456,37 @@ body {
   color: var(--bad);
 }
 
+/* Condensed lets the title set large without wrapping on a phone, but
+   2.5rem still overflows a 375px screen at this length -- clamp scales it
+   down with the viewport rather than forcing a second line. */
 header h1 {
   margin: 0 0 6px;
-  font-size: 1.85rem;
+  font-family: var(--font-display);
+  font-size: clamp(1.75rem, 6.5vw, 2.5rem);
   font-weight: 700;
-  letter-spacing: -0.01em;
+  line-height: 0.98;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
 }
 
 .subtitle {
   margin: 0 0 30px;
   color: var(--muted);
-  font-size: 1rem;
+  font-size: 0.95rem;
   max-width: 60ch;
+}
+
+/* Every place digits line up in a column or change in place -- power
+   values, win rates, spreads, counts -- so they don't jitter as they
+   update or misalign row to row. */
+.num,
+.wr-metric-value,
+.wr-rank,
+.tab-badge,
+.deck-plate-right,
+.power-chip,
+.seat-state {
+  font-variant-numeric: tabular-nums;
 }
 
 .tabs {
@@ -475,7 +503,11 @@ header h1 {
   background: transparent;
   padding: 10px 4px;
   margin-bottom: -1px;
+  font-family: var(--font-display);
+  font-size: 1.05rem;
   font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   color: var(--muted);
 }
 
@@ -565,9 +597,13 @@ header h1 {
   color: var(--accent);
 }
 
+/* Drawn SVG now (see index.html) rather than an emoji glyph, so this
+   sizes the box rather than a font-size. currentColor means the .active
+   accent above drives the icon too, with no second rule to keep in sync. */
 .bottom-tab-icon {
-  font-size: 1.25rem;
-  line-height: 1;
+  width: 22px;
+  height: 22px;
+  display: block;
 }
 
 .bottom-tab-label {
@@ -595,58 +631,72 @@ header h1 {
 .wr-card-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
   margin-top: 12px;
 }
 
-/* One player's standing -- see buildWinRateCard in app.js. Same
-   border+radius-only convention as .deck-plate/.gtu-game-card/.uta-group:
-   no background of its own, so it blends with the parent .card's
-   translucent glass instead of stacking a second solid card inside it. */
+/* One player's standing -- see buildWinRateCard in app.js. A ruled row
+   rather than a bordered card: six of these stacked as cards filled a
+   screen and a half for two numbers each, and the boxes-inside-a-box read
+   as more separation than a ranked list wants. The rule is the separator;
+   the rank number does the rest. */
 .wr-card {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 13px 16px;
+  padding: 10px 2px 11px;
+  border-bottom: 1px solid var(--border-soft);
+}
+.wr-card-header {
+  line-height: 1.15;
+}
+.wr-card:last-child {
+  border-bottom: none;
 }
 
 .wr-card-header {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-.wr-rank {
-  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-  font-weight: 700;
-  font-size: 0.85rem;
-  color: var(--muted);
-  min-width: 2.2em;
-}
-.wr-name {
-  font-weight: 700;
-  font-size: 0.95rem;
-  flex: 1 1 auto;
-}
-.wr-trend {
-  font-size: 0.85rem;
-  font-weight: 700;
-}
-
-.wr-metric-top {
-  display: flex;
-  justify-content: space-between;
   align-items: baseline;
   gap: 10px;
-  font-size: 0.88rem;
-  margin-bottom: 6px;
+}
+/* Display face, not mono -- these are the standings' headline numbers,
+   and mono at 0.85rem read as a code listing rather than a leaderboard. */
+.wr-rank {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.15rem;
+  color: var(--muted);
+  min-width: 1.4em;
+}
+.wr-card:first-child .wr-rank {
+  color: var(--accent);
+}
+.wr-name {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.2rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.wr-trend {
+  font-size: 0.8rem;
+  font-weight: 700;
 }
 .wr-metric-value {
+  font-family: var(--font-display);
   font-variant-numeric: tabular-nums;
   font-weight: 700;
+  font-size: 1.25rem;
   white-space: nowrap;
 }
+
+.wr-meter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 7px;
+}
 .wr-bar {
-  height: 8px;
+  flex: 1 1 auto;
+  height: 4px;
   border-radius: 999px;
   background: var(--border-soft);
   overflow: hidden;
@@ -656,10 +706,19 @@ header h1 {
   border-radius: 999px;
   background: var(--accent);
 }
+.wr-record {
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.wr-record-na {
+  flex: 1 1 auto;
+}
 
 .wr-metric-secondary {
-  margin-top: 10px;
-  font-size: 0.82rem;
+  margin-top: 5px;
+  font-size: 0.75rem;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
@@ -681,7 +740,10 @@ header h1 {
    which needs real width to stay legible. */
 #achievements-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  /* 140px, not the badge's natural 200px: at a 375px phone the grid has
+     313px to work with, so a 150px minimum lands one pixel short of two
+     columns and drops all 36 trophies into a single 6800px column. */
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   gap: 14px;
   margin-top: 12px;
 }
@@ -702,11 +764,17 @@ header h1 {
   padding: 14px 16px 16px;
 }
 
-/* Only used by the plain-emoji fallback (see app.js) for an older cached
-   response that predates the `emblem` field. */
+/* Stand-in for an achievement with no badge art yet (see
+   renderAchievements in app.js) -- a drawn sigil sized to sit where the
+   emblem would, so a card without art still holds the grid's rhythm. */
 .trophy-icon {
-  font-size: 1.8rem;
-  line-height: 1;
+  display: block;
+  color: var(--border);
+}
+.trophy-icon svg {
+  width: 54px;
+  height: 54px;
+  display: block;
 }
 
 /* The full badge -- circle art plus its own name ribbon, both baked in --
@@ -731,16 +799,21 @@ header h1 {
    ribbon carries the title otherwise, so no separate heading repeats it
    in a plainer font right below. */
 .trophy-title {
-  font-weight: 700;
-  font-size: 1rem;
-  margin-top: 4px;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.05rem;
+  line-height: 1.1;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  margin-top: 6px;
 }
 
 .trophy-description {
   color: var(--muted);
-  font-size: 0.85rem;
+  font-size: 0.72rem;
+  line-height: 1.35;
   margin-top: 4px;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .trophy-winner {
@@ -773,21 +846,68 @@ header h1 {
   margin-top: 10px; /* same reasoning as .trophy-winner's margin-top above */
 }
 
+/* A stated-once band, for a rule that governs a whole screen rather than
+   any one row in it (the achievements reveal, the closed vote). Reads as
+   status, not as another paragraph of instructions -- which is what these
+   replaced. */
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 14px;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.notice svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+.notice[hidden] {
+  display: none;
+}
+
+/* The keep/cut split as one proportional line -- green is the keep share,
+   the red track behind it is the rest. Lets the shape of the vote read
+   across the whole grid without comparing two numbers per card. */
+.trophy-vote-bar {
+  width: 100%;
+  height: 3px;
+  margin-top: 10px;
+  border-radius: 999px;
+  background: var(--bad);
+  overflow: hidden;
+}
+.trophy-vote-bar-keep {
+  height: 100%;
+  background: var(--good);
+}
+
 /* Keep/cut voting -- see castAchievementVote in app.js. Small pill buttons,
    not the default button size, since these sit inside an already-compact
    trophy card alongside 21+ others. */
 .trophy-vote {
   display: flex;
-  justify-content: center;
-  gap: 8px;
-  margin-top: 12px;
+  gap: 6px;
+  margin-top: 10px;
 }
 
+/* Both buttons share the row evenly and are allowed to shrink -- at two
+   columns on a phone a trophy card is ~150px wide, so auto-width buttons
+   sized to their own text overflowed the card. */
 .vote-btn {
-  padding: 5px 10px;
-  font-size: 0.8rem;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 7px 4px;
+  font-size: 0.72rem;
   font-weight: 600;
   border-radius: var(--radius-sm);
+  white-space: nowrap;
 }
 
 .vote-btn.vote-keep.active {
@@ -858,11 +978,18 @@ header h1 {
   margin-bottom: 22px;
 }
 
+/* Section headings take the display face at a size the old 1.2rem body
+   face couldn't carry -- condensed means it reads bigger without eating
+   more width. Uppercase with tracking so a two-word heading still reads
+   as a heading rather than a bolded sentence. */
 .card h2 {
-  margin: 0 0 4px;
-  font-size: 1.2rem;
-  font-weight: 700;
-  letter-spacing: -0.005em;
+  margin: 0 0 6px;
+  font-family: var(--font-display);
+  font-size: clamp(1.35rem, 5vw, 1.6rem);
+  font-weight: 600;
+  line-height: 1.05;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
 }
 
 .hint {
@@ -2189,4 +2316,190 @@ input.gtu-in-prefilled {
     font-size: 1rem;
     padding: 13px 14px;
   }
+}
+
+/* ---------- Tonight (home) ---------- */
+/* The app's landing surface -- see renderTonight in app.js. Deliberately
+   not a .card: this screen is a short stack of things to act on, and
+   wrapping it in the same glass panel as the reference tabs made it read
+   as one more document to read rather than a place to start. */
+#tonight-body {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  margin-top: 4px;
+}
+
+.tonight-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: -12px;
+}
+
+/* The one thing you're most likely opening the app to do. Accent-tinted
+   rather than a solid fill: it should lead the screen without turning
+   into a billboard above two rows of real information. */
+.tonight-action {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  text-align: left;
+  padding: 18px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--ink);
+  min-height: 44px;
+}
+.tonight-action:hover {
+  color: var(--ink);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.tonight-action-icon {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+.tonight-action-icon svg {
+  width: 30px;
+  height: 30px;
+  display: block;
+}
+.tonight-action-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.tonight-action-title {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 1.45rem;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.tonight-action-sub {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.tonight-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.tonight-stat {
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.tonight-stat-value {
+  font-family: var(--font-display);
+  font-variant-numeric: tabular-nums;
+  font-size: 2.2rem;
+  font-weight: 700;
+  line-height: 1;
+}
+.tonight-stat-rank {
+  color: var(--good);
+}
+.tonight-stat-unit {
+  font-size: 1.2rem;
+  color: var(--muted);
+}
+.tonight-stat-label {
+  margin-top: 6px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.tonight-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tonight-item {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  width: 100%;
+  text-align: left;
+  padding: 13px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--ink);
+  min-height: 44px;
+}
+.tonight-item:hover {
+  border-color: var(--accent);
+  color: var(--ink);
+}
+/* A settled item is a statement, not a control -- no border, no chevron,
+   nothing to tap. */
+.tonight-item-done {
+  border-color: transparent;
+  color: var(--muted);
+}
+.tonight-item-lead {
+  flex: 0 0 auto;
+  min-width: 1.7em;
+  font-family: var(--font-display);
+  font-variant-numeric: tabular-nums;
+  font-size: 1.35rem;
+  font-weight: 700;
+  line-height: 1;
+}
+.tonight-item-lead-accent { color: var(--accent); }
+.tonight-item-lead-warn { color: var(--warn); }
+.tonight-item-lead-bad { color: var(--bad); }
+.tonight-item-done .tonight-item-lead { color: var(--good); }
+.tonight-item-lead svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+.tonight-item-label {
+  flex: 1 1 auto;
+  font-size: 0.9rem;
+}
+.tonight-item-chevron {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+.tonight-item-chevron svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+/* Route back to Tonight from the two panels that are no longer in either
+   nav bar (Games to Update, New Players/Decks) -- without this they'd be
+   reachable but not leavable. */
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 10px;
+  padding: 7px 12px 7px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  min-height: 34px;
+}
+.back-link svg {
+  width: 15px;
+  height: 15px;
 }

@@ -216,6 +216,149 @@ function rowsToPlayers(rows) {
   return [...byName.values()];
 }
 
+// ---------- Tonight (home) ----------
+
+// What Tonight's "needs you" list reads, fed from the same three places
+// that used to feed tab badges -- so the home screen and the nav can
+// never disagree about how much is outstanding. Standings come from
+// renderWinRatesTable (see latestStandings there) rather than a second
+// calculation of the same formula.
+const tonightCounts = { comboWatch: 0, gamesToLog: 0, newDecks: 0 };
+let latestStandings = null;
+
+function tonightSvg(path) {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
+}
+
+// One actionable row on Tonight. `count` renders as the leading figure
+// when there's something outstanding; a settled item shows a check
+// instead and doesn't invite a tap.
+function buildTonightItem({ count, label, tab, tone, done }) {
+  const row = document.createElement(done ? "div" : "button");
+  row.className = `tonight-item${done ? " tonight-item-done" : ""}`;
+  if (!done) {
+    row.type = "button";
+    row.addEventListener("click", () => activateTab(tab));
+  }
+
+  const lead = document.createElement("span");
+  lead.className = `tonight-item-lead tonight-item-lead-${tone || "accent"}`;
+  if (done) {
+    lead.innerHTML = tonightSvg('<path d="M20 6 9 17l-5-5"></path>');
+  } else {
+    lead.textContent = count;
+  }
+  row.appendChild(lead);
+
+  const text = document.createElement("span");
+  text.className = "tonight-item-label";
+  text.textContent = label;
+  row.appendChild(text);
+
+  if (!done) {
+    const chev = document.createElement("span");
+    chev.className = "tonight-item-chevron";
+    chev.innerHTML = tonightSvg('<path d="m9 18 6-6-6-6"></path>');
+    row.appendChild(chev);
+  }
+  return row;
+}
+
+// The home screen: the one thing you're most likely here to do, your own
+// standing, and whatever is outstanding. Everything on it is already
+// loaded for other tabs -- this renders from that shared state rather
+// than fetching anything of its own, so it costs no extra requests.
+function renderTonight() {
+  const host = document.getElementById("tonight-body");
+  if (!host) return;
+  host.innerHTML = "";
+
+  // --- primary action ---
+  const action = document.createElement("button");
+  action.type = "button";
+  action.className = "tonight-action";
+  action.innerHTML = `
+    <span class="tonight-action-icon">${tonightSvg('<path d="M12 2.6 21 12l-9 9.4L3 12z"></path><circle cx="12" cy="12" r="3.1"></circle>')}</span>
+    <span class="tonight-action-text">
+      <span class="tonight-action-title">Build a pod</span>
+      <span class="tonight-action-sub">Check the power spread before you shuffle</span>
+    </span>
+    <span class="tonight-item-chevron">${tonightSvg('<path d="m9 18 6-6-6-6"></path>')}</span>`;
+  action.addEventListener("click", () => activateTab("pod"));
+  host.appendChild(action);
+
+  // --- your season ---
+  const myName = currentUser && players.length
+    ? (players.find(p => p.id === currentUser.playerId) || {}).name
+    : null;
+  const myRow = myName && latestStandings
+    ? latestStandings.rows.find(r => r.name === myName)
+    : null;
+
+  if (myRow && myRow.adjPct !== null) {
+    const label = document.createElement("div");
+    label.className = "tonight-label";
+    label.textContent = "Your season";
+    host.appendChild(label);
+
+    const stats = document.createElement("div");
+    stats.className = "tonight-stats";
+    const rank = latestStandings.adjustedRankByName[myName];
+    stats.innerHTML = `
+      <div class="tonight-stat">
+        <div class="tonight-stat-value tonight-stat-rank">${rank ? "#" + rank : "—"}</div>
+        <div class="tonight-stat-label">Standing</div>
+      </div>
+      <div class="tonight-stat">
+        <div class="tonight-stat-value">${myRow.adjPct.toFixed(1)}<span class="tonight-stat-unit">%</span></div>
+        <div class="tonight-stat-label">Adjusted &middot; ${myRow.adjWins}&ndash;${myRow.adjLosses}</div>
+      </div>`;
+    host.appendChild(stats);
+  }
+
+  // --- needs you ---
+  const label = document.createElement("div");
+  label.className = "tonight-label";
+  label.textContent = "Needs you";
+  host.appendChild(label);
+
+  const list = document.createElement("div");
+  list.className = "tonight-list";
+
+  list.appendChild(buildTonightItem({
+    count: tonightCounts.gamesToLog,
+    label: tonightCounts.gamesToLog === 1 ? "game to log" : "games to log",
+    tab: "games-to-update",
+    tone: "warn",
+    done: tonightCounts.gamesToLog === 0,
+  }));
+  if (tonightCounts.gamesToLog === 0) {
+    list.lastChild.querySelector(".tonight-item-label").textContent = "Every game is logged";
+  }
+
+  list.appendChild(buildTonightItem({
+    count: tonightCounts.newDecks,
+    label: tonightCounts.newDecks === 1 ? "new deck needs a bracket" : "new decks need a bracket",
+    tab: "update-app",
+    tone: "warn",
+    done: tonightCounts.newDecks === 0,
+  }));
+  if (tonightCounts.newDecks === 0) {
+    list.lastChild.querySelector(".tonight-item-label").textContent = "No new players or decks";
+  }
+
+  if (tonightCounts.comboWatch > 0) {
+    list.appendChild(buildTonightItem({
+      count: tonightCounts.comboWatch,
+      label: tonightCounts.comboWatch === 1 ? "deck on combo watch" : "decks on combo watch",
+      tab: "pod",
+      tone: "bad",
+    }));
+  }
+
+  host.appendChild(list);
+}
+
 // Updates both a tab badge's top-nav copy (#<baseId>) and its
 // #bottom-tabs mirror (#<baseId>-bottom, see index.html) so the two bars
 // never show different counts -- whichever one a given device isn't
@@ -241,7 +384,9 @@ function setTabBadge(baseId, count) {
 // yet." Scoped to podPlayers (playgroup-linked, tracked players), matching
 // what Players & Decks itself shows.
 function updateDeckStrengthValidatorTabBadge(count) {
+  tonightCounts.comboWatch = count;
   setTabBadge("dsv-tab-badge", count);
+  renderTonight();
 }
 
 function setPlayers(newPlayers) {
@@ -413,6 +558,11 @@ async function loadAchievements() {
     selectedAchievementsSeasonId = data.seasonId;
     renderAchievementsSeasonSelect(data.seasons, data.seasonId);
     renderAchievements(data.achievements, data.seasonActive, data.votingOpen);
+    // Stated once, here, rather than repeated inside all 36 cards -- while
+    // a season is live every winner is withheld for this one reason, so
+    // it's a property of the season, not of each achievement.
+    const revealNotice = document.getElementById("achievements-reveal-notice");
+    if (revealNotice) revealNotice.hidden = !data.seasonActive;
     const closedNotice = document.getElementById("achievements-voting-closed-notice");
     if (closedNotice) closedNotice.hidden = data.votingOpen !== false;
     if (statusEl) statusEl.hidden = true;
@@ -489,10 +639,12 @@ function renderAchievements(achievements, seasonActive, votingOpen) {
       img.alt = `${achievement.title} — ${achievement.description}`;
       card.appendChild(img);
     } else {
+      // Drawn sigil rather than a trophy emoji: this stands in for missing
+      // badge art, and an emoji reads as a different picture on every
+      // platform right next to real illustrated emblems.
       const icon = document.createElement("span");
       icon.className = "trophy-icon";
-      icon.textContent = "🏆";
-      icon.setAttribute("aria-hidden", "true");
+      icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.2 20 12l-8 8.8L4 12z"></path><path d="M12 7.6 16.2 12 12 16.4 7.8 12z"></path></svg>';
       card.appendChild(icon);
       const title = document.createElement("div");
       title.className = "trophy-title";
@@ -516,12 +668,15 @@ function renderAchievements(achievements, seasonActive, votingOpen) {
       winnerRow.appendChild(name);
       winnerRow.appendChild(value);
       body.appendChild(winnerRow);
-    } else {
+    } else if (!seasonActive) {
+      // Only a CONCLUDED season says anything here: "no data for this
+      // achievement" is per-achievement and worth stating. While a season
+      // is still running every card is withheld for the same one reason,
+      // so that message is stated once above the grid (see the reveal
+      // notice in loadAchievements) rather than 36 times inside it.
       const empty = document.createElement("div");
       empty.className = "trophy-empty";
-      empty.textContent = seasonActive
-        ? "Revealed when the season ends."
-        : "No data for this season yet.";
+      empty.textContent = "No data yet.";
       body.appendChild(empty);
     }
 
@@ -533,15 +688,22 @@ function renderAchievements(achievements, seasonActive, votingOpen) {
     // the new counts locally. Once votingOpen is false (relay.js's
     // ACHIEVEMENT_VOTING_DEADLINE has passed), the tally is shown as plain
     // read-only text instead of buttons -- there's nothing left to click.
+    // Sentiment bar -- the keep/cut split as one proportional line, so the
+    // shape of the vote reads across the whole grid at a glance instead of
+    // needing two numbers compared per card. Only drawn once someone has
+    // actually voted; an all-zero bar would imply a tie nobody cast.
+    const voteBar = buildVoteSentimentBar(achievement.votes);
+    if (voteBar) body.appendChild(voteBar);
+
     if (votingOpen === false) {
       const finalTally = document.createElement("div");
       finalTally.className = "trophy-vote-final";
       const keepCount = document.createElement("span");
       keepCount.className = "vote-keep-count";
-      keepCount.textContent = `👍 ${achievement.votes.keep}`;
+      keepCount.textContent = `Keep ${achievement.votes.keep}`;
       const cutCount = document.createElement("span");
       cutCount.className = "vote-cut-count";
-      cutCount.textContent = `👎 ${achievement.votes.cut}`;
+      cutCount.textContent = `Cut ${achievement.votes.cut}`;
       finalTally.appendChild(keepCount);
       finalTally.appendChild(cutCount);
       body.appendChild(finalTally);
@@ -567,9 +729,34 @@ function renderAchievements(achievements, seasonActive, votingOpen) {
   }
 }
 
+// The keep/cut split as a single proportional bar. Returns null when
+// nobody has voted on this achievement yet -- see the call site.
+function buildVoteSentimentBar(votes) {
+  const total = votes.keep + votes.cut;
+  if (total === 0) return null;
+  const bar = document.createElement("div");
+  bar.className = "trophy-vote-bar";
+  bar.title = `${votes.keep} keep, ${votes.cut} cut`;
+  const keepFill = document.createElement("div");
+  keepFill.className = "trophy-vote-bar-keep";
+  keepFill.style.width = `${(votes.keep / total) * 100}%`;
+  bar.appendChild(keepFill);
+  return bar;
+}
+
+// Rebuilds both vote buttons in place from a fresh tally, and re-draws the
+// sentiment bar beside them so the split and the counts never disagree.
 function applyVoteTally(keepBtn, cutBtn, votes) {
-  keepBtn.textContent = `👍 Keep (${votes.keep})`;
-  cutBtn.textContent = `👎 Cut (${votes.cut})`;
+  const body = keepBtn.closest(".trophy-body");
+  if (body) {
+    const existing = body.querySelector(".trophy-vote-bar");
+    const replacement = buildVoteSentimentBar(votes);
+    if (existing && replacement) existing.replaceWith(replacement);
+    else if (existing) existing.remove();
+    else if (replacement) body.insertBefore(replacement, keepBtn.parentElement);
+  }
+  keepBtn.textContent = `Keep ${votes.keep}`;
+  cutBtn.textContent = `Cut ${votes.cut}`;
   keepBtn.classList.toggle("active", votes.mine === "keep");
   cutBtn.classList.toggle("active", votes.mine === "cut");
 }
@@ -2016,25 +2203,40 @@ document.getElementById("validate-btn").addEventListener("click", runValidation)
 
 // ---------- tabs ----------
 
+// Switches to a tab by name. Pulled out of initTabs' click handler so
+// Tonight's action cards can route to Games to Update / New Players &
+// Decks -- those two panels are no longer in either nav bar (see the nav
+// comment in index.html), so this is the only way in.
+//
+// Panels that aren't nav destinations simply have no matching button;
+// .active lands on nothing then, which is correct -- there's no tab to
+// light up, and the panel's own back link returns to Tonight.
+function activateTab(tabName) {
+  const panel = document.getElementById(`tab-${tabName}`);
+  if (!panel) return;
+  document.querySelectorAll(".tab-btn, .bottom-tab-btn").forEach(b => b.classList.remove("active"));
+  document.querySelectorAll(`[data-tab="${tabName}"]`).forEach(b => b.classList.add("active"));
+  document.querySelectorAll(".tab-panel").forEach(p => { p.hidden = true; });
+  panel.hidden = false;
+  // Same id scheme as the tab panel (#bg-<tab> next to #tab-<tab>) --
+  // opacity-transitions to the new one via the .active class, see the
+  // .tab-bg rules in style.css for the actual crossfade.
+  document.querySelectorAll(".tab-bg").forEach(bg => { bg.classList.remove("active"); });
+  const bgEl = document.getElementById(`bg-${tabName}`);
+  if (bgEl) bgEl.classList.add("active");
+  window.scrollTo({ top: 0 });
+}
+
 function initTabs() {
   // .bottom-tab-btn is #bottom-tabs' touch-only mirror of the same 4
   // destinations (see index.html) -- both sets share data-tab values, so
   // one handler drives whichever bar is actually visible on this device
   // and keeps the other one's .active state in sync for free.
-  const buttons = document.querySelectorAll(".tab-btn, .bottom-tab-btn");
-  buttons.forEach(btn => {
-    btn.addEventListener("click", () => {
-      buttons.forEach(b => b.classList.remove("active"));
-      document.querySelectorAll(`[data-tab="${btn.dataset.tab}"]`).forEach(b => b.classList.add("active"));
-      document.querySelectorAll(".tab-panel").forEach(p => { p.hidden = true; });
-      document.getElementById(`tab-${btn.dataset.tab}`).hidden = false;
-      // Same id scheme as the tab panel (#bg-<tab> next to #tab-<tab>) --
-      // opacity-transitions to the new one via the .active class, see the
-      // .tab-bg rules in style.css for the actual crossfade.
-      document.querySelectorAll(".tab-bg").forEach(bg => { bg.classList.remove("active"); });
-      const bgEl = document.getElementById(`bg-${btn.dataset.tab}`);
-      if (bgEl) bgEl.classList.add("active");
-    });
+  document.querySelectorAll(".tab-btn, .bottom-tab-btn").forEach(btn => {
+    btn.addEventListener("click", () => activateTab(btn.dataset.tab));
+  });
+  document.querySelectorAll("[data-goto-tab]").forEach(el => {
+    el.addEventListener("click", () => activateTab(el.dataset.gotoTab));
   });
 }
 
@@ -2121,21 +2323,32 @@ function computeWinRatesRankTrend() {
 const TREND_SYMBOL = { up: "▲", down: "▼", steady: "–" };
 const TREND_CLASS = { up: "trend-up", down: "trend-down", steady: "trend-steady" };
 
-// One player's card in Player Win Rates -- rank, name, and trend up top;
-// whichever metric is currently sorted (sortKey) gets the big bar, the
-// other stays plain text underneath. Both metrics' real values are always
-// shown somewhere on the card; sorting only changes which one is drawn as
-// the bar, never hides the other.
+// One player's row in Player Win Rates -- rank, name and trend lead, the
+// sorted metric sets in the display face at the end of the same line, and
+// the bar plus the other metric sit underneath. A row rather than the
+// stacked card this used to be: six players of two numbers each was a
+// screen and a half of scrolling, and the per-card metric labels repeated
+// the sort control's own words six times over.
+//
+// One decimal, not three. The old .toFixed(3) implied precision the
+// sample can't support -- at 22 games a single result moves the rate by
+// more than a whole percentage point, so digits past the first were noise
+// that made two close players look precisely different.
 function buildWinRateCard(row, rank, sortKey, direction) {
   const card = document.createElement("div");
   card.className = "wr-card";
+
+  const isAdjusted = sortKey === "adjPct";
+  const primaryPct = isAdjusted ? row.adjPct : row.pgPct;
+  const primaryWL = isAdjusted ? `${row.adjWins}-${row.adjLosses}` : `${row.pgWins}-${row.pgLosses}`;
+  const primaryNa = isAdjusted ? "No games logged this season" : "No games in the active league yet";
 
   const header = document.createElement("div");
   header.className = "wr-card-header";
 
   const rankEl = document.createElement("span");
   rankEl.className = "wr-rank";
-  rankEl.textContent = rank !== null ? `#${rank}` : "—";
+  rankEl.textContent = rank !== null ? rank : "—";
   header.appendChild(rankEl);
 
   const nameEl = document.createElement("span");
@@ -2150,25 +2363,15 @@ function buildWinRateCard(row, rank, sortKey, direction) {
     trendEl.textContent = TREND_SYMBOL[direction];
     header.appendChild(trendEl);
   }
-  card.appendChild(header);
 
-  const isAdjusted = sortKey === "adjPct";
-  const primaryLabel = isAdjusted ? "Player Adjusted Win Rate" : "Win Rate (playgroup.gg)";
-  const primaryPct = isAdjusted ? row.adjPct : row.pgPct;
-  const primaryWL = isAdjusted ? `${row.adjWins}-${row.adjLosses}` : `${row.pgWins}-${row.pgLosses}`;
-  const primaryNa = isAdjusted ? "No games logged this season" : "No games in the active league yet";
-
-  const primary = document.createElement("div");
-  primary.className = "wr-metric-primary";
-  const primaryTop = document.createElement("div");
-  primaryTop.className = "wr-metric-top";
-  const primaryLabelEl = document.createElement("span");
-  primaryLabelEl.textContent = primaryLabel;
   const primaryValEl = document.createElement("span");
   primaryValEl.className = "wr-metric-value";
-  primaryValEl.textContent = primaryPct !== null ? `${primaryPct.toFixed(3)}% (${primaryWL})` : primaryNa;
-  primaryTop.append(primaryLabelEl, primaryValEl);
-  primary.appendChild(primaryTop);
+  primaryValEl.textContent = primaryPct !== null ? `${primaryPct.toFixed(1)}%` : "—";
+  header.appendChild(primaryValEl);
+  card.appendChild(header);
+
+  const meter = document.createElement("div");
+  meter.className = "wr-meter";
   if (primaryPct !== null) {
     const bar = document.createElement("div");
     bar.className = "wr-bar";
@@ -2176,17 +2379,31 @@ function buildWinRateCard(row, rank, sortKey, direction) {
     fill.className = "wr-bar-fill";
     fill.style.width = `${Math.max(0, Math.min(100, primaryPct))}%`;
     bar.appendChild(fill);
-    primary.appendChild(bar);
-  }
-  card.appendChild(primary);
+    meter.appendChild(bar);
 
-  const secondaryLabel = isAdjusted ? "Win Rate (playgroup.gg)" : "Player Adjusted Win Rate";
+    const recordEl = document.createElement("span");
+    recordEl.className = "wr-record";
+    recordEl.textContent = primaryWL;
+    meter.appendChild(recordEl);
+  } else {
+    const naEl = document.createElement("span");
+    naEl.className = "wr-record wr-record-na";
+    naEl.textContent = primaryNa;
+    meter.appendChild(naEl);
+  }
+  card.appendChild(meter);
+
+  // The metric that isn't sorted still shows, but abbreviated -- the sort
+  // control above already names both in full, so repeating the whole label
+  // on every row said nothing the reader didn't just read.
   const secondaryPct = isAdjusted ? row.pgPct : row.adjPct;
   const secondaryWL = isAdjusted ? `${row.pgWins}-${row.pgLosses}` : `${row.adjWins}-${row.adjLosses}`;
-  const secondaryNa = isAdjusted ? "No games in the active league yet" : "No games logged this season";
+  const secondaryTag = isAdjusted ? "playgroup.gg" : "adjusted";
   const secondary = document.createElement("div");
   secondary.className = "wr-metric-secondary";
-  secondary.textContent = `${secondaryLabel}: ${secondaryPct !== null ? `${secondaryPct.toFixed(3)}% (${secondaryWL})` : secondaryNa}`;
+  secondary.textContent = secondaryPct !== null
+    ? `${secondaryTag} ${secondaryPct.toFixed(1)}% (${secondaryWL})`
+    : `${secondaryTag} —`;
   card.appendChild(secondary);
 
   return card;
@@ -2254,6 +2471,20 @@ function renderWinRatesTable(data) {
   // Rows with no data for this metric never get a rank at all.
   const rankable = rowData.filter(r => r[sortKey] !== null).sort((a, b) => b[sortKey] - a[sortKey]);
   const rankByName = assignRanks(rankable.map(r => ({ name: r.name, rate: r[sortKey] })));
+
+  // Tonight shows the signed-in player their own standing, and it should
+  // be the same number this tab just computed rather than a second
+  // calculation that could drift. Always the adjusted metric there, no
+  // matter which column this tab happens to be sorted by.
+  latestStandings = {
+    rows: rowData,
+    adjustedRankByName: assignRanks(
+      rowData.filter(r => r.adjPct !== null)
+        .sort((a, b) => b.adjPct - a.adjPct)
+        .map(r => ({ name: r.name, rate: r.adjPct }))
+    ),
+  };
+  renderTonight();
 
   tableEl.innerHTML = "";
 
@@ -2515,7 +2746,9 @@ function findDeckPotentialBracket4(playerName, commanderName) {
 // itself, hidden entirely at 0 so absence means "nothing to log," not "not
 // loaded yet."
 function updateGamesToUpdateTabBadge(count) {
-  setTabBadge("gtu-tab-badge", count);
+  tonightCounts.gamesToLog = count;
+  setTabBadge("tonight-tab-badge", tonightCounts.gamesToLog + tonightCounts.newDecks);
+  renderTonight();
 }
 
 function renderGamesToUpdate() {
@@ -3424,7 +3657,9 @@ function setAllRosterUpdateChecked(group, checked) {
 function updateRosterUpdateTabBadge(newPlayers, newDecksForExisting) {
   const count = newPlayers.reduce((n, p) => n + p.decks.length, 0) +
     newDecksForExisting.reduce((n, g) => n + g.decks.length, 0);
-  setTabBadge("uta-tab-badge", count);
+  tonightCounts.newDecks = count;
+  setTabBadge("tonight-tab-badge", tonightCounts.gamesToLog + tonightCounts.newDecks);
+  renderTonight();
 }
 
 // Shows rosterUpdateSubmitConfirmation once, then clears it -- a normal

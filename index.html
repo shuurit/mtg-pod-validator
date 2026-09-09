@@ -8,7 +8,16 @@
      older copy (GitHub Pages' cache headers otherwise mean a pull-to-
      refresh, which only re-fetches data, can leave a stale script running
      for a while) -- bump N here whenever either file changes. -->
-<link rel="stylesheet" href="style.css?v=22">
+<!-- Saira Condensed carries every heading, stat numeral and player name;
+     IBM Plex Sans carries body copy and controls (and has real tabular
+     figures, which the win-rate and power columns rely on). preconnect
+     because these block first paint of the headings -- display=swap means
+     the fallback stack renders first either way, and both fallbacks are
+     picked for close metrics so the swap doesn't jump. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css?v=29">
 
 <!-- Home-screen icon (iOS "Add to Home Screen" + Android/Chrome install).
      Generated from icon-source.png via scripts/generate_icons.py -- rerun
@@ -29,7 +38,12 @@
      these matches the newly-selected tab). A CSS background-image can't be
      transitioned directly between two different URLs -- this is the
      standard way to get a smooth crossfade instead of a hard cut. -->
-<div class="tab-bg active" id="bg-pod"></div>
+<!-- Tonight is the app's home now, so it owns the first background and
+     the .active class the pod tab used to start with. Reuses the
+     games-to-update artwork (a lit village) -- closest in tone to a
+     "what's on tonight" landing surface, and no new asset needed. -->
+<div class="tab-bg active" id="bg-tonight"></div>
+<div class="tab-bg" id="bg-pod"></div>
 <div class="tab-bg" id="bg-games-to-update"></div>
 <div class="tab-bg" id="bg-update-app"></div>
 <div class="tab-bg" id="bg-winrates"></div>
@@ -93,26 +107,28 @@
         <span id="auth-status" class="hint" hidden></span>
       </div>
     </div>
-    <p class="subtitle">Pick a player count, choose each player's deck, and check the pod's power level spread.</p>
+    <!-- Was a fixed line describing the pod validator, which stopped
+         being true the moment Tonight became the landing screen. Each
+         tab's own h2 and lead copy says what that tab is for now. -->
   </header>
 
+  <!-- Four destinations, not five, and the same words as the touch bar
+       below: Games to Update and New Player(s)/Deck(s) are things that
+       need doing rather than places to browse, so they're surfaced as
+       items on Tonight (with their live counts) and reached from there.
+       Their panels still exist below, unchanged -- only their route in. -->
   <nav class="tabs" id="main-tabs">
-    <button class="tab-btn active" data-tab="pod">Deck Strength Validator <span class="tab-badge" id="dsv-tab-badge" hidden></span></button>
-    <button class="tab-btn" data-tab="games-to-update">Games to Update <span class="tab-badge" id="gtu-tab-badge" hidden></span></button>
-    <button class="tab-btn" data-tab="update-app">New Player(s)/Deck(s) <span class="tab-badge" id="uta-tab-badge" hidden></span></button>
-    <button class="tab-btn" data-tab="winrates">Player Win Rates</button>
-    <button class="tab-btn" data-tab="achievements">Achievements</button>
+    <button class="tab-btn active" data-tab="tonight">Tonight <span class="tab-badge" id="tonight-tab-badge" hidden></span></button>
+    <button class="tab-btn" data-tab="pod">Pod <span class="tab-badge" id="dsv-tab-badge" hidden></span></button>
+    <button class="tab-btn" data-tab="winrates">Standings</button>
+    <button class="tab-btn" data-tab="achievements">Trophies</button>
   </nav>
 
-  <div id="tab-pod" class="tab-panel">
-    <section class="card" id="manage-section">
-      <h2>Players &amp; Decks</h2>
-      <p class="hint">Synced live from the app's database. Only players with a playgroup.gg account in this playgroup are shown here. Deck names, power, and Playgroup Power are read-only — use the ✎ next to a deck's power to declare a new bracket ahead of its next logged game.</p>
-      <p class="hint" id="sync-status">Shuffling up the deck list…</p>
+  <div id="tab-tonight" class="tab-panel">
+    <div id="tonight-body"></div>
+  </div>
 
-      <div id="players-table"></div>
-    </section>
-
+  <div id="tab-pod" class="tab-panel" hidden>
     <section class="card" id="pod-section">
       <h2>Set Up Pod</h2>
       <div class="row align-center">
@@ -135,10 +151,22 @@
       <h2>Result</h2>
       <div id="results"></div>
     </section>
+
+    <section class="card" id="manage-section">
+      <h2>Players &amp; Decks</h2>
+      <p class="hint">Read-only reference, synced from the app's database. Tap a deck's power to declare a new bracket before its next game.</p>
+      <p class="hint" id="sync-status">Shuffling up the deck list…</p>
+
+      <div id="players-table"></div>
+    </section>
   </div>
 
   <div id="tab-games-to-update" class="tab-panel" hidden>
     <section class="card">
+            <button type="button" class="back-link" data-goto-tab="tonight">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
+        Tonight
+      </button>
       <h2>Games to Update</h2>
       <p class="hint" id="gtu-intro">Games from playgroup.gg that aren't logged yet. Fill in what playgroup.gg can't supply, then submit.</p>
       <p class="hint" id="gtu-status">Shuffling up…</p>
@@ -149,6 +177,10 @@
 
   <div id="tab-update-app" class="tab-panel" hidden>
     <section class="card">
+            <button type="button" class="back-link" data-goto-tab="tonight">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
+        Tonight
+      </button>
       <h2>New Players/Decks</h2>
       <p class="hint">New playgroup.gg members and new decks for tracked players, detected live — independent of whether a game's been played with them yet. Review, pick a bracket (1–5) for anything new, and submit once to add it all.</p>
       <p class="hint" id="uta-status">Shuffling up…</p>
@@ -169,13 +201,22 @@
 
   <div id="tab-achievements" class="tab-panel" hidden>
     <section class="card">
-      <h2>Achievements</h2>
-      <p class="hint">Read-only, computed from playgroup.gg's own per-game event log. Season 3 is the only season with a full history so far.</p>
+      <h2>Trophies</h2>
+      <p class="hint">Computed from playgroup.gg's own per-game event log. Season 3 is the only season with a full history so far.</p>
       <div class="row align-center">
         <label for="achievements-season-select">Season</label>
         <select id="achievements-season-select"></select>
       </div>
-      <p class="hint" id="achievements-voting-closed-notice" hidden>Voting on which achievements to keep has closed.</p>
+      <!-- The reveal rule, stated once for the whole season instead of on
+           every card (see renderAchievements in app.js). -->
+      <p class="notice" id="achievements-reveal-notice" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>
+        Winners are revealed when the season ends.
+      </p>
+      <p class="notice" id="achievements-voting-closed-notice" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 13.5 9.5 18 19 7"></path></svg>
+        Voting on which achievements to keep has closed.
+      </p>
       <!-- Write-only feedback -- goes straight to achievement_comments in
            D1 (see POST /achievements/comment, relay.js), never read back or
            listed anywhere in this app. Read directly via wrangler d1
@@ -199,28 +240,27 @@
      initTabs() in app.js can drive both bars with one shared handler.
      Short labels + an icon instead of the full tab names, since there's
      no room for those in a thumb-reach bar. -->
+<!-- Drawn icons rather than emoji: emoji render as a different glyph on
+     every platform (and as full-colour stickers next to monochrome UI),
+     which is exactly the inconsistency this bar can't afford. These
+     inherit currentColor, so the .active accent colour drives them. -->
 <nav class="bottom-tabs" id="bottom-tabs">
-  <button class="bottom-tab-btn active" data-tab="pod">
-    <span class="bottom-tab-icon" aria-hidden="true">⚖️</span>
-    <span class="bottom-tab-label">Validator</span>
+  <button class="bottom-tab-btn active" data-tab="tonight">
+    <svg class="bottom-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true"><path d="M12 2.8 20.5 12 12 21.2 3.5 12z"></path></svg>
+    <span class="bottom-tab-label">Tonight</span>
+    <span class="tab-badge" id="tonight-tab-badge-bottom" hidden></span>
+  </button>
+  <button class="bottom-tab-btn" data-tab="pod">
+    <svg class="bottom-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="5"></circle><circle cx="12" cy="3.2" r="1.7"></circle><circle cx="20.8" cy="12" r="1.7"></circle><circle cx="12" cy="20.8" r="1.7"></circle><circle cx="3.2" cy="12" r="1.7"></circle></svg>
+    <span class="bottom-tab-label">Pod</span>
     <span class="tab-badge" id="dsv-tab-badge-bottom" hidden></span>
   </button>
-  <button class="bottom-tab-btn" data-tab="games-to-update">
-    <span class="bottom-tab-icon" aria-hidden="true">📝</span>
-    <span class="bottom-tab-label">Update</span>
-    <span class="tab-badge" id="gtu-tab-badge-bottom" hidden></span>
-  </button>
-  <button class="bottom-tab-btn" data-tab="update-app">
-    <span class="bottom-tab-icon" aria-hidden="true">➕</span>
-    <span class="bottom-tab-label">New</span>
-    <span class="tab-badge" id="uta-tab-badge-bottom" hidden></span>
-  </button>
   <button class="bottom-tab-btn" data-tab="winrates">
-    <span class="bottom-tab-icon" aria-hidden="true">📊</span>
-    <span class="bottom-tab-label">Rates</span>
+    <svg class="bottom-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M4.5 19.5V11M12 19.5V4.5M19.5 19.5v-5.5"></path></svg>
+    <span class="bottom-tab-label">Standings</span>
   </button>
   <button class="bottom-tab-btn" data-tab="achievements">
-    <span class="bottom-tab-icon" aria-hidden="true">🏆</span>
+    <svg class="bottom-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4h10v5a5 5 0 0 1-10 0z"></path><path d="M7 5.5H4.5V8a3 3 0 0 0 3 3M17 5.5h2.5V8a3 3 0 0 1-3 3"></path><path d="M12 14v3.5M8.5 20.5h7"></path></svg>
     <span class="bottom-tab-label">Trophies</span>
   </button>
 </nav>
@@ -252,6 +292,6 @@
   </div>
 </div>
 
-<script src="app.js?v=26"></script>
+<script src="app.js?v=31"></script>
 </body>
 </html>
