@@ -198,6 +198,21 @@ body {
 .wrap {
   max-width: 880px;
   margin: 0 auto;
+  /* Tonight is short enough on its own (a few cards) to leave the page
+     shorter than the viewport, unlike every other tab -- and a page that
+     never needs to scroll is exactly what makes mobile Safari/Chrome
+     leave their own address/tab bar on screen, rendering position:fixed
+     bottom:0 above THAT chrome instead of the true screen edge. The
+     fixed bar looked anchored on every tab except Tonight for this
+     reason alone -- confirmed by comparing scrollHeight across tabs, not
+     a per-tab styling difference. Forcing the page to always be at least
+     one viewport tall keeps that browser-chrome behavior (and so the
+     bar's position) the same regardless of which tab's content is
+     showing. 100dvh (the real visual viewport, shrinking as browser
+     chrome appears) with 100vh as the fallback for browsers that don't
+     support dvh yet. */
+  min-height: 100vh;
+  min-height: 100dvh;
   /* Top padding accounts for env(safe-area-inset-top) -- the notch/
      Dynamic Island's real height on iOS, same as .auth-control's own top
      offset just below (see viewport-fit=cover +
