@@ -138,6 +138,26 @@
    if the glitch still happens, the gap is invisible instead of a white
    flash; see .tab-bg's translateZ(0) below for the other half of the fix
    (forcing its own compositing layer, which iOS handles more reliably). */
+/* html/body min-height, not just .wrap's further down: #signin-gate and
+   every .tab-bg layer are position:fixed, which contributes nothing to
+   normal document flow -- so before checkAuthSession resolves and .wrap
+   (hidden until then) ever renders, the actual document is close to 0px
+   tall. That's exactly the state that makes a mobile browser decide "this
+   page never scrolls" and settle its own chrome (address bar, etc.)
+   permanently on screen from the very first paint, which several
+   browsers then don't reconsider just because the document changes
+   height later -- .wrap's own min-height alone wasn't enough to fix the
+   fixed bottom nav floating on a cold load (confirmed on a real phone:
+   wrong on first paint, fixed the moment any tab switch forces a
+   reflow). Reserving a full viewport here too means the document is
+   never that short in the first place, gate included. See --app-vh
+   (syncViewportHeight in app.js) for why dvh alone isn't trusted either. */
+html, body {
+  min-height: 100vh;
+  min-height: 100dvh;
+  min-height: var(--app-vh, 100dvh);
+}
+
 html {
   background: var(--bg);
 }
@@ -199,20 +219,14 @@ body {
   max-width: 880px;
   margin: 0 auto;
   /* Tonight is short enough on its own (a few cards) to leave the page
-     shorter than the viewport, unlike every other tab -- and a page that
-     never needs to scroll is exactly what makes mobile Safari/Chrome
-     leave their own address/tab bar on screen, rendering position:fixed
-     bottom:0 above THAT chrome instead of the true screen edge. The
-     fixed bar looked anchored on every tab except Tonight for this
-     reason alone -- confirmed by comparing scrollHeight across tabs, not
-     a per-tab styling difference. Forcing the page to always be at least
-     one viewport tall keeps that browser-chrome behavior (and so the
-     bar's position) the same regardless of which tab's content is
-     showing. 100dvh (the real visual viewport, shrinking as browser
-     chrome appears) with 100vh as the fallback for browsers that don't
-     support dvh yet. */
+     shorter than the viewport, unlike every other tab. Same min-height
+     as html/body above (and same --app-vh reasoning) belt-and-braces here
+     too -- redundant once html/body are already covering it, but cheap
+     insurance against whichever ancestor a given mobile browser actually
+     bases its chrome-collapse decision on. */
   min-height: 100vh;
   min-height: 100dvh;
+  min-height: var(--app-vh, 100dvh);
   /* Top padding accounts for env(safe-area-inset-top) -- the notch/
      Dynamic Island's real height on iOS, same as .auth-control's own top
      offset just below (see viewport-fit=cover +

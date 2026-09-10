@@ -4138,6 +4138,41 @@ function applyTheme(choice) {
   return choice;
 }
 
+// ---------- viewport height (mobile browser chrome) ----------
+// CSS min-height: 100dvh on .wrap (see style.css) is supposed to keep the
+// page at least one real visual viewport tall on every tab, so a short
+// tab (Tonight) doesn't leave mobile Safari/Chrome's own address bar
+// parked on screen the way a non-scrollable page does -- which is what
+// pushes the fixed bottom nav to sit above that chrome instead of the
+// true screen edge. Confirmed on a real phone that dvh alone isn't
+// enough, though: it's right on a fresh reflow (switch tabs and back
+// fixes it) but wrong on cold load, meaning some browsers -- especially
+// in installed/standalone PWA mode, which this app supports -- compute
+// dvh once against a transient viewport before their own chrome has
+// settled, and never re-evaluate it without an explicit trigger.
+//
+// Same fix as before this app had a real dvh to fall back on: measure the
+// actual viewport in JS and write it to a custom property .wrap's
+// min-height can reference, ahead of the plain dvh fallback in the
+// cascade (see style.css) so a browser that gets dvh right still gets it,
+// and one that doesn't gets this instead. window.visualViewport (not
+// plain window.innerHeight) is what actually tracks the on-screen
+// keyboard and chrome show/hide live where it's available; innerHeight
+// is the fallback for the handful of browsers without it.
+function syncViewportHeight() {
+  const height = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+  document.documentElement.style.setProperty("--app-vh", `${height}px`);
+}
+
+function initViewportHeight() {
+  syncViewportHeight();
+  window.addEventListener("resize", syncViewportHeight);
+  window.addEventListener("orientationchange", syncViewportHeight);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", syncViewportHeight);
+  }
+}
+
 function initTheme() {
   applyTheme(localStorage.getItem("themePreference"));
   document.querySelectorAll(".theme-toggle-btn").forEach(btn => {
@@ -4236,6 +4271,12 @@ const gtuIntroEl = document.getElementById("gtu-intro");
 if (gtuIntroEl) {
   gtuIntroEl.textContent = "Games from playgroup.gg that aren't logged yet. Fill in what playgroup.gg can't supply, then submit.";
 }
+
+// Runs before anything else in this section, same reasoning as initTheme
+// right below it -- .wrap's min-height needs --app-vh in place before the
+// sign-in gate (the very first thing painted) ever renders, not just
+// before the app content behind it.
+initViewportHeight();
 
 // Runs before anything else in this section so there's no flash of the
 // wrong theme after a stored explicit choice -- see initTheme/applyTheme.
