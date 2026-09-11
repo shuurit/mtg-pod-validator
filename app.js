@@ -4173,6 +4173,49 @@ function initViewportHeight() {
   }
 }
 
+// TEMPORARY -- diagnosing the bottom-nav-floats-on-real-iPhone report.
+// Two theory-based fixes (dvh/--app-vh, then translateZ(0) on
+// .bottom-tabs) both missed, so this reads the actual numbers on the
+// device showing it instead of guessing a third time. Remove this whole
+// block, its call at the bottom of this file, and #debug-viewport in
+// index.html once the real cause is confirmed fixed.
+function updateDebugViewport() {
+  const el = document.getElementById("debug-viewport");
+  if (!el) return;
+  const bar = document.getElementById("bottom-tabs");
+  const barRect = bar ? bar.getBoundingClientRect() : null;
+  const cs = getComputedStyle(document.documentElement);
+  const standalone = window.navigator.standalone === true
+    || window.matchMedia("(display-mode: standalone)").matches;
+  const lines = [
+    `standalone: ${standalone}`,
+    `innerHeight: ${window.innerHeight}`,
+    `visualVp.height: ${window.visualViewport ? Math.round(window.visualViewport.height) : "n/a"}`,
+    `visualVp.offsetTop: ${window.visualViewport ? Math.round(window.visualViewport.offsetTop) : "n/a"}`,
+    `--app-vh: ${cs.getPropertyValue("--app-vh")}`,
+    `docScrollHeight: ${document.documentElement.scrollHeight}`,
+    `scrollY: ${window.scrollY}`,
+    `bar top/bottom: ${barRect ? `${Math.round(barRect.top)}/${Math.round(barRect.bottom)}` : "n/a"}`,
+    `dpr: ${window.devicePixelRatio}`,
+    `safe-bottom: ${cs.getPropertyValue("--debug-safe-bottom") || getComputedStyle(document.body).getPropertyValue("padding-bottom")}`,
+  ];
+  el.textContent = lines.join("\n");
+}
+
+function initDebugViewport() {
+  const el = document.getElementById("debug-viewport");
+  if (!el) return;
+  updateDebugViewport();
+  window.addEventListener("resize", updateDebugViewport);
+  window.addEventListener("scroll", updateDebugViewport, { passive: true });
+  window.addEventListener("orientationchange", updateDebugViewport);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", updateDebugViewport);
+    window.visualViewport.addEventListener("scroll", updateDebugViewport);
+  }
+  setInterval(updateDebugViewport, 1000);
+}
+
 function initTheme() {
   applyTheme(localStorage.getItem("themePreference"));
   document.querySelectorAll(".theme-toggle-btn").forEach(btn => {
@@ -4277,6 +4320,9 @@ if (gtuIntroEl) {
 // sign-in gate (the very first thing painted) ever renders, not just
 // before the app content behind it.
 initViewportHeight();
+
+// TEMPORARY -- see updateDebugViewport above.
+initDebugViewport();
 
 // Runs before anything else in this section so there's no flash of the
 // wrong theme after a stored explicit choice -- see initTheme/applyTheme.

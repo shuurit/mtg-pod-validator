@@ -244,6 +244,10 @@
      every platform (and as full-colour stickers next to monochrome UI),
      which is exactly the inconsistency this bar can't afford. These
      inherit currentColor, so the .active accent colour drives them. -->
+<!-- TEMPORARY -- see updateDebugViewport in app.js. Remove this div,
+     that function, its init call, and #debug-viewport's CSS once the
+     real cause of the floating-bottom-nav report is confirmed fixed. -->
+<pre id="debug-viewport" style="position:fixed; top:0; left:0; right:0; z-index:999; margin:0; padding:8px 10px; padding-top:max(8px, env(safe-area-inset-top)); background:rgba(220,30,30,0.92); color:#fff; font:11px/1.4 ui-monospace, monospace; white-space:pre-wrap;"></pre>
 <nav class="bottom-tabs" id="bottom-tabs">
   <button class="bottom-tab-btn active" data-tab="tonight">
     <svg class="bottom-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true"><path d="M12 2.8 20.5 12 12 21.2 3.5 12z"></path></svg>
@@ -293,6 +297,6 @@
   </div>
 </div>
 
-<script src="app.js?v=37"></script>
+<script src="app.js?v=38"></script>
 </body>
 </html>
