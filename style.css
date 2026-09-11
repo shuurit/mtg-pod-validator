@@ -608,6 +608,18 @@ header h1 {
     border-top: 1px solid var(--border);
     box-shadow: var(--shadow-md);
     padding: 6px max(6px, env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom)) max(6px, env(safe-area-inset-left));
+    /* Same iOS Safari/PWA quirk already worked around on .tab-bg and
+       .auth-control above (position:fixed layers detaching from the real
+       viewport edge during/after a scroll) -- just never applied here.
+       This is what a phone screenshot actually showed: solid dark space
+       visible below the whole bar, on a touch device, mid-use -- not the
+       cold-load/dvh issue (that one can't produce a gap below a
+       genuinely viewport-pinned element, fixed positioning always tracks
+       the current viewport regardless of document height). Forcing this
+       bar onto its own GPU compositing layer is the same fix for the
+       same reason. */
+    -webkit-transform: translateZ(0);
+    transform: translateZ(0);
   }
 }
 
