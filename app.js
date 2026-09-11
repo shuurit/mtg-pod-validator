@@ -4139,29 +4139,40 @@ function applyTheme(choice) {
 }
 
 // ---------- viewport height (mobile browser chrome) ----------
-// CSS min-height: 100dvh on .wrap (see style.css) is supposed to keep the
-// page at least one real visual viewport tall on every tab, so a short
-// tab (Tonight) doesn't leave mobile Safari/Chrome's own address bar
-// parked on screen the way a non-scrollable page does -- which is what
-// pushes the fixed bottom nav to sit above that chrome instead of the
-// true screen edge. Confirmed on a real phone that dvh alone isn't
-// enough, though: it's right on a fresh reflow (switch tabs and back
-// fixes it) but wrong on cold load, meaning some browsers -- especially
-// in installed/standalone PWA mode, which this app supports -- compute
-// dvh once against a transient viewport before their own chrome has
-// settled, and never re-evaluate it without an explicit trigger.
+// Confirmed from two real-device screenshots of this exact bug, same
+// phone, same load, different tabs: both reported the true physical
+// screen as 393x852, but window.innerHeight/visualViewport.height read
+// 793 on Tonight (short, nothing to scroll) and the correct 852 on Pod
+// (tall, genuinely scrollable) -- 793 is exactly 852 minus this device's
+// own safe-area-inset-top (59px). Not a measurement this app's CSS could
+// ever get right by reading it more carefully or more often: iOS itself
+// is computing visualViewport/innerHeight differently depending on
+// whether the DOCUMENT happens to be scrollable, which the spec doesn't
+// say should matter at all. Two earlier fixes both trusted that
+// measurement at face value and just tried to apply it more forcefully
+// (min-height cascade, then a GPU compositing layer on the bar) --
+// neither could work, because the number they were building on was
+// itself wrong on exactly the tab that needed it most.
 //
-// Same fix as before this app had a real dvh to fall back on: measure the
-// actual viewport in JS and write it to a custom property .wrap's
-// min-height can reference, ahead of the plain dvh fallback in the
-// cascade (see style.css) so a browser that gets dvh right still gets it,
-// and one that doesn't gets this instead. window.visualViewport (not
+// So: never measure in whatever state the page already happens to be in.
+// Force the document tall enough to be genuinely scrollable FIRST (the
+// one condition both screenshots agree reports correctly), measure in
+// that state, then put things back -- synchronously, so nothing ever
+// paints the oversized intermediate state. window.visualViewport (not
 // plain window.innerHeight) is what actually tracks the on-screen
 // keyboard and chrome show/hide live where it's available; innerHeight
 // is the fallback for the handful of browsers without it.
+let syncingViewportHeight = false;
 function syncViewportHeight() {
+  if (syncingViewportHeight) return; // guards against a resize this itself triggers
+  syncingViewportHeight = true;
+  const root = document.documentElement;
+  const previousMinHeight = root.style.minHeight;
+  root.style.minHeight = "4000px";
   const height = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+  root.style.minHeight = previousMinHeight;
   document.documentElement.style.setProperty("--app-vh", `${height}px`);
+  syncingViewportHeight = false;
 }
 
 function initViewportHeight() {
