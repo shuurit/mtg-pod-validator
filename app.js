@@ -4220,65 +4220,6 @@ function initViewportHeight() {
   }
 }
 
-// TEMPORARY -- diagnosing the bottom-nav-floats-on-real-iPhone report.
-// Two theory-based fixes (dvh/--app-vh, then translateZ(0) on
-// .bottom-tabs) both missed, so this reads the actual numbers on the
-// device showing it instead of guessing a third time. Remove this whole
-// block, its call at the bottom of this file, and #debug-viewport in
-// index.html once the real cause is confirmed fixed.
-function updateDebugViewport() {
-  const el = document.getElementById("debug-viewport");
-  if (!el) return;
-  const bar = document.getElementById("bottom-tabs");
-  const barRect = bar ? bar.getBoundingClientRect() : null;
-  const marker = document.getElementById("debug-floor");
-  const markerRect = marker ? marker.getBoundingClientRect() : null;
-  const cs = getComputedStyle(document.documentElement);
-  const standalone = window.navigator.standalone === true
-    || window.matchMedia("(display-mode: standalone)").matches;
-  const lines = [
-    `standalone: ${standalone}`,
-    `screen: ${window.screen.width}x${window.screen.height}`,
-    `innerHeight: ${window.innerHeight}`,
-    `visualVp.height: ${window.visualViewport ? Math.round(window.visualViewport.height) : "n/a"}`,
-    `visualVp.offsetTop: ${window.visualViewport ? Math.round(window.visualViewport.offsetTop) : "n/a"}`,
-    `--app-vh: ${cs.getPropertyValue("--app-vh")}`,
-    `docScrollHeight: ${document.documentElement.scrollHeight}`,
-    `scrollY: ${window.scrollY}`,
-    `bar top/bottom: ${barRect ? `${Math.round(barRect.top)}/${Math.round(barRect.bottom)}` : "n/a"}`,
-    `dpr: ${window.devicePixelRatio}`,
-    // Real env() readings now (see the :root custom properties in
-    // style.css) -- the previous line here always read 0px regardless of
-    // the actual device value, because it referenced a custom property
-    // that was never set anywhere.
-    `safe-top/bottom: ${cs.getPropertyValue("--debug-safe-top").trim()}/${cs.getPropertyValue("--debug-safe-bottom").trim()}`,
-    // #debug-floor is a lime strip pinned to the literal CSS bottom:0 with
-    // NO safe-area padding at all -- ground truth for where the browser
-    // thinks "the bottom of the viewport" is. If it lines up with the
-    // true physical screen edge in a screenshot, the viewport height the
-    // page is given really is the full screen and something else is
-    // going on; if it sits well above the true edge (matching where the
-    // reported gap starts), the page is being handed a shorter usable
-    // area than the physical screen, full stop -- not a rendering quirk.
-    `floor marker top: ${markerRect ? Math.round(markerRect.top) : "n/a"}`,
-  ];
-  el.textContent = lines.join("\n");
-}
-
-function initDebugViewport() {
-  const el = document.getElementById("debug-viewport");
-  if (!el) return;
-  updateDebugViewport();
-  window.addEventListener("resize", updateDebugViewport);
-  window.addEventListener("scroll", updateDebugViewport, { passive: true });
-  window.addEventListener("orientationchange", updateDebugViewport);
-  if (window.visualViewport) {
-    window.visualViewport.addEventListener("resize", updateDebugViewport);
-    window.visualViewport.addEventListener("scroll", updateDebugViewport);
-  }
-  setInterval(updateDebugViewport, 1000);
-}
-
 function initTheme() {
   applyTheme(localStorage.getItem("themePreference"));
   document.querySelectorAll(".theme-toggle-btn").forEach(btn => {
@@ -4383,9 +4324,6 @@ if (gtuIntroEl) {
 // sign-in gate (the very first thing painted) ever renders, not just
 // before the app content behind it.
 initViewportHeight();
-
-// TEMPORARY -- see updateDebugViewport above.
-initDebugViewport();
 
 // Runs before anything else in this section so there's no flash of the
 // wrong theme after a stored explicit choice -- see initTheme/applyTheme.

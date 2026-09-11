@@ -1,12 +1,4 @@
 :root {
-  /* TEMPORARY -- real env() readings for updateDebugViewport in app.js
-     (its previous "safe-bottom" line read a custom property that was
-     never actually set anywhere, so it was always reporting body's
-     unset padding-bottom, i.e. always 0px, regardless of the real
-     value). Remove alongside the rest of the debug-viewport block. */
-  --debug-safe-top: env(safe-area-inset-top, 0px);
-  --debug-safe-bottom: env(safe-area-inset-bottom, 0px);
-
   /* Two faces, two jobs. Display carries headings, stat numerals and
      player names -- condensed, so a long name like "Player Adjusted Win
      Rate" or a 5-letter player name sets at a size you can read across a
