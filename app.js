@@ -4154,25 +4154,61 @@ function applyTheme(choice) {
 // neither could work, because the number they were building on was
 // itself wrong on exactly the tab that needed it most.
 //
-// So: never measure in whatever state the page already happens to be in.
-// Force the document tall enough to be genuinely scrollable FIRST (the
-// one condition both screenshots agree reports correctly), measure in
-// that state, then put things back -- synchronously, so nothing ever
-// paints the oversized intermediate state. window.visualViewport (not
-// plain window.innerHeight) is what actually tracks the on-screen
-// keyboard and chrome show/hide live where it's available; innerHeight
-// is the fallback for the handful of browsers without it.
+// A first fix tried forcing the document tall (min-height: 4000px) and
+// reading visualViewport.height back synchronously, on the theory that
+// "genuinely scrollable" was the condition that mattered -- confirmed
+// wrong by a second real-device screenshot showing no change at all
+// (still 793). visualViewport.height isn't a synchronous layout
+// property the way offsetHeight is; resizing the DOM under it doesn't
+// make the browser recompute it on the spot.
+//
+// What actually reads correctly is a real scroll -- which is what
+// activateTab's own window.scrollTo(0) was already incidentally doing
+// on every tab switch, and is the entire reason switching tabs and back
+// was the original workaround. So: make the page tall enough to have
+// somewhere to scroll, perform a real (1px, invisible) scroll away and
+// back, and wait for the browser to actually tell us it's done
+// recomputing (a visualViewport resize event) rather than assuming any
+// fixed delay is long enough -- with a timeout fallback in case this
+// browser doesn't fire one at all, so a short page still ends up with
+// SOME value instead of hanging forever.
 let syncingViewportHeight = false;
 function syncViewportHeight() {
   if (syncingViewportHeight) return; // guards against a resize this itself triggers
   syncingViewportHeight = true;
+
   const root = document.documentElement;
-  const previousMinHeight = root.style.minHeight;
+  let finished = false;
+  const finish = () => {
+    if (finished) return; // the resize listener and the safety-net timeout below can both fire
+    finished = true;
+    const height = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+    root.style.setProperty("--app-vh", `${height}px`);
+    root.style.minHeight = "";
+    syncingViewportHeight = false;
+  };
+
   root.style.minHeight = "4000px";
-  const height = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-  root.style.minHeight = previousMinHeight;
-  document.documentElement.style.setProperty("--app-vh", `${height}px`);
-  syncingViewportHeight = false;
+  // Both scrollTo calls back to back, no requestAnimationFrame between
+  // them -- rAF doesn't reliably fire for a tab that isn't actively
+  // visible/foregrounded (confirmed the hard way: the previous version
+  // of this left min-height stuck at 4000px and --app-vh never set at
+  // all, a real regression, worse than the bug it was fixing).
+  window.scrollTo(0, 1);
+  window.scrollTo(0, 0);
+
+  if (window.visualViewport) {
+    const onResize = () => {
+      window.visualViewport.removeEventListener("resize", onResize);
+      finish();
+    };
+    window.visualViewport.addEventListener("resize", onResize);
+  }
+  // Unconditional safety net, independent of whether a resize event (or
+  // anything else above) ever actually fires -- guarantees this always
+  // finishes and cleans up min-height within half a second no matter
+  // what, rather than risking getting stuck again.
+  setTimeout(finish, 500);
 }
 
 function initViewportHeight() {
