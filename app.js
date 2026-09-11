@@ -4184,11 +4184,14 @@ function updateDebugViewport() {
   if (!el) return;
   const bar = document.getElementById("bottom-tabs");
   const barRect = bar ? bar.getBoundingClientRect() : null;
+  const marker = document.getElementById("debug-floor");
+  const markerRect = marker ? marker.getBoundingClientRect() : null;
   const cs = getComputedStyle(document.documentElement);
   const standalone = window.navigator.standalone === true
     || window.matchMedia("(display-mode: standalone)").matches;
   const lines = [
     `standalone: ${standalone}`,
+    `screen: ${window.screen.width}x${window.screen.height}`,
     `innerHeight: ${window.innerHeight}`,
     `visualVp.height: ${window.visualViewport ? Math.round(window.visualViewport.height) : "n/a"}`,
     `visualVp.offsetTop: ${window.visualViewport ? Math.round(window.visualViewport.offsetTop) : "n/a"}`,
@@ -4197,7 +4200,20 @@ function updateDebugViewport() {
     `scrollY: ${window.scrollY}`,
     `bar top/bottom: ${barRect ? `${Math.round(barRect.top)}/${Math.round(barRect.bottom)}` : "n/a"}`,
     `dpr: ${window.devicePixelRatio}`,
-    `safe-bottom: ${cs.getPropertyValue("--debug-safe-bottom") || getComputedStyle(document.body).getPropertyValue("padding-bottom")}`,
+    // Real env() readings now (see the :root custom properties in
+    // style.css) -- the previous line here always read 0px regardless of
+    // the actual device value, because it referenced a custom property
+    // that was never set anywhere.
+    `safe-top/bottom: ${cs.getPropertyValue("--debug-safe-top").trim()}/${cs.getPropertyValue("--debug-safe-bottom").trim()}`,
+    // #debug-floor is a lime strip pinned to the literal CSS bottom:0 with
+    // NO safe-area padding at all -- ground truth for where the browser
+    // thinks "the bottom of the viewport" is. If it lines up with the
+    // true physical screen edge in a screenshot, the viewport height the
+    // page is given really is the full screen and something else is
+    // going on; if it sits well above the true edge (matching where the
+    // reported gap starts), the page is being handed a shorter usable
+    // area than the physical screen, full stop -- not a rendering quirk.
+    `floor marker top: ${markerRect ? Math.round(markerRect.top) : "n/a"}`,
   ];
   el.textContent = lines.join("\n");
 }
