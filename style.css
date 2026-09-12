@@ -2592,10 +2592,23 @@ input.gtu-in-prefilled {
   color: var(--muted);
 }
 
+/* Bounded and independently scrollable -- a player with a lot of decks
+   (17, in the case that surfaced this) used to grow the WHOLE page, which
+   meant scrolling through the list also scrolled decks in and out from
+   under the fixed bottom nav (it's opaque and always covers the same
+   ~60px strip of the viewport, no matter where the page itself is
+   scrolled to) -- confirmed the reported bug matches exactly: whichever
+   deck happened to land under that strip while scrolling was genuinely
+   hard to tap. A capped height with its own scroll keeps the entire list
+   above the nav at all times; only picking a deck this long ever needs
+   to scroll internally rather than the page around it. */
 .deal-decks {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  max-height: 340px;
+  overflow-y: auto;
+  padding-right: 2px;
 }
 .deal-deck {
   display: flex;
