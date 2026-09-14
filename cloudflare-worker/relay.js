@@ -1337,6 +1337,47 @@ async function handleDebugGamesList(request, env) {
   });
 }
 
+// Raw pass-through of every league on this playgroup and its own `active`
+// flag -- unlike getActiveLeagueId (which only ever surfaces the first
+// .find(active) match, the one resolveSeasonId/the achievements reveal
+// check actually act on), this shows ALL of them. Confirmed the hard way
+// that playgroup.gg allows more than one league active at once: reactivating
+// an old season's league here does NOT deactivate the current one, and
+// nothing in this app disambiguates between two simultaneously-active
+// leagues -- it just silently keeps using whichever one is first in the
+// array. Check this before reactivating an old league, not after.
+async function handleDebugLeagues(env) {
+  const meRes = await pgFetch("/me", env);
+  const me = await meRes.json();
+  const pgListRes = await pgFetch(`/users/${me.id}/playgroups`, env);
+  const playgroups = await pgListRes.json();
+  const playgroup = playgroups.find(p => p.id === PLAYGROUP_ID);
+  return jsonResponse(
+    { leagues: (playgroup && playgroup.leagues) || [] },
+    200,
+    { "Cache-Control": "no-store" }
+  );
+}
+
+// Authoritative game-id membership for an arbitrary league, reusing
+// confirmGameIdsForDecks (normally only ever called against whatever
+// getActiveLeagueId resolves to) against a caller-supplied league_id +
+// deck_ids list instead. Built to reconcile Season 2's real playgroup.gg
+// membership (confirmed: exactly 24 games, matching the count playgroup.gg's
+// own UI shows for that league) against a spreadsheet/date-range guess --
+// kept around for the next time an old league needs the same treatment.
+async function handleDebugLeagueGameIds(request, env) {
+  const url = new URL(request.url);
+  const leagueId = url.searchParams.get("league_id");
+  const deckIdsParam = url.searchParams.get("deck_ids");
+  if (!leagueId || !deckIdsParam) {
+    return jsonResponse({ error: "?league_id=<id>&deck_ids=<comma-separated> required" }, 400);
+  }
+  const deckIds = deckIdsParam.split(",").map(s => Number(s.trim())).filter(Boolean);
+  const ids = await confirmGameIdsForDecks(deckIds, { id: leagueId }, env);
+  return jsonResponse({ leagueId, deckIdsChecked: deckIds.length, gameIds: [...ids].sort((a, b) => a - b), count: ids.size }, 200, { "Cache-Control": "no-store" });
+}
+
 // ---------- GET /roster-diff : who/what is on playgroup.gg but not yet tracked ----------
 
 // playgroup.gg's Deck.color_identity is an unordered array (e.g. ["G","U"]) --
@@ -2329,6 +2370,20 @@ const ACHIEVEMENT_VOTING_DEADLINE = new Date("2026-09-15T06:00:00Z");
 // comes from game_results (the submitted-game table, already carrying
 // place/tov/win_con/starting_player_id via the joins below) -- see
 // schema.sql for both.
+// Same players and same reasoning as discord_report.py's
+// EXCLUDED_FROM_REPORTS -- Kristy and Joseph are inactive and shouldn't be
+// crowned a trophy winner. Deliberately scoped to achievements only, not
+// applied at the SQL/schema level: /players, /rankings, /games etc. still
+// need to return them (their historical games are real and still feed
+// other players' own stats -- e.g. a game they lost still counts toward
+// whoever beat them), this only ever removes them from being the *winner*
+// shown for a trophy. Filtering once here, at the one place every
+// achievement's compute() reads from, means every achievement is covered
+// without each one needing its own exclusion check -- next-highest-ranked
+// eligible player wins instead, same as if the excluded player had simply
+// not played.
+const EXCLUDED_FROM_TROPHIES = ["Kristy", "Joseph"];
+
 async function gatherAchievementContext(env, seasonId) {
   const [eventStatsRes, gameResultsRes, rankingsData] = await Promise.all([
     env.DB.prepare(`
@@ -2357,12 +2412,12 @@ async function gatherAchievementContext(env, seasonId) {
     // #1, not a second, different opinion about who's winning.
     computeRankingsData(env, seasonId),
   ]);
-  const eventStats = eventStatsRes.results;
-  const gameResults = gameResultsRes.results;
+  const eventStats = eventStatsRes.results.filter(r => !EXCLUDED_FROM_TROPHIES.includes(r.name));
+  const gameResults = gameResultsRes.results.filter(r => !EXCLUDED_FROM_TROPHIES.includes(r.name));
+  const rankings = rankingsData.rankings.filter(r => !EXCLUDED_FROM_TROPHIES.includes(r.player));
   return {
-    eventStats, gameResults,
+    eventStats, gameResults, rankings,
     eventStatsByPlayer: groupByPlayer(eventStats),
-    rankings: rankingsData.rankings,
   };
 }
 
@@ -2665,6 +2720,14 @@ export default {
 
     if (request.method === "GET" && url.pathname === "/debug/games-list") {
       return handleDebugGamesList(request, env);
+    }
+
+    if (request.method === "GET" && url.pathname === "/debug/leagues") {
+      return handleDebugLeagues(env);
+    }
+
+    if (request.method === "GET" && url.pathname === "/debug/league-game-ids") {
+      return handleDebugLeagueGameIds(request, env);
     }
 
     if (request.method === "POST" && url.pathname === "/games") {
