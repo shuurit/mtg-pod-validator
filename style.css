@@ -188,7 +188,18 @@ body {
   background-size: cover;
   background-position: center;
   opacity: 0;
-  transition: opacity 0.9s ease;
+  /* Was 0.9s -- reported live (not just on recording) as a visible glitch
+     switching tabs in Brave: two full-viewport, translateZ(0)-forced-layer
+     backgrounds cross-fading via opacity at once for the better part of a
+     second is a long window for two independently-composited layers to
+     stay in flux behind the foreground content, and a plausible trigger
+     for a compositor timing hiccup in a specific browser (confirmed the
+     app's own DOM/tab state is never actually wrong during a switch --
+     this is a rendering-only symptom). Shortened to a duration much more
+     typical for a UI transition, cutting that window down substantially
+     rather than trying to chase the underlying browser compositor
+     behavior directly. */
+  transition: opacity 0.25s ease;
   pointer-events: none;
   /* Forces its own GPU compositing layer -- the standard fix for iOS
      Safari/WebKit's position:fixed-detaches-on-scroll quirk (see html's
