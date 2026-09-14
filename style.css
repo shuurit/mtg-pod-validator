@@ -188,18 +188,23 @@ body {
   background-size: cover;
   background-position: center;
   opacity: 0;
-  /* Was 0.9s -- reported live (not just on recording) as a visible glitch
-     switching tabs in Brave: two full-viewport, translateZ(0)-forced-layer
-     backgrounds cross-fading via opacity at once for the better part of a
-     second is a long window for two independently-composited layers to
-     stay in flux behind the foreground content, and a plausible trigger
-     for a compositor timing hiccup in a specific browser (confirmed the
-     app's own DOM/tab state is never actually wrong during a switch --
-     this is a rendering-only symptom). Shortened to a duration much more
-     typical for a UI transition, cutting that window down substantially
-     rather than trying to chase the underlying browser compositor
-     behavior directly. */
-  transition: opacity 0.25s ease;
+  /* No transition, deliberately -- this used to cross-fade over 0.9s (then
+     0.25s in a first pass at this same bug), but reported live as a real,
+     visible glitch on a switch in Brave: two full-viewport,
+     translateZ(0)-forced-layer backgrounds animating opacity at once,
+     behind everything, is real sustained work for the compositor, and a
+     plausible trigger for a rendering hiccup in a specific browser
+     regardless of how short the window is (confirmed the app's own
+     DOM/tab state is never actually wrong during a switch -- this was
+     always a rendering-only symptom, not a state bug). Shortening the
+     duration wasn't enough to be confident it's actually gone rather than
+     just less likely -- removing the animation removes the mechanism
+     itself: two of these layers are never simultaneously mid-fade now, so
+     there's nothing left for a compositor to get out of sync on. The tab
+     switch itself is still instant either way; this only ever traded a
+     cosmetic crossfade for that risk, and it's not worth it.
+     prefers-reduced-motion below is redundant now (no transition to turn
+     off) but left in place as a harmless no-op rather than removed. */
   pointer-events: none;
   /* Forces its own GPU compositing layer -- the standard fix for iOS
      Safari/WebKit's position:fixed-detaches-on-scroll quirk (see html's
