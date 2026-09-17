@@ -66,6 +66,10 @@ playgroup.gg  <--->  Cloudflare Worker relay  <--->  app.js (this site)
 - `index.html`, `app.js`, `style.css` — the app itself.
 - `cloudflare-worker/` — the relay Worker, its D1 schema, and its own
   README.
+- `ask-bot/` — a separate, self-contained Discord `/ask` bot (its own
+  Cloudflare Worker, calling Workers AI for MTG rules/strategy questions).
+  Unrelated to the app or the relay above — no shared code, secrets, or
+  deployment — it just lives in this repo; see its own README for details.
 - `deck-strength.xlsx` — the pre-D1 spreadsheet, kept as a frozen
   historical record (see History below). Nothing reads or writes it.
 - `scripts/` — the Discord-posting scripts (`discord_report.py`,
