@@ -2069,34 +2069,6 @@ const ACHIEVEMENTS = [
     },
   },
   {
-    id: "most-confident",
-    title: "Big Ego",
-    emblem: "emblems/most-confident.png",
-    description: "Highest average self-rating.",
-    compute(ctx) {
-      const winner = topPlayer(ctx.eventStatsByPlayer, rows => avgField(rows, "self_rating"), { minGames: MIN_GAMES_FOR_RATE });
-      return winner && { ...winner, display: `${winner.value.toFixed(1)} avg self-rating` };
-    },
-  },
-  {
-    id: "denial",
-    title: "Denial",
-    emblem: "emblems/denial.png",
-    description: "Highest average self-rating in games they lost.",
-    compute(ctx) {
-      // self_rating lives in game_event_stats, result lives in
-      // game_results -- two different tables keyed by (game_id,
-      // player_id), so this can't reduce over one already-grouped row set
-      // the way the simpler achievements above do.
-      const resultByKey = new Map(ctx.gameResults.map(r => [`${r.game_id}:${r.player_id}`, r.result]));
-      const losses = ctx.eventStats.filter(r =>
-        r.self_rating !== null && r.self_rating !== undefined && resultByKey.get(`${r.game_id}:${r.player_id}`) === 0
-      );
-      const winner = topPlayer(groupByPlayer(losses), rows => avgField(rows, "self_rating"), { minGames: 2 });
-      return winner && { ...winner, display: `${winner.value.toFixed(1)} avg self-rating in losses` };
-    },
-  },
-  {
     id: "combat-wins",
     title: "Timmy Award",
     emblem: "emblems/combat-wins.png",
@@ -2254,48 +2226,6 @@ const ACHIEVEMENTS = [
       if (!winner) return null;
       const rows = byPlayer.find(p => p.playerId === winner.playerId).rows;
       return { ...winner, display: `${Math.round(winner.value * 100)}% recovery rate (${sumField(rows, "disruptions")} disruptions)` };
-    },
-  },
-  {
-    id: "most-behind",
-    title: "Never Say Die",
-    emblem: "emblems/most-behind.png",
-    description: "Most games clearly behind across the season.",
-    compute(ctx) {
-      const winner = topPlayer(groupByPlayer(ctx.gameResults), rows => sumField(rows, "games_clearly_behind"));
-      return winner && winner.value > 0 ? { ...winner, display: `${winner.value} game${winner.value === 1 ? "" : "s"} clearly behind` } : null;
-    },
-  },
-  {
-    id: "most-pauses",
-    title: "Hold Everything",
-    emblem: "emblems/most-pauses.png",
-    description: "Most pauses called across the season.",
-    compute(ctx) {
-      const winner = topPlayer(ctx.eventStatsByPlayer, rows => sumField(rows, "pauses_called"));
-      return winner && winner.value > 0 ? { ...winner, display: `${winner.value} pause${winner.value === 1 ? "" : "s"} called` } : null;
-    },
-  },
-  {
-    id: "longest-pause",
-    title: "Bio Break Champion",
-    emblem: "emblems/longest-pause.png",
-    description: "Most total time spent paused across the season.",
-    compute(ctx) {
-      const winner = topPlayer(ctx.eventStatsByPlayer, rows => sumField(rows, "pause_seconds"));
-      if (!winner || winner.value <= 0) return null;
-      const minutes = winner.value / 60;
-      return { ...winner, display: `${minutes.toFixed(1)} min paused` };
-    },
-  },
-  {
-    id: "most-undos",
-    title: "Second-Guesser",
-    emblem: "emblems/most-undos.png",
-    description: "Most undos across the season.",
-    compute(ctx) {
-      const winner = topPlayer(ctx.eventStatsByPlayer, rows => sumField(rows, "undos"));
-      return winner && winner.value > 0 ? { ...winner, display: `${winner.value} undo${winner.value === 1 ? "" : "s"}` } : null;
     },
   },
   {

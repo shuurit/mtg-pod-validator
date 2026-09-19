@@ -110,7 +110,7 @@ works without one.
   (subtotal), scoped to the current season. Used by the Discord scripts
   (`scripts/discord_report.py`).
 - `GET /achievements?season=<id>` — season standings for an extensible
-  list of achievements (36 as of this writing) computed from
+  list of achievements (30 as of this writing) computed from
   `game_event_stats`, `game_results`, and (for Most Likely to Win)
   `computeRankingsData`'s Player Adjusted Win Rate. `season` defaults to the most
   recent season. Winners are withheld (`winner: null` for everything,
