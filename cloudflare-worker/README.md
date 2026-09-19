@@ -107,7 +107,8 @@ works without one.
   player the Player Win Rates tab would call #1, not a second opinion
   computed a different way.
 - `GET /deck-win-rates` — games/wins/win-rate per deck, and per player
-  (subtotal). Used by the Discord scripts (`scripts/discord_report.py`).
+  (subtotal), scoped to the current season. Used by the Discord scripts
+  (`scripts/discord_report.py`).
 - `GET /achievements?season=<id>` — season standings for an extensible
   list of achievements (36 as of this writing) computed from
   `game_event_stats`, `game_results`, and (for Most Likely to Win)

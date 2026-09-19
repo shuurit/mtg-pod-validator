@@ -1752,7 +1752,13 @@ async function handleRankings(env) {
 // PivotTable as earlier assumed. Nested (player -> its decks) rather than
 // the spreadsheet's flat "player row then indented deck rows" layout,
 // since JSON has no reason to imitate that convention.
-async function computeDeckWinRatesData(env) {
+// seasonId scopes the games/wins counted to one season, same "current
+// season, never combined across seasons" rule computeRankingsData already
+// follows -- decks that carried over from a prior season used to have that
+// season's game_results counted in here too (LEFT JOIN game_results with no
+// games/season_id join at all), inflating the games/wins shown for the
+// active season with the prior season's numbers mixed in.
+async function computeDeckWinRatesData(env, seasonId) {
   const { results: deckRows } = await env.DB.prepare(`
     SELECT d.id AS deck_id, d.player_id, p.name AS player, d.name AS deck,
            COUNT(gr.result) AS games_played,
@@ -1760,9 +1766,10 @@ async function computeDeckWinRatesData(env) {
     FROM decks d
     JOIN players p ON p.id = d.player_id
     LEFT JOIN game_results gr ON gr.deck_id = d.id
+      AND gr.game_id IN (SELECT id FROM games WHERE season_id = ?)
     GROUP BY d.id
     ORDER BY d.id
-  `).all();
+  `).bind(seasonId).all();
 
   const { results: playerRows } = await env.DB.prepare(`
     SELECT p.id AS player_id, p.name AS player,
@@ -1770,9 +1777,10 @@ async function computeDeckWinRatesData(env) {
            COALESCE(SUM(CASE WHEN gr.result = 1 THEN 1 ELSE 0 END), 0) AS wins
     FROM players p
     LEFT JOIN game_results gr ON gr.player_id = p.id
+      AND gr.game_id IN (SELECT id FROM games WHERE season_id = ?)
     GROUP BY p.id
     ORDER BY p.id
-  `).all();
+  `).bind(seasonId).all();
 
   const decksByPlayer = {};
   for (const d of deckRows) {
@@ -1798,7 +1806,8 @@ async function computeDeckWinRatesData(env) {
 async function handleDeckWinRates(env) {
   let data;
   try {
-    data = await computeDeckWinRatesData(env);
+    const latest = await env.DB.prepare("SELECT MAX(season_id) AS id FROM games").first();
+    data = await computeDeckWinRatesData(env, latest.id);
   } catch (err) {
     return jsonResponse({ error: "Failed to compute Deck Win Rates from D1", detail: err.message }, 500);
   }
