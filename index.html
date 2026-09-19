@@ -17,7 +17,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="style.css?v=42">
+<link rel="stylesheet" href="style.css?v=43">
 
 <!-- Home-screen icon (iOS "Add to Home Screen" + Android/Chrome install).
      Generated from icon-source.png via scripts/generate_icons.py -- rerun
@@ -203,9 +203,21 @@
     <section class="card">
       <h2>Trophies</h2>
       <p class="hint">Computed from playgroup.gg's own per-game event log. Season 3 is the only season with a full history so far.</p>
+      <!-- Two views of this same tab, not two tabs -- see
+           setAchievementsView in app.js. "Season Standings" is the
+           original one-season-at-a-time view; "Trophy Case" is one
+           player's history aggregated across every closed season. -->
+      <div class="row align-center view-toggle" id="achievements-view-toggle">
+        <button type="button" class="view-toggle-btn active" data-view="trophies">Season Standings</button>
+        <button type="button" class="view-toggle-btn" data-view="case">Trophy Case</button>
+      </div>
       <div class="row align-center">
         <label for="achievements-season-select">Season</label>
         <select id="achievements-season-select"></select>
+      </div>
+      <div class="row align-center" id="trophy-case-player-row" hidden>
+        <label for="trophy-case-player-select">Player</label>
+        <select id="trophy-case-player-select"></select>
       </div>
       <!-- The reveal rule, stated once for the whole season instead of on
            every card (see renderAchievements in app.js). -->
@@ -217,6 +229,11 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 13.5 9.5 18 19 7"></path></svg>
         Voting on which achievements to keep has closed.
       </p>
+      <!-- Shown only for a season that's already concluded (same
+           condition as achievements-reveal-notice above, inverted -- see
+           loadAchievements in app.js) -- replayable any time, not a
+           one-shot "you already saw this" flow. -->
+      <button type="button" id="ceremony-btn" hidden>Watch the Closing Ceremony</button>
       <!-- Write-only feedback -- goes straight to achievement_comments in
            D1 (see POST /achievements/comment, relay.js), never read back or
            listed anywhere in this app. Read directly via wrangler d1
@@ -231,6 +248,7 @@
       </div>
       <p class="hint" id="achievements-status">Shuffling up…</p>
       <div id="achievements-list"></div>
+      <div id="trophy-case-list" hidden></div>
     </section>
   </div>
 </div>
@@ -279,6 +297,29 @@
   </div>
 </div>
 
+<!-- Walks through a concluded season's won trophies one at a time, tap/
+     arrow-key to advance -- see showClosingCeremonyModal in app.js.
+     Separate from #reveal-modal (that one's an all-at-once pod-art
+     reveal); this one's deliberately paced. #ceremony-step's content and
+     #ceremony-recap (the final step) are swapped by JS, not both markup
+     at once. -->
+<div id="ceremony-modal" class="modal-overlay" hidden>
+  <div class="modal-card">
+    <button id="ceremony-modal-close" class="icon-btn modal-close" aria-label="Close">&#10005;</button>
+    <h2 id="ceremony-title">Closing Ceremony</h2>
+    <p class="ceremony-counter" id="ceremony-counter"></p>
+    <div id="ceremony-step" class="ceremony-step"></div>
+    <div class="row ceremony-nav">
+      <button type="button" id="ceremony-prev">Previous</button>
+      <button type="button" id="ceremony-next">Next</button>
+    </div>
+    <div id="ceremony-recap" hidden>
+      <canvas id="ceremony-recap-canvas"></canvas>
+      <a id="ceremony-recap-download" class="primary to-game-btn" download="season-recap.png">Download Recap</a>
+    </div>
+  </div>
+</div>
+
 <!-- Shown when the flame toggle is clicked to turn ON tracking for a deck
      (never for turning it off) -- see showComboTrackConfirm in app.js. -->
 <div id="combo-track-modal" class="modal-overlay" hidden>
@@ -293,6 +334,6 @@
   </div>
 </div>
 
-<script src="app.js?v=42"></script>
+<script src="app.js?v=43"></script>
 </body>
 </html>

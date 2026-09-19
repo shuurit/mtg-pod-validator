@@ -27,6 +27,7 @@ const AUTH_LOGOUT_RELAY_URL = RELAY_BASE_URL + "/auth/logout";
 const ACHIEVEMENTS_RELAY_URL = RELAY_BASE_URL + "/achievements";
 const ACHIEVEMENT_VOTE_RELAY_URL = RELAY_BASE_URL + "/achievements/vote";
 const ACHIEVEMENT_COMMENT_RELAY_URL = RELAY_BASE_URL + "/achievements/comment";
+const TROPHY_CASE_RELAY_URL = RELAY_BASE_URL + "/trophy-case";
 
 // Discord OAuth sign-in. Client ID is public (it's part of the login URL
 // below), matches the constant of the same name in relay.js -- the Client
@@ -545,6 +546,20 @@ async function syncFromD1() {
 // specifically rather than always re-asking for "the latest."
 let selectedAchievementsSeasonId = null;
 
+// "trophies" = the existing one-season standings view; "case" = a single
+// player's history aggregated across every closed season. Two different
+// views of the same tab, not two tabs -- see initAchievementsTab and the
+// #achievements-view-toggle wiring below.
+let achievementsView = "trophies";
+let selectedTrophyCasePlayerId = null;
+
+// The exact achievements array last rendered by loadAchievements(), kept
+// around purely so the Closing Ceremony button can hand it to
+// showClosingCeremonyModal without a second fetch -- it's the same data
+// already on screen, just walked through one card at a time instead of
+// all at once.
+let lastAchievementsData = null;
+
 async function loadAchievements() {
   const statusEl = document.getElementById("achievements-status");
   const listEl = document.getElementById("achievements-list");
@@ -555,6 +570,7 @@ async function loadAchievements() {
     const res = await fetch(url, { cache: "no-store", headers: authHeaders() });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    lastAchievementsData = data;
     selectedAchievementsSeasonId = data.seasonId;
     renderAchievementsSeasonSelect(data.seasons, data.seasonId);
     renderAchievements(data.achievements, data.seasonActive, data.votingOpen);
@@ -565,6 +581,12 @@ async function loadAchievements() {
     if (revealNotice) revealNotice.hidden = !data.seasonActive;
     const closedNotice = document.getElementById("achievements-voting-closed-notice");
     if (closedNotice) closedNotice.hidden = data.votingOpen !== false;
+    // The ceremony only ever makes sense for a season that's actually
+    // done -- same seasonActive condition already gating the reveal
+    // notice above, since "no live winners yet" and "nothing to walk
+    // through in a closing ceremony" are the same state.
+    const ceremonyBtn = document.getElementById("ceremony-btn");
+    if (ceremonyBtn) ceremonyBtn.hidden = data.seasonActive;
     if (statusEl) statusEl.hidden = true;
   } catch (err) {
     if (listEl) listEl.innerHTML = "";
@@ -572,6 +594,124 @@ async function loadAchievements() {
       statusEl.hidden = false;
       statusEl.textContent = `Couldn't load achievements (${err.message}).`;
     }
+  }
+}
+
+// Fetches one player's full trophy history (every achievement, won or
+// locked) and renders it into #trophy-case-list. playerId defaults to
+// whoever's picked in the player <select>, falling back to the signed-in
+// player themselves the first time this view is opened.
+async function loadTrophyCase(playerId) {
+  const statusEl = document.getElementById("achievements-status");
+  const listEl = document.getElementById("trophy-case-list");
+  const targetPlayerId = playerId ?? selectedTrophyCasePlayerId ?? (currentUser ? currentUser.playerId : null);
+  if (!targetPlayerId) return;
+  selectedTrophyCasePlayerId = targetPlayerId;
+  try {
+    const res = await fetch(`${TROPHY_CASE_RELAY_URL}?player=${targetPlayerId}`, { cache: "no-store", headers: authHeaders() });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderTrophyCasePlayerSelect(data.playerId);
+    renderTrophyCase(data.slots);
+    if (statusEl) statusEl.hidden = true;
+  } catch (err) {
+    if (listEl) listEl.innerHTML = "";
+    if (statusEl) {
+      statusEl.hidden = false;
+      statusEl.textContent = `Couldn't load the trophy case (${err.message}).`;
+    }
+  }
+}
+
+// Builds the player <select> from the roster app.js already has loaded
+// (see syncFromD1/setPlayers -- populated in parallel with achievements at
+// init, same "don't re-fetch data already in hand" reasoning
+// renderAchievementsSeasonSelect follows for its own dropdown).
+function renderTrophyCasePlayerSelect(playerId) {
+  const sel = document.getElementById("trophy-case-player-select");
+  if (!sel) return;
+  sel.innerHTML = "";
+  for (const p of players) {
+    const opt = document.createElement("option");
+    opt.value = p.id;
+    opt.textContent = p.name;
+    sel.appendChild(opt);
+  }
+  sel.value = playerId;
+}
+
+// One card per achievement, all 36 slots always shown -- unlike
+// renderAchievements (one season at a time), this is one player's history
+// across every closed season, so "never won" is a real, visible state
+// (dimmed art, "Locked" label) rather than something left off the grid.
+// Reuses the exact emblem/icon + title + description construction
+// renderAchievements uses (see the comment there on why the art carries
+// no text of its own), so a title/description change never needs to be
+// kept in sync between the two views.
+function renderTrophyCase(slots) {
+  const container = document.getElementById("trophy-case-list");
+  container.innerHTML = "";
+
+  for (const slot of slots) {
+    const card = document.createElement("div");
+    card.className = slot.won ? "trophy-card" : "trophy-card trophy-card-locked";
+
+    if (slot.emblem) {
+      const img = document.createElement("img");
+      img.className = "trophy-emblem";
+      img.src = slot.emblem;
+      img.alt = "";
+      card.appendChild(img);
+    } else {
+      const icon = document.createElement("span");
+      icon.className = "trophy-icon";
+      icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.2 20 12l-8 8.8L4 12z"></path><path d="M12 7.6 16.2 12 12 16.4 7.8 12z"></path></svg>';
+      card.appendChild(icon);
+    }
+
+    // Only shown for a repeat win (×1 would just be noise on every won
+    // card) -- the whole point of a season_awards row per season is that
+    // this can go up over time as more seasons close.
+    if (slot.count > 1) {
+      const badge = document.createElement("span");
+      badge.className = "trophy-count-badge";
+      badge.textContent = `×${slot.count}`;
+      card.appendChild(badge);
+    }
+
+    const title = document.createElement("div");
+    title.className = "trophy-title";
+    title.textContent = slot.title;
+    card.appendChild(title);
+
+    const body = document.createElement("div");
+    body.className = "trophy-body";
+    const description = document.createElement("div");
+    description.className = "trophy-description";
+    description.textContent = slot.description;
+    body.appendChild(description);
+
+    if (slot.won) {
+      const winnerRow = document.createElement("div");
+      winnerRow.className = "trophy-winner";
+      const season = document.createElement("span");
+      season.className = "trophy-winner-name";
+      season.textContent = slot.latestSeasonLabel;
+      const value = document.createElement("span");
+      value.className = "trophy-winner-value";
+      value.textContent = slot.latestDisplay;
+      winnerRow.appendChild(season);
+      winnerRow.appendChild(value);
+      body.appendChild(winnerRow);
+    } else {
+      const empty = document.createElement("div");
+      empty.className = "trophy-empty";
+      empty.textContent = "Locked";
+      body.appendChild(empty);
+    }
+
+    card.appendChild(body);
+    container.appendChild(card);
   }
 }
 
@@ -788,12 +928,53 @@ async function castAchievementVote(achievementId, choice, keepBtn, cutBtn) {
   }
 }
 
+// Swaps which of the two views is visible/loaded -- the season <select>
+// and player <select> rows are mutually exclusive the same way the two
+// list containers are, since each only means something in its own view.
+function setAchievementsView(view) {
+  achievementsView = view;
+  const seasonRow = document.getElementById("achievements-season-select")?.closest(".row");
+  const playerRow = document.getElementById("trophy-case-player-row");
+  const trophiesList = document.getElementById("achievements-list");
+  const caseList = document.getElementById("trophy-case-list");
+  const isCase = view === "case";
+  if (seasonRow) seasonRow.hidden = isCase;
+  if (playerRow) playerRow.hidden = !isCase;
+  if (trophiesList) trophiesList.hidden = isCase;
+  if (caseList) caseList.hidden = !isCase;
+  document.querySelectorAll(".view-toggle-btn").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.view === view);
+  });
+  if (isCase) loadTrophyCase();
+  else loadAchievements();
+}
+
 function initAchievementsTab() {
   const sel = document.getElementById("achievements-season-select");
   if (sel) {
     sel.addEventListener("change", () => {
       selectedAchievementsSeasonId = sel.value ? Number(sel.value) : null;
       loadAchievements();
+    });
+  }
+
+  document.querySelectorAll(".view-toggle-btn").forEach(btn => {
+    btn.addEventListener("click", () => setAchievementsView(btn.dataset.view));
+  });
+
+  const casePlayerSel = document.getElementById("trophy-case-player-select");
+  if (casePlayerSel) {
+    casePlayerSel.addEventListener("change", () => {
+      loadTrophyCase(casePlayerSel.value ? Number(casePlayerSel.value) : null);
+    });
+  }
+
+  const ceremonyBtn = document.getElementById("ceremony-btn");
+  if (ceremonyBtn) {
+    ceremonyBtn.addEventListener("click", () => {
+      if (!lastAchievementsData) return;
+      const season = lastAchievementsData.seasons.find(s => s.id === lastAchievementsData.seasonId);
+      showClosingCeremonyModal(lastAchievementsData.achievements, season ? season.label : "");
     });
   }
 
@@ -1947,6 +2128,178 @@ document.getElementById("reveal-modal")?.addEventListener("click", e => {
   if (e.target.id === "reveal-modal") hideRevealModal();
 });
 
+// ---------- closing ceremony ----------
+// A paced, one-trophy-at-a-time walk through a concluded season's real
+// winners, ending on a downloadable recap card. Deliberately a separate
+// modal from #reveal-modal rather than a variant of it -- that one reveals
+// every tile at once, independently; this one is tap/arrow-key-paced by
+// design (see index.html's comment on #ceremony-modal), which isn't
+// something to bolt onto the existing function without conditionals
+// threaded through it.
+
+let ceremonySteps = []; // achievements with a real winner, this season only
+let ceremonyIndex = 0;
+
+// achievements: the same array loadAchievements() already rendered (see
+// lastAchievementsData) -- no separate fetch. Skips any achievement with
+// no winner: this is meant to feel like a celebration, not another list of
+// "no data yet" cards.
+function showClosingCeremonyModal(achievements, seasonLabel) {
+  const modal = document.getElementById("ceremony-modal");
+  if (!modal) return;
+  ceremonySteps = achievements.filter(a => a.winner);
+  ceremonyIndex = 0;
+  const title = document.getElementById("ceremony-title");
+  if (title) title.textContent = `${seasonLabel} Closing Ceremony`;
+  renderCeremonyStep(0);
+  modal.hidden = false;
+}
+
+function hideClosingCeremonyModal() {
+  const modal = document.getElementById("ceremony-modal");
+  if (modal) modal.hidden = true;
+}
+
+// index === ceremonySteps.length (one past the last trophy) renders the
+// recap card instead of a trophy step -- see drawRecapCard.
+function renderCeremonyStep(index) {
+  ceremonyIndex = Math.max(0, Math.min(index, ceremonySteps.length));
+  const counter = document.getElementById("ceremony-counter");
+  const step = document.getElementById("ceremony-step");
+  const recap = document.getElementById("ceremony-recap");
+  const prevBtn = document.getElementById("ceremony-prev");
+  const nextBtn = document.getElementById("ceremony-next");
+  if (!step || !recap) return;
+
+  prevBtn && (prevBtn.disabled = ceremonyIndex === 0);
+
+  if (ceremonyIndex === ceremonySteps.length) {
+    if (counter) counter.textContent = "Season Recap";
+    step.hidden = true;
+    step.innerHTML = "";
+    recap.hidden = false;
+    nextBtn && (nextBtn.hidden = true);
+    const canvas = document.getElementById("ceremony-recap-canvas");
+    const title = document.getElementById("ceremony-title");
+    if (canvas) drawRecapCard(canvas, ceremonySteps, title ? title.textContent : "Season Recap");
+    return;
+  }
+
+  nextBtn && (nextBtn.hidden = false);
+  recap.hidden = true;
+  step.hidden = false;
+  step.innerHTML = "";
+  if (counter) counter.textContent = `${ceremonyIndex + 1} / ${ceremonySteps.length}`;
+
+  const achievement = ceremonySteps[ceremonyIndex];
+
+  // Same foil-rimmed treatment as the pod reveal's art tiles (see
+  // .reveal-tile-art-pair in style.css) for visual continuity with the
+  // app's one other "big reveal" moment, wrapped around the emblem
+  // instead of card art.
+  const artWrap = document.createElement("div");
+  artWrap.className = "reveal-tile-art-pair ceremony-art";
+  if (achievement.emblem) {
+    const img = document.createElement("img");
+    img.className = "reveal-tile-art ceremony-emblem";
+    img.src = achievement.emblem;
+    img.alt = "";
+    artWrap.appendChild(img);
+  }
+  step.appendChild(artWrap);
+
+  const title = document.createElement("div");
+  title.className = "trophy-title ceremony-trophy-title";
+  title.textContent = achievement.title;
+  step.appendChild(title);
+
+  const winnerRow = document.createElement("div");
+  winnerRow.className = "trophy-winner ceremony-winner";
+  const name = document.createElement("span");
+  name.className = "trophy-winner-name";
+  name.textContent = achievement.winner.name;
+  const value = document.createElement("span");
+  value.className = "trophy-winner-value";
+  value.textContent = achievement.winner.display;
+  winnerRow.appendChild(name);
+  winnerRow.appendChild(value);
+  step.appendChild(winnerRow);
+}
+
+function advanceCeremony(delta) {
+  renderCeremonyStep(ceremonyIndex + delta);
+}
+
+// One layout, used both for the on-screen preview (drawn straight into
+// #ceremony-recap-canvas) and the download -- no separate HTML version to
+// keep in sync. Text-only, no emblem thumbnails, deliberately: rasterizing
+// same-origin emblem PNGs onto a canvas is very likely fine (no CORS
+// taint), but doing that reliably across this app's real devices (it's a
+// PWA, including on mobile Safari) is a bigger, separate thing to get
+// right than the recap itself -- worth adding once this text-only version
+// is confirmed working, not bundled into it speculatively.
+function drawRecapCard(canvas, wonAchievements, seasonLabel) {
+  const width = 1080;
+  const height = 1350;
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+
+  const styles = getComputedStyle(document.documentElement);
+  const bg = styles.getPropertyValue("--bg").trim() || "#0b0a10";
+  const ink = styles.getPropertyValue("--ink").trim() || "#f2efe9";
+  const muted = styles.getPropertyValue("--muted").trim() || "#9e97ac";
+  const accent = styles.getPropertyValue("--accent").trim() || "#a48bff";
+  const displayFont = "Saira Condensed, Arial Narrow, sans-serif";
+  const bodyFont = "IBM Plex Sans, Segoe UI, sans-serif";
+
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.fillStyle = accent;
+  ctx.font = `700 34px ${displayFont}`;
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText(seasonLabel.toUpperCase(), 60, 90);
+
+  ctx.fillStyle = ink;
+  ctx.font = `700 56px ${displayFont}`;
+  ctx.fillText("TROPHY RECAP", 60, 150);
+
+  let y = 230;
+  const rowHeight = Math.min(80, (height - y - 60) / Math.max(wonAchievements.length, 1));
+  for (const a of wonAchievements) {
+    ctx.fillStyle = ink;
+    ctx.font = `600 30px ${displayFont}`;
+    ctx.fillText(a.title, 60, y);
+
+    ctx.fillStyle = accent;
+    ctx.font = `600 26px ${bodyFont}`;
+    ctx.textAlign = "right";
+    ctx.fillText(a.winner.name, width - 60, y);
+    ctx.textAlign = "left";
+
+    ctx.fillStyle = muted;
+    ctx.font = `400 20px ${bodyFont}`;
+    ctx.fillText(a.winner.display, 60, y + 26);
+
+    y += rowHeight;
+  }
+
+  const downloadLink = document.getElementById("ceremony-recap-download");
+  if (downloadLink) downloadLink.href = canvas.toDataURL("image/png");
+}
+
+document.getElementById("ceremony-modal-close")?.addEventListener("click", hideClosingCeremonyModal);
+document.getElementById("ceremony-modal")?.addEventListener("click", e => {
+  if (e.target.id === "ceremony-modal") hideClosingCeremonyModal();
+});
+document.getElementById("ceremony-prev")?.addEventListener("click", () => advanceCeremony(-1));
+document.getElementById("ceremony-next")?.addEventListener("click", () => advanceCeremony(1));
+// Tap-to-advance anywhere on the step itself, not just the Next button --
+// this is meant to be flicked through at a table, one thumb.
+document.getElementById("ceremony-step")?.addEventListener("click", () => advanceCeremony(1));
+
 function hideComboTrackModal() {
   const modal = document.getElementById("combo-track-modal");
   if (modal) modal.hidden = true;
@@ -1985,7 +2338,15 @@ document.addEventListener("keydown", e => {
   if (e.key === "Escape") {
     hideRevealModal();
     hideComboTrackModal();
+    hideClosingCeremonyModal();
     hideAuthMenu();
+  }
+  // Guarded on the modal actually being open so these never hijack arrow
+  // keys anywhere else in the app (e.g. a select box, a number input).
+  const ceremonyModal = document.getElementById("ceremony-modal");
+  if (ceremonyModal && !ceremonyModal.hidden) {
+    if (e.key === "ArrowRight") advanceCeremony(1);
+    else if (e.key === "ArrowLeft") advanceCeremony(-1);
   }
 });
 

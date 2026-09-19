@@ -812,6 +812,7 @@ header h1 {
    than the old icon-beside-text row -- the badge is the focal point,
    title and description as real text right below it. */
 .trophy-card {
+  position: relative; /* anchors .trophy-count-badge, see below */
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -820,6 +821,60 @@ header h1 {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 14px 16px 16px;
+}
+
+/* Trophy Case's unwon slots (see renderTrophyCase in app.js) -- dims the
+   same art/title every card already has rather than needing separate
+   "locked" art drawn for all 36. */
+.trophy-card-locked .trophy-emblem,
+.trophy-card-locked .trophy-icon {
+  filter: grayscale(1) opacity(0.45);
+}
+.trophy-card-locked .trophy-title {
+  color: var(--muted);
+}
+
+/* A repeat win across multiple seasons (see season_awards in relay.js) --
+   only rendered for count > 1, a single win needs no badge at all. */
+.trophy-count-badge {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: var(--accent);
+}
+
+/* Season Standings vs. Trophy Case (see setAchievementsView in app.js) --
+   same segmented-pill pattern as .theme-toggle above, just for a
+   different control; kept as its own class rather than reusing
+   .theme-toggle directly since the two aren't the same control, only the
+   same look. */
+.view-toggle {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+.view-toggle-btn {
+  flex: 1 1 0;
+  border: none;
+  background: transparent;
+  padding: 8px 4px;
+  font-family: var(--font-display);
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-left: 1px solid var(--border);
+}
+.view-toggle-btn:first-child { border-left: none; }
+.view-toggle-btn.active {
+  background: var(--accent);
+  color: var(--accent-ink);
 }
 
 /* Stand-in for an achievement with no badge art yet (see
@@ -1833,6 +1888,69 @@ td.num {
 .reveal-tile-deck {
   color: var(--muted);
   font-size: 0.8rem;
+}
+
+/* Closing Ceremony -- see showClosingCeremonyModal in app.js. One trophy
+   centered per step, reusing .reveal-tile-art-pair's foil rim/sweep
+   (above) for the emblem so this reads as the same kind of "big reveal"
+   moment as the pod art, not a separate visual language. */
+.ceremony-counter {
+  margin: 0 0 12px;
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ceremony-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 10px;
+  padding: 20px 0;
+  cursor: pointer; /* the whole step is a tap-to-advance target */
+}
+
+.ceremony-art {
+  width: 220px;
+  max-width: 60vw;
+}
+.ceremony-emblem {
+  width: 100%;
+  height: 220px;
+  max-height: 60vw;
+  object-fit: contain;
+  background: var(--bg-accent);
+}
+
+.ceremony-trophy-title {
+  margin-top: 4px;
+  font-size: 1.6rem;
+}
+
+.ceremony-winner {
+  flex-direction: column;
+  gap: 2px;
+}
+.ceremony-winner .trophy-winner-name {
+  font-size: 1.4rem;
+}
+
+.ceremony-nav {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+#ceremony-recap {
+  text-align: center;
+}
+#ceremony-recap-canvas {
+  width: 100%;
+  max-width: 320px;
+  height: auto;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  margin: 0 0 14px;
 }
 
 .suggestions {

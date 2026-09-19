@@ -258,3 +258,22 @@ CREATE TABLE achievement_comments (
   comment TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- One row per (season, achievement) once that season's winner is frozen
+-- permanently -- see mintSeasonAwardsIfNeeded in relay.js. achievement_id
+-- matches ACHIEVEMENTS[].id in relay.js, same "no FK, it's not a table of
+-- its own" convention as achievement_votes.achievement_id above. Rows are
+-- never updated or deleted once written -- a season's trophy case is
+-- permanent, even if underlying game data were ever corrected later.
+-- Absence of any rows for a season just means it hasn't been read as
+-- concluded yet, not that it has no winners.
+CREATE TABLE season_awards (
+  season_id INTEGER NOT NULL REFERENCES seasons(id),
+  achievement_id TEXT NOT NULL,
+  player_id INTEGER NOT NULL REFERENCES players(id),
+  value REAL,               -- winner.value at mint time, may be null
+  display TEXT NOT NULL,    -- winner.display, frozen verbatim forever
+  minted_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (season_id, achievement_id)
+);
+CREATE INDEX idx_season_awards_player ON season_awards(player_id);

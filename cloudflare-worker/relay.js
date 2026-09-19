@@ -2430,6 +2430,34 @@ async function gatherAchievementContext(env, seasonId) {
   };
 }
 
+// Freezes a season's winners permanently the first time it's read as
+// concluded (called from handleAchievements right after it computes real
+// winners for an inactive season) -- see the Trophy Case feature. A
+// COUNT short-circuit makes every read after the first one this season
+// free, and doubles as the race guard: two near-simultaneous first-reads
+// both pass this check, but the INSERT OR IGNORE + (season_id,
+// achievement_id) PRIMARY KEY below makes the loser of that race a
+// no-op per row rather than a duplicate or an error, same reasoning
+// resolveSeasonId's own INSERT OR IGNORE already relies on. Takes the
+// achievements array this same request already computed rather than
+// recomputing anything -- gatherAchievementContext only ever needs to
+// run once per request. Once written, a row here is never updated or
+// deleted, even if the underlying game data were ever corrected later --
+// what you won is what you won.
+async function mintSeasonAwardsIfNeeded(env, seasonId, achievements) {
+  const { count } = await env.DB.prepare(
+    "SELECT COUNT(*) AS count FROM season_awards WHERE season_id = ?"
+  ).bind(seasonId).first();
+  if (count > 0) return;
+
+  const withWinners = achievements.filter(a => a.winner);
+  for (const a of withWinners) {
+    await env.DB.prepare(
+      "INSERT OR IGNORE INTO season_awards (season_id, achievement_id, player_id, value, display) VALUES (?, ?, ?, ?, ?)"
+    ).bind(seasonId, a.id, a.winner.playerId, a.winner.value ?? null, a.winner.display).run();
+  }
+}
+
 // season query param defaults to the most recent season (highest id) --
 // there's only ever one season active at a time in practice, so "most
 // recent" and "current" agree today; this just avoids the client having
@@ -2476,6 +2504,7 @@ async function handleAchievements(request, env, session) {
   } else {
     const ctx = await gatherAchievementContext(env, seasonId);
     achievements = ACHIEVEMENTS.map(a => ({ id: a.id, title: a.title, emblem: emblemUrl(a.emblem), description: a.description, winner: a.compute(ctx) }));
+    await mintSeasonAwardsIfNeeded(env, seasonId, achievements);
   }
 
   // Keep/cut votes -- not season-scoped (an achievement is either worth
@@ -2493,6 +2522,66 @@ async function handleAchievements(request, env, session) {
     achievements,
     votingOpen: Date.now() < ACHIEVEMENT_VOTING_DEADLINE.getTime(),
   }, 200, { "Cache-Control": "no-store" });
+}
+
+// One player's full trophy history, aggregated across every closed
+// season's minted season_awards rows -- distinct from GET /achievements,
+// which only ever shows one season (live or minted) at a time. Includes
+// every achievement id, not just the ones this player has won, so the
+// client can render locked slots. `player` defaults to the caller's own
+// id but is overridable to view anyone's case -- no extra permission
+// check beyond the existing session requirement, matching every other
+// stats view in this app (Player Win Rates, Games to Update) where any
+// signed-in player can already see anyone's numbers. A player who's
+// EXCLUDED_FROM_TROPHIES simply has no season_awards rows at all (that
+// filter runs upstream, inside gatherAchievementContext, before minting
+// ever sees their name) -- their case renders as all-locked with no
+// extra filtering needed here.
+async function handleTrophyCase(request, env, session) {
+  const url = new URL(request.url);
+  const playerParam = url.searchParams.get("player");
+  const playerId = playerParam ? Number(playerParam) : session.playerId;
+
+  const player = await env.DB.prepare("SELECT id, name FROM players WHERE id = ?").bind(playerId).first();
+  if (!player) {
+    return jsonResponse({ error: `Unknown player ${playerId}` }, 400);
+  }
+
+  const { results } = await env.DB.prepare(`
+    SELECT sa.achievement_id, sa.display, s.label AS season_label
+    FROM season_awards sa
+    JOIN seasons s ON s.id = sa.season_id
+    WHERE sa.player_id = ?
+    ORDER BY sa.season_id ASC
+  `).bind(playerId).all();
+
+  // ORDER BY season_id ASC above means the last row written into each
+  // bucket as this loop runs is always the most recent season -- exactly
+  // what latestSeasonLabel/latestDisplay below are meant to show.
+  const byAchievement = new Map();
+  for (const row of results) {
+    const bucket = byAchievement.get(row.achievement_id) || { count: 0 };
+    bucket.count++;
+    bucket.latestSeasonLabel = row.season_label;
+    bucket.latestDisplay = row.display;
+    byAchievement.set(row.achievement_id, bucket);
+  }
+
+  const slots = ACHIEVEMENTS.map(a => {
+    const won = byAchievement.get(a.id);
+    return {
+      id: a.id,
+      title: a.title,
+      description: a.description,
+      emblem: emblemUrl(a.emblem),
+      won: !!won,
+      count: won ? won.count : 0,
+      latestSeasonLabel: won ? won.latestSeasonLabel : null,
+      latestDisplay: won ? won.latestDisplay : null,
+    };
+  });
+
+  return jsonResponse({ playerId: player.id, playerName: player.name, slots }, 200, { "Cache-Control": "no-store" });
 }
 
 // Tallies every achievement_votes row into {keep, cut, mine} per
@@ -2717,6 +2806,10 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/achievements/backfill") {
       return handleAchievementsBackfill(env, url.searchParams.get("force") === "true");
+    }
+
+    if (request.method === "GET" && url.pathname === "/trophy-case") {
+      return handleTrophyCase(request, env, session);
     }
 
     if (request.method === "GET" && url.pathname === "/debug/game") {
