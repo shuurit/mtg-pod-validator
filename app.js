@@ -2240,7 +2240,16 @@ function advanceCeremony(delta) {
 // is confirmed working, not bundled into it speculatively.
 function drawRecapCard(canvas, wonAchievements, seasonLabel) {
   const width = 1080;
-  const height = 1350;
+  const startY = 230;
+  const bottomPadding = 60;
+  // Fixed per-row height (title line + detail line + breathing room),
+  // not a fixed canvas height divided by row count -- with up to 36 rows,
+  // dividing a fixed height produced rows too short for two lines of text
+  // to fit without overlapping (confirmed the hard way on Season 2's real
+  // 34-row recap). The canvas grows to fit instead, so a row is never
+  // cramped regardless of how many trophies a season handed out.
+  const rowHeight = 52;
+  const height = startY + rowHeight * Math.max(wonAchievements.length, 1) + bottomPadding;
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext("2d");
@@ -2266,21 +2275,20 @@ function drawRecapCard(canvas, wonAchievements, seasonLabel) {
   ctx.font = `700 56px ${displayFont}`;
   ctx.fillText("TROPHY RECAP", 60, 150);
 
-  let y = 230;
-  const rowHeight = Math.min(80, (height - y - 60) / Math.max(wonAchievements.length, 1));
+  let y = startY;
   for (const a of wonAchievements) {
     ctx.fillStyle = ink;
-    ctx.font = `600 30px ${displayFont}`;
+    ctx.font = `600 28px ${displayFont}`;
     ctx.fillText(a.title, 60, y);
 
     ctx.fillStyle = accent;
-    ctx.font = `600 26px ${bodyFont}`;
+    ctx.font = `600 24px ${bodyFont}`;
     ctx.textAlign = "right";
     ctx.fillText(a.winner.name, width - 60, y);
     ctx.textAlign = "left";
 
     ctx.fillStyle = muted;
-    ctx.font = `400 20px ${bodyFont}`;
+    ctx.font = `400 18px ${bodyFont}`;
     ctx.fillText(a.winner.display, 60, y + 26);
 
     y += rowHeight;

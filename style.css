@@ -797,7 +797,8 @@ header h1 {
    not a vertical stack -- 36 achievements as single-column cards would be
    an enormous scroll. Column count follows content width, same reasoning
    as every other card grid in this app. */
-#achievements-list {
+#achievements-list,
+#trophy-case-list {
   display: grid;
   /* 140px, not the badge's natural ~185px: at a 375px phone the grid has
      313px to work with, so a 150px minimum lands one pixel short of two
@@ -805,6 +806,13 @@ header h1 {
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   gap: 14px;
   margin-top: 12px;
+}
+/* Same "ID selector beats the default [hidden] rule" gotcha as .row above
+   -- an ID's specificity wins even more decisively, so toggling .hidden on
+   either grid needs its own explicit override. */
+#achievements-list[hidden],
+#trophy-case-list[hidden] {
+  display: none;
 }
 
 /* Same border+radius-only convention as .wr-card/.deck-plate above, one
@@ -1134,6 +1142,13 @@ textarea:focus, select:focus, input:focus {
 }
 
 .row.align-center { align-items: center; }
+/* Same "[hidden] and this class's own display value are equal
+   specificity" gotcha .tab-badge/.notice/.modal-overlay etc. already work
+   around below -- .row sets display:flex, which otherwise wins over the
+   default [hidden] rule and leaves a hidden row visible. First hit by
+   #trophy-case-player-row (see setAchievementsView in app.js), but this
+   fixes it for any .row toggled hidden, not just that one. */
+.row[hidden] { display: none; }
 
 button {
   border: 1px solid var(--border);
@@ -1893,7 +1908,18 @@ td.num {
 /* Closing Ceremony -- see showClosingCeremonyModal in app.js. One trophy
    centered per step, reusing .reveal-tile-art-pair's foil rim/sweep
    (above) for the emblem so this reads as the same kind of "big reveal"
-   moment as the pod art, not a separate visual language. */
+   moment as the pod art, not a separate visual language.
+   .modal-card's own overflow:hidden (shared with #reveal-modal/
+   #combo-track-modal) assumes JS-computed sizing guarantees a fit --
+   #reveal-modal does that math itself, this modal doesn't, and step
+   content length genuinely varies (a trophy step vs. the final recap).
+   Scoped to just this modal so the other two keep their existing
+   guaranteed-fit behavior unchanged. Confirmed the hard way: without
+   this, content taller than the viewport silently clipped the
+   Previous/Next buttons instead of just scrolling to them. */
+#ceremony-modal .modal-card {
+  overflow-y: auto;
+}
 .ceremony-counter {
   margin: 0 0 12px;
   font-size: 0.8rem;
