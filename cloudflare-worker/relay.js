@@ -2330,28 +2330,6 @@ const ACHIEVEMENTS = [
       return { ...winner, display };
     },
   },
-  {
-    id: "most-games",
-    title: "Vigilance",
-    emblem: "emblems/most-games.png",
-    description: "Most games played across the season.",
-    compute(ctx) {
-      const winner = topPlayer(groupByPlayer(ctx.gameResults), rows => rows.length);
-      if (!winner || winner.value <= 0) return null;
-      return { ...winner, display: `${winner.value} game${winner.value === 1 ? "" : "s"} played` };
-    },
-  },
-  {
-    id: "fewest-games",
-    title: "Phased Out",
-    emblem: "emblems/fewest-games.png",
-    description: "Fewest games played across the season.",
-    compute(ctx) {
-      const winner = topPlayer(groupByPlayer(ctx.gameResults), rows => rows.length, { ascending: true });
-      if (!winner || winner.value <= 0) return null;
-      return { ...winner, display: `${winner.value} game${winner.value === 1 ? "" : "s"} played` };
-    },
-  },
 ];
 // Valid achievementId values for POST /achievements/vote -- guards against
 // voting on a typo'd or since-removed id ever landing a row in
