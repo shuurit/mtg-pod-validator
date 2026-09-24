@@ -963,9 +963,8 @@ header h1 {
 }
 
 /* A stated-once band, for a rule that governs a whole screen rather than
-   any one row in it (the achievements reveal, the closed vote). Reads as
-   status, not as another paragraph of instructions -- which is what these
-   replaced. */
+   any one row in it (the achievements reveal). Reads as status, not as
+   another paragraph of instructions -- which is what these replaced. */
 .notice {
   display: flex;
   align-items: center;
@@ -988,97 +987,6 @@ header h1 {
   display: none;
 }
 
-/* The keep/cut split as one proportional line -- green is the keep share,
-   the red track behind it is the rest. Lets the shape of the vote read
-   across the whole grid without comparing two numbers per card. */
-.trophy-vote-bar {
-  width: 100%;
-  height: 3px;
-  margin-top: 10px;
-  border-radius: 999px;
-  background: var(--bad);
-  overflow: hidden;
-}
-.trophy-vote-bar-keep {
-  height: 100%;
-  background: var(--good);
-}
-
-/* Keep/cut voting -- see castAchievementVote in app.js. Small pill buttons,
-   not the default button size, since these sit inside an already-compact
-   trophy card alongside 21+ others. */
-.trophy-vote {
-  display: flex;
-  gap: 6px;
-  margin-top: 10px;
-}
-
-/* Both buttons share the row evenly and are allowed to shrink -- at two
-   columns on a phone a trophy card is ~150px wide, so auto-width buttons
-   sized to their own text overflowed the card. */
-.vote-btn {
-  flex: 1 1 0;
-  min-width: 0;
-  padding: 7px 4px;
-  font-size: 0.72rem;
-  font-weight: 600;
-  border-radius: var(--radius-sm);
-  white-space: nowrap;
-}
-
-.vote-btn.vote-keep.active {
-  background: var(--good-bg);
-  color: var(--good);
-  border-color: var(--good);
-}
-
-.vote-btn.vote-cut.active {
-  background: var(--bad-bg);
-  color: var(--bad);
-  border-color: var(--bad-border);
-}
-
-.vote-btn:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-
-/* Read-only tally shown once voting has closed (see renderAchievements) --
-   same colors as the interactive .vote-btn.active states, just plain text
-   instead of buttons, so there's nothing left to click. */
-.trophy-vote-final {
-  display: flex;
-  justify-content: center;
-  gap: 14px;
-  margin-top: 12px;
-  font-size: 0.85rem;
-  font-weight: 600;
-}
-
-.trophy-vote-final .vote-keep-count { color: var(--good); }
-.trophy-vote-final .vote-cut-count { color: var(--bad); }
-
-/* Write-only feedback box above the achievements grid -- see
-   POST /achievements/comment in relay.js. Plain prose font, not the
-   monospace default textarea styling elsewhere in the app (that one's for
-   pasting raw data, this is for a sentence or two). */
-.achievements-feedback {
-  margin-top: 14px;
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-}
-
-.achievements-feedback label {
-  display: block;
-  margin-bottom: 8px;
-  font-size: 0.85rem;
-  color: var(--muted);
-}
-
-.achievements-comment-input {
-  font-family: inherit;
-}
 .note-line:first-child {
   margin-top: 0;
 }

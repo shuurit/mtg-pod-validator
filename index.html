@@ -225,10 +225,6 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>
         Winners are revealed when the season ends.
       </p>
-      <p class="notice" id="achievements-voting-closed-notice" hidden>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 13.5 9.5 18 19 7"></path></svg>
-        Voting on which achievements to keep has closed.
-      </p>
       <!-- Shown only for a season that's already concluded (same
            condition as achievements-reveal-notice above, inverted -- see
            loadAchievements in app.js) -- replayable any time, not a
@@ -238,18 +234,6 @@
            condition of ceremony-btn above) -- see loadAchievements in
            app.js. Opens close-season-modal for confirmation. -->
       <button type="button" id="close-season-btn" hidden>Close the Season</button>
-      <!-- Write-only feedback -- goes straight to achievement_comments in
-           D1 (see POST /achievements/comment, relay.js), never read back or
-           listed anywhere in this app. Read directly via wrangler d1
-           execute. -->
-      <div class="achievements-feedback">
-        <label for="achievements-comment-input">Have thoughts on the achievements list? Leave a note for Matt.</label>
-        <textarea id="achievements-comment-input" class="achievements-comment-input" rows="2" maxlength="2000" placeholder="Anything you'd add, cut, or change..."></textarea>
-        <div class="row align-center">
-          <button type="button" id="achievements-comment-submit">Send</button>
-          <span class="hint" id="achievements-comment-status" hidden></span>
-        </div>
-      </div>
       <p class="hint" id="achievements-status">Shuffling up…</p>
       <div id="achievements-list"></div>
       <div id="trophy-case-list" hidden></div>
@@ -353,6 +337,6 @@
   </div>
 </div>
 
-<script src="app.js?v=46"></script>
+<script src="app.js?v=47"></script>
 </body>
 </html>

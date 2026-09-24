@@ -25,8 +25,6 @@ const DECK_POTENTIAL_BRACKET4_RELAY_URL = RELAY_BASE_URL + "/decks/potential-bra
 const AUTH_ME_RELAY_URL = RELAY_BASE_URL + "/auth/me";
 const AUTH_LOGOUT_RELAY_URL = RELAY_BASE_URL + "/auth/logout";
 const ACHIEVEMENTS_RELAY_URL = RELAY_BASE_URL + "/achievements";
-const ACHIEVEMENT_VOTE_RELAY_URL = RELAY_BASE_URL + "/achievements/vote";
-const ACHIEVEMENT_COMMENT_RELAY_URL = RELAY_BASE_URL + "/achievements/comment";
 const TROPHY_CASE_RELAY_URL = RELAY_BASE_URL + "/trophy-case";
 const SEASON_CLOSE_RELAY_URL = RELAY_BASE_URL + "/seasons/close";
 
@@ -574,14 +572,12 @@ async function loadAchievements() {
     lastAchievementsData = data;
     selectedAchievementsSeasonId = data.seasonId;
     renderAchievementsSeasonSelect(data.seasons, data.seasonId);
-    renderAchievements(data.achievements, data.seasonActive, data.votingOpen);
+    renderAchievements(data.achievements, data.seasonActive);
     // Stated once, here, rather than repeated inside all 36 cards -- while
     // a season is live every winner is withheld for this one reason, so
     // it's a property of the season, not of each achievement.
     const revealNotice = document.getElementById("achievements-reveal-notice");
     if (revealNotice) revealNotice.hidden = !data.seasonActive;
-    const closedNotice = document.getElementById("achievements-voting-closed-notice");
-    if (closedNotice) closedNotice.hidden = data.votingOpen !== false;
     // The ceremony only ever makes sense for a season that's actually
     // done -- same seasonActive condition already gating the reveal
     // notice above, since "no live winners yet" and "nothing to walk
@@ -752,7 +748,7 @@ function renderAchievementsSeasonSelect(seasons, seasonId) {
 // data yet" for an already-concluded season -- two different states that
 // both arrive as winner: null, so the message has to come from
 // seasonActive, not from the achievement itself.
-function renderAchievements(achievements, seasonActive, votingOpen) {
+function renderAchievements(achievements, seasonActive) {
   const container = document.getElementById("achievements-list");
   container.innerHTML = "";
 
@@ -829,110 +825,8 @@ function renderAchievements(achievements, seasonActive, votingOpen) {
       body.appendChild(empty);
     }
 
-    // Keep/cut voting -- deciding which achievements are worth keeping
-    // before the season ends, not tied to whether the winner's revealed
-    // yet. Server is the source of truth for both tallies and this
-    // player's own vote (achievement.votes, from GET /achievements), so a
-    // click posts and re-renders from the response rather than guessing
-    // the new counts locally. Once votingOpen is false (relay.js's
-    // ACHIEVEMENT_VOTING_DEADLINE has passed), the tally is shown as plain
-    // read-only text instead of buttons -- there's nothing left to click.
-    // Sentiment bar -- the keep/cut split as one proportional line, so the
-    // shape of the vote reads across the whole grid at a glance instead of
-    // needing two numbers compared per card. Only drawn once someone has
-    // actually voted; an all-zero bar would imply a tie nobody cast.
-    const voteBar = buildVoteSentimentBar(achievement.votes);
-    if (voteBar) body.appendChild(voteBar);
-
-    if (votingOpen === false) {
-      const finalTally = document.createElement("div");
-      finalTally.className = "trophy-vote-final";
-      const keepCount = document.createElement("span");
-      keepCount.className = "vote-keep-count";
-      keepCount.textContent = `Keep ${achievement.votes.keep}`;
-      const cutCount = document.createElement("span");
-      cutCount.className = "vote-cut-count";
-      cutCount.textContent = `Cut ${achievement.votes.cut}`;
-      finalTally.appendChild(keepCount);
-      finalTally.appendChild(cutCount);
-      body.appendChild(finalTally);
-    } else {
-      const voteRow = document.createElement("div");
-      voteRow.className = "trophy-vote";
-      const keepBtn = document.createElement("button");
-      keepBtn.type = "button";
-      keepBtn.className = "vote-btn vote-keep";
-      const cutBtn = document.createElement("button");
-      cutBtn.type = "button";
-      cutBtn.className = "vote-btn vote-cut";
-      applyVoteTally(keepBtn, cutBtn, achievement.votes);
-      keepBtn.addEventListener("click", () => castAchievementVote(achievement.id, "keep", keepBtn, cutBtn));
-      cutBtn.addEventListener("click", () => castAchievementVote(achievement.id, "cut", keepBtn, cutBtn));
-      voteRow.appendChild(keepBtn);
-      voteRow.appendChild(cutBtn);
-      body.appendChild(voteRow);
-    }
-
     card.appendChild(body);
     container.appendChild(card);
-  }
-}
-
-// The keep/cut split as a single proportional bar. Returns null when
-// nobody has voted on this achievement yet -- see the call site.
-function buildVoteSentimentBar(votes) {
-  const total = votes.keep + votes.cut;
-  if (total === 0) return null;
-  const bar = document.createElement("div");
-  bar.className = "trophy-vote-bar";
-  bar.title = `${votes.keep} keep, ${votes.cut} cut`;
-  const keepFill = document.createElement("div");
-  keepFill.className = "trophy-vote-bar-keep";
-  keepFill.style.width = `${(votes.keep / total) * 100}%`;
-  bar.appendChild(keepFill);
-  return bar;
-}
-
-// Rebuilds both vote buttons in place from a fresh tally, and re-draws the
-// sentiment bar beside them so the split and the counts never disagree.
-function applyVoteTally(keepBtn, cutBtn, votes) {
-  const body = keepBtn.closest(".trophy-body");
-  if (body) {
-    const existing = body.querySelector(".trophy-vote-bar");
-    const replacement = buildVoteSentimentBar(votes);
-    if (existing && replacement) existing.replaceWith(replacement);
-    else if (existing) existing.remove();
-    else if (replacement) body.insertBefore(replacement, keepBtn.parentElement);
-  }
-  keepBtn.textContent = `Keep ${votes.keep}`;
-  cutBtn.textContent = `Cut ${votes.cut}`;
-  keepBtn.classList.toggle("active", votes.mine === "keep");
-  cutBtn.classList.toggle("active", votes.mine === "cut");
-}
-
-// Clicking a vote button toggles it off (vote: null) if it's already this
-// player's vote, or casts/switches to it otherwise -- relay.js overwrites
-// this player's prior vote rather than adding a second one either way.
-async function castAchievementVote(achievementId, choice, keepBtn, cutBtn) {
-  const alreadyThis = (choice === "keep" && keepBtn.classList.contains("active"))
-    || (choice === "cut" && cutBtn.classList.contains("active"));
-  const vote = alreadyThis ? null : choice;
-  keepBtn.disabled = true;
-  cutBtn.disabled = true;
-  try {
-    const res = await fetch(ACHIEVEMENT_VOTE_RELAY_URL, {
-      method: "POST",
-      headers: authHeaders(),
-      body: JSON.stringify({ achievementId, vote }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    applyVoteTally(keepBtn, cutBtn, data.votes);
-  } catch (err) {
-    console.error("Failed to cast achievement vote:", err);
-  } finally {
-    keepBtn.disabled = false;
-    cutBtn.disabled = false;
   }
 }
 
@@ -987,37 +881,6 @@ function initAchievementsTab() {
   }
 
   document.getElementById("close-season-btn")?.addEventListener("click", showCloseSeasonConfirm);
-
-  const commentInput = document.getElementById("achievements-comment-input");
-  const commentBtn = document.getElementById("achievements-comment-submit");
-  const commentStatus = document.getElementById("achievements-comment-status");
-  if (commentBtn && commentInput) {
-    commentBtn.addEventListener("click", async () => {
-      const comment = commentInput.value.trim();
-      if (!comment) return;
-      commentBtn.disabled = true;
-      try {
-        const res = await fetch(ACHIEVEMENT_COMMENT_RELAY_URL, {
-          method: "POST",
-          headers: authHeaders(),
-          body: JSON.stringify({ comment }),
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        commentInput.value = "";
-        if (commentStatus) {
-          commentStatus.hidden = false;
-          commentStatus.textContent = "Sent, thanks!";
-        }
-      } catch (err) {
-        if (commentStatus) {
-          commentStatus.hidden = false;
-          commentStatus.textContent = `Couldn't send that (${err.message}).`;
-        }
-      } finally {
-        commentBtn.disabled = false;
-      }
-    });
-  }
 }
 
 // ---------- shared table building ----------
