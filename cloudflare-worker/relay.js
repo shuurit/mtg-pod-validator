@@ -1917,7 +1917,7 @@ function sumField(rows, field) {
 // neighboring badge's frame along with the real one. Re-cropped with a
 // nearest-seed (watershed) split instead of a fixed grid, so a touching
 // pixel is assigned to whichever badge it actually belongs to.
-const EMBLEM_CACHE_BUST = "7";
+const EMBLEM_CACHE_BUST = "8";
 function emblemUrl(path) {
   return path ? `${path}?v=${EMBLEM_CACHE_BUST}` : path;
 }
