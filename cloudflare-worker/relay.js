@@ -801,6 +801,7 @@ function emptyEventTotals() {
   return {
     damage_dealt: 0, healing_done: 0, knockouts: 0, damage_taken: 0, healing_received: 0, self_rating: null,
     pauses_called: 0, pause_seconds: 0, undos: 0, longest_turn_seconds: 0, shortest_turn_seconds: null,
+    turn_count: 0, total_turn_seconds: 0,
   };
 }
 
@@ -884,6 +885,8 @@ async function computeAndStoreGameEventStats(env, gameId, playgroupGameId) {
         const t = get(playerId);
         if (seconds > t.longest_turn_seconds) t.longest_turn_seconds = seconds;
         if (t.shortest_turn_seconds === null || seconds < t.shortest_turn_seconds) t.shortest_turn_seconds = seconds;
+        t.turn_count += 1;
+        t.total_turn_seconds += seconds;
       }
       turnStartedAt = happenedAt;
     }
@@ -902,21 +905,24 @@ async function computeAndStoreGameEventStats(env, gameId, playgroupGameId) {
         game_id, player_id, damage_dealt, healing_done, knockouts,
         fun_rating, salt_rating, mulligans_taken, self_rating,
         damage_taken, healing_received, ending_life,
-        pauses_called, pause_seconds, undos, longest_turn_seconds, shortest_turn_seconds
+        pauses_called, pause_seconds, undos, longest_turn_seconds, shortest_turn_seconds,
+        turn_count, total_turn_seconds
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (game_id, player_id) DO UPDATE SET
         damage_dealt = excluded.damage_dealt, healing_done = excluded.healing_done, knockouts = excluded.knockouts,
         fun_rating = excluded.fun_rating, salt_rating = excluded.salt_rating, mulligans_taken = excluded.mulligans_taken,
         self_rating = excluded.self_rating, damage_taken = excluded.damage_taken,
         healing_received = excluded.healing_received, ending_life = excluded.ending_life,
         pauses_called = excluded.pauses_called, pause_seconds = excluded.pause_seconds, undos = excluded.undos,
-        longest_turn_seconds = excluded.longest_turn_seconds, shortest_turn_seconds = excluded.shortest_turn_seconds
+        longest_turn_seconds = excluded.longest_turn_seconds, shortest_turn_seconds = excluded.shortest_turn_seconds,
+        turn_count = excluded.turn_count, total_turn_seconds = excluded.total_turn_seconds
     `).bind(
       gameId, playerId, t.damage_dealt, t.healing_done, t.knockouts,
       p.fun_rating ?? null, p.salt_rating ?? null, p.mulligans_taken ?? null, t.self_rating,
       t.damage_taken, t.healing_received, endingLife,
-      t.pauses_called, t.pause_seconds, t.undos, t.longest_turn_seconds, t.shortest_turn_seconds
+      t.pauses_called, t.pause_seconds, t.undos, t.longest_turn_seconds, t.shortest_turn_seconds,
+      t.turn_count, t.total_turn_seconds
     ));
   }
 
@@ -2287,18 +2293,25 @@ const ACHIEVEMENTS = [
     id: "shortest-turn",
     title: "Speedrun",
     emblem: "emblems/shortest-turn.png",
-    description: "Shortest single turn across the season.",
+    description: "Lowest average turn length across the season.",
+    // Season-wide average (sum of every turn's seconds / total turns taken),
+    // not a single fastest turn -- a single instant reading is too easily
+    // one logging artifact (two pass_turn events landing in the same
+    // wall-clock second) deciding the whole trophy; an average absorbs one
+    // outlier instead of being defined by it. Same minGames gate as the
+    // other rate-based achievements (fewest mulligans, etc.) so a player
+    // with only one or two games can't win on a tiny sample.
     compute(ctx) {
-      let best = null;
-      for (const r of ctx.eventStats) {
-        if (r.shortest_turn_seconds === null || r.shortest_turn_seconds === undefined) continue;
-        if (!best || r.shortest_turn_seconds < best.value) best = { playerId: r.player_id, name: r.name, value: r.shortest_turn_seconds };
-      }
-      if (!best) return null;
-      const minutes = Math.floor(best.value / 60);
-      const seconds = best.value % 60;
-      const display = minutes > 0 ? `${minutes}m ${seconds}s turn` : `${seconds}s turn`;
-      return { ...best, display };
+      const winner = topPlayer(ctx.eventStatsByPlayer, rows => {
+        const totalTurns = sumField(rows, "turn_count");
+        return totalTurns > 0 ? sumField(rows, "total_turn_seconds") / totalTurns : null;
+      }, { minGames: MIN_GAMES_FOR_RATE, ascending: true });
+      if (!winner) return null;
+      const rounded = Math.round(winner.value);
+      const minutes = Math.floor(rounded / 60);
+      const seconds = rounded % 60;
+      const display = minutes > 0 ? `${minutes}m ${seconds}s avg turn` : `${seconds}s avg turn`;
+      return { ...winner, display };
     },
   },
   {
@@ -2367,7 +2380,8 @@ async function gatherAchievementContext(env, seasonId) {
       SELECT s.game_id, s.player_id, p.name, s.damage_dealt, s.healing_done, s.knockouts,
              s.fun_rating, s.salt_rating, s.mulligans_taken, s.self_rating,
              s.damage_taken, s.healing_received, s.ending_life,
-             s.pauses_called, s.pause_seconds, s.undos, s.longest_turn_seconds, s.shortest_turn_seconds
+             s.pauses_called, s.pause_seconds, s.undos, s.longest_turn_seconds, s.shortest_turn_seconds,
+             s.turn_count, s.total_turn_seconds
       FROM game_event_stats s
       JOIN games g ON g.id = s.game_id
       JOIN players p ON p.id = s.player_id

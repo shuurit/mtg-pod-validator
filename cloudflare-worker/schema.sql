@@ -238,6 +238,17 @@ CREATE TABLE game_event_stats (
   -- turn genuinely can take 0 seconds (nothing to do, pass immediately),
   -- so null is what means "no turn timing for this game" here, not 0.
   shortest_turn_seconds INTEGER,
+  -- turn_count/total_turn_seconds back the Speedrun achievement's season
+  -- average (sum(total_turn_seconds)/sum(turn_count) across every game a
+  -- player has this season, see relay.js) rather than a single min/max
+  -- reading -- a single fastest or slowest turn is too easily a logging
+  -- artifact (two pass_turn events landing in the same wall-clock second)
+  -- to be a fair "fastest player" trophy on its own; a season-wide average
+  -- absorbs one outlier turn instead of being decided by it. Same raw
+  -- wall-clock/no-start_game-means-no-timing caveats as longest/
+  -- shortest_turn_seconds above.
+  turn_count INTEGER NOT NULL DEFAULT 0,
+  total_turn_seconds INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (game_id, player_id)
 );
 
