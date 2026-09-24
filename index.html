@@ -234,6 +234,10 @@
            loadAchievements in app.js) -- replayable any time, not a
            one-shot "you already saw this" flow. -->
       <button type="button" id="ceremony-btn" hidden>Watch the Closing Ceremony</button>
+      <!-- Shown only for the current, still-live season (the exact inverse
+           condition of ceremony-btn above) -- see loadAchievements in
+           app.js. Opens close-season-modal for confirmation. -->
+      <button type="button" id="close-season-btn" hidden>Close the Season</button>
       <!-- Write-only feedback -- goes straight to achievement_comments in
            D1 (see POST /achievements/comment, relay.js), never read back or
            listed anywhere in this app. Read directly via wrangler d1
@@ -334,6 +338,21 @@
   </div>
 </div>
 
-<script src="app.js?v=44"></script>
+<!-- Shown when Close the Season is clicked -- see showCloseSeasonConfirm in
+     app.js. Only offered on the latest, still-active season, so this can
+     never fire for an already-concluded one. -->
+<div id="close-season-modal" class="modal-overlay" hidden>
+  <div class="modal-card">
+    <button id="close-season-modal-close" class="icon-btn modal-close" aria-label="Close">&#10005;</button>
+    <h2>Close this season?</h2>
+    <p id="close-season-modal-body" class="hint">Trophies get revealed immediately, this season's Trophy Case locks in permanently, and no more games can be logged for it unless a new league starts on playgroup.gg. This can't be undone.</p>
+    <div class="row">
+      <button id="close-season-modal-confirm" class="primary">Close the Season</button>
+      <button id="close-season-modal-cancel" type="button">Never mind</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js?v=45"></script>
 </body>
 </html>

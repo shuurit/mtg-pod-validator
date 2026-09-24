@@ -88,7 +88,7 @@
  *   in the fetch handler's dispatcher, not per-route, so a signed-out
  *   request never reaches any handler -- including reads (GET /players,
  *   /games, etc.), not just writes. A signed-in pod member can write any
- *   of the four write endpoints for any deck/player, not just their own;
+ *   of the five write endpoints for any deck/player, not just their own;
  *   there's no per-owner restriction in v1. One narrow exception: GET
  *   /players, /games, and /deck-win-rates also accept an X-Internal-Key
  *   header matching INTERNAL_API_KEY in place of a session -- that's
@@ -569,6 +569,35 @@ async function resolveSeasonId(env) {
   throw new Error(`Failed to resolve or create a season for league ${leagueId} ("${activeLeague.name}").`);
 }
 
+// Manually ends the CURRENT season on demand, so the group can have the
+// Closing Ceremony whenever THEY decide the season is over, not only when
+// playgroup.gg's own active league happens to change. Takes no body and no
+// client-supplied season id: "the current season" is resolved the exact
+// same way resolveSeasonId resolves it for POST /games, so a stale tab
+// holding an old seasonId can never close the wrong one. Idempotent --
+// closing an already-closed season is a no-op 200, not an error. No
+// permission check beyond the router's blanket requireSession gate, same
+// "any signed-in pod member can do anything" philosophy as every other
+// write endpoint.
+async function handleSeasonClose(request, env, session) {
+  let seasonId;
+  try {
+    seasonId = await resolveSeasonId(env);
+  } catch (err) {
+    return jsonResponse({ error: "Failed to resolve current season from playgroup.gg", detail: err.message }, 502);
+  }
+
+  const row = await env.DB.prepare("SELECT closed_at FROM seasons WHERE id = ?").bind(seasonId).first();
+  if (row.closed_at) {
+    return jsonResponse({ ok: true, seasonId, alreadyClosed: true, closedAt: row.closed_at }, 200);
+  }
+
+  const closedAt = new Date().toISOString();
+  await env.DB.prepare("UPDATE seasons SET closed_at = ?, closed_by_player_id = ? WHERE id = ?")
+    .bind(closedAt, session.playerId, seasonId).run();
+  return jsonResponse({ ok: true, seasonId, alreadyClosed: false, closedAt }, 200);
+}
+
 async function handleGamesWrite(request, env, ctx, session) {
   let payload;
   try {
@@ -585,6 +614,15 @@ async function handleGamesWrite(request, env, ctx, session) {
     seasonId = await resolveSeasonId(env);
   } catch (err) {
     return jsonResponse({ error: "Failed to resolve current season from playgroup.gg", detail: err.message }, 502);
+  }
+
+  // A manually-closed season (see POST /seasons/close) stays matched to
+  // playgroup.gg's still-live league until a new league actually starts --
+  // resolveSeasonId would otherwise silently reuse and re-open an
+  // already-minted, permanently-frozen season.
+  const closedSeasonRow = await env.DB.prepare("SELECT closed_at FROM seasons WHERE id = ?").bind(seasonId).first();
+  if (closedSeasonRow && closedSeasonRow.closed_at) {
+    return jsonResponse({ error: `Season ${seasonId} is closed -- games can't be logged for it until a new playgroup.gg league starts.` }, 409);
   }
 
   // Resolve every participant's player_id/deck_id up front, before writing
@@ -2409,7 +2447,7 @@ async function handleAchievements(request, env, session) {
   const url = new URL(request.url);
   const seasonParam = url.searchParams.get("season");
 
-  const { results: seasons } = await env.DB.prepare("SELECT id, label, playgroup_league_id FROM seasons ORDER BY id").all();
+  const { results: seasons } = await env.DB.prepare("SELECT id, label, playgroup_league_id, closed_at FROM seasons ORDER BY id").all();
   if (seasons.length === 0) {
     return jsonResponse({ seasons: [], seasonId: null, seasonActive: false, achievements: [] }, 200, { "Cache-Control": "no-store" });
   }
@@ -2421,11 +2459,18 @@ async function handleAchievements(request, env, session) {
   }
 
   let seasonActive = true;
-  try {
-    const activeLeague = await getActiveLeagueId(env);
-    seasonActive = !!seasonRow.playgroup_league_id && String(activeLeague.id) === String(seasonRow.playgroup_league_id);
-  } catch (err) {
-    console.error("Failed to resolve active league for achievements reveal check:", err);
+  if (seasonRow.closed_at) {
+    // Manually closed (see POST /seasons/close) -- stays inactive regardless
+    // of what playgroup.gg's active league is or becomes, and regardless of
+    // whether playgroup.gg is even reachable right now.
+    seasonActive = false;
+  } else {
+    try {
+      const activeLeague = await getActiveLeagueId(env);
+      seasonActive = !!seasonRow.playgroup_league_id && String(activeLeague.id) === String(seasonRow.playgroup_league_id);
+    } catch (err) {
+      console.error("Failed to resolve active league for achievements reveal check:", err);
+    }
   }
 
   let achievements;
@@ -2740,6 +2785,10 @@ export default {
 
     if (request.method === "GET" && url.pathname === "/trophy-case") {
       return handleTrophyCase(request, env, session);
+    }
+
+    if (request.method === "POST" && url.pathname === "/seasons/close") {
+      return handleSeasonClose(request, env, session);
     }
 
     if (request.method === "GET" && url.pathname === "/debug/game") {

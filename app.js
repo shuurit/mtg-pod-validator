@@ -28,6 +28,7 @@ const ACHIEVEMENTS_RELAY_URL = RELAY_BASE_URL + "/achievements";
 const ACHIEVEMENT_VOTE_RELAY_URL = RELAY_BASE_URL + "/achievements/vote";
 const ACHIEVEMENT_COMMENT_RELAY_URL = RELAY_BASE_URL + "/achievements/comment";
 const TROPHY_CASE_RELAY_URL = RELAY_BASE_URL + "/trophy-case";
+const SEASON_CLOSE_RELAY_URL = RELAY_BASE_URL + "/seasons/close";
 
 // Discord OAuth sign-in. Client ID is public (it's part of the login URL
 // below), matches the constant of the same name in relay.js -- the Client
@@ -587,6 +588,13 @@ async function loadAchievements() {
     // through in a closing ceremony" are the same state.
     const ceremonyBtn = document.getElementById("ceremony-btn");
     if (ceremonyBtn) ceremonyBtn.hidden = data.seasonActive;
+    // Closing a season only makes sense for the CURRENT one -- offering it
+    // on a past season the viewer happens to have selected would either
+    // no-op (already closed) or, worse, resolve to whatever season is
+    // actually live right now instead of the one on screen.
+    const isLatestSeason = data.seasons.length > 0 && data.seasonId === data.seasons[data.seasons.length - 1].id;
+    const closeSeasonBtn = document.getElementById("close-season-btn");
+    if (closeSeasonBtn) closeSeasonBtn.hidden = !(isLatestSeason && data.seasonActive);
     if (statusEl) statusEl.hidden = true;
   } catch (err) {
     if (listEl) listEl.innerHTML = "";
@@ -977,6 +985,8 @@ function initAchievementsTab() {
       showClosingCeremonyModal(lastAchievementsData.achievements, season ? season.label : "");
     });
   }
+
+  document.getElementById("close-season-btn")?.addEventListener("click", showCloseSeasonConfirm);
 
   const commentInput = document.getElementById("achievements-comment-input");
   const commentBtn = document.getElementById("achievements-comment-submit");
@@ -2342,11 +2352,56 @@ document.getElementById("combo-track-modal")?.addEventListener("click", e => {
   if (e.target.id === "combo-track-modal") hideComboTrackModal();
 });
 
+function hideCloseSeasonModal() {
+  const modal = document.getElementById("close-season-modal");
+  if (modal) modal.hidden = true;
+}
+
+function showCloseSeasonConfirm() {
+  const modal = document.getElementById("close-season-modal");
+  const confirmBtn = document.getElementById("close-season-modal-confirm");
+  if (!modal || !confirmBtn) return;
+
+  // Reassigning .onclick (not addEventListener) guarantees exactly one
+  // handler is ever live -- same reasoning as showComboTrackConfirm above.
+  confirmBtn.onclick = async () => {
+    hideCloseSeasonModal();
+    await closeSeason();
+  };
+
+  modal.hidden = false;
+}
+
+async function closeSeason() {
+  const statusEl = document.getElementById("achievements-status");
+  try {
+    const res = await fetch(SEASON_CLOSE_RELAY_URL, { method: "POST", headers: authHeaders() });
+    if (res.status === 401) {
+      showAuthStatusHint("Sign in with Discord to do this.");
+      return;
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    await loadAchievements(); // immediately reflects the now-closed state
+  } catch (err) {
+    if (statusEl) {
+      statusEl.hidden = false;
+      statusEl.textContent = `Couldn't close the season (${err.message}).`;
+    }
+  }
+}
+
+document.getElementById("close-season-modal-close")?.addEventListener("click", hideCloseSeasonModal);
+document.getElementById("close-season-modal-cancel")?.addEventListener("click", hideCloseSeasonModal);
+document.getElementById("close-season-modal")?.addEventListener("click", e => {
+  if (e.target.id === "close-season-modal") hideCloseSeasonModal();
+});
+
 document.addEventListener("keydown", e => {
   if (e.key === "Escape") {
     hideRevealModal();
     hideComboTrackModal();
     hideClosingCeremonyModal();
+    hideCloseSeasonModal();
     hideAuthMenu();
   }
   // Guarded on the modal actually being open so these never hijack arrow

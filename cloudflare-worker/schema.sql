@@ -19,7 +19,17 @@ CREATE TABLE seasons (
   -- (confirmed the hard way), hence the separate unique index below --
   -- which also correctly allows multiple NULLs, unlike a UNIQUE column
   -- constraint would.
-  playgroup_league_id TEXT
+  playgroup_league_id TEXT,
+  -- NULL while the season is still live. Set once, by POST /seasons/close --
+  -- there's no automatic close today (see resolveSeasonId), only this manual
+  -- one. Timestamped so a manually-closed season stays inactive (see
+  -- handleAchievements) regardless of what playgroup.gg's active league
+  -- later becomes, and so POST /games can refuse new writes for it (see
+  -- handleGamesWrite) even while that same league is still technically live.
+  closed_at TEXT,
+  -- Who closed it -- same pure-accountability reasoning as
+  -- games.submitted_by_player_id, nothing reads this back into any logic.
+  closed_by_player_id INTEGER REFERENCES players(id)
 );
 CREATE UNIQUE INDEX idx_seasons_league ON seasons(playgroup_league_id);
 
