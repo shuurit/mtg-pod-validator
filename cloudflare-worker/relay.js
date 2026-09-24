@@ -819,6 +819,16 @@ async function computeAndStoreGameEventStats(env, gameId, playgroupGameId) {
   const totals = {}; // playerId -> emptyEventTotals()
   const get = playerId => (totals[playerId] || (totals[playerId] = emptyEventTotals()));
 
+  // playgroup.gg logs multiple "kill" events for a single real elimination
+  // (confirmed against a real game: one player's 3 real KOs in a 4-player
+  // pod showed up as 12 raw kill events, ~4 per receiver_user_id) -- a
+  // plain per-event count over-counts, sometimes past what's even possible
+  // in the pod. Dedupe per killer by distinct receiver_user_id instead;
+  // finalized below once every event's been seen, not incremented inline
+  // like the other totals, since "distinct" can only be known after the
+  // fact.
+  const knockoutReceiversByPlayer = {}; // playerId -> Set(receiver_user_id)
+
   let startingPlayerId = null;
   for (const e of raw.events || []) {
     const playerId = userIdToPlayerId[e.user_id];
@@ -830,7 +840,10 @@ async function computeAndStoreGameEventStats(env, gameId, playgroupGameId) {
       if (playerId) get(playerId).healing_done += e.amount || 0;
       if (receiverPlayerId) get(receiverPlayerId).healing_received += e.amount || 0;
     } else if (e.kind === "kill") {
-      if (playerId) get(playerId).knockouts += 1;
+      if (playerId) {
+        if (!knockoutReceiversByPlayer[playerId]) knockoutReceiversByPlayer[playerId] = new Set();
+        knockoutReceiversByPlayer[playerId].add(e.receiver_user_id);
+      }
     } else if (e.kind === "self_rating") {
       if (playerId) get(playerId).self_rating = e.amount ?? null;
     } else if (e.kind === "starting_player") {
@@ -845,6 +858,9 @@ async function computeAndStoreGameEventStats(env, gameId, playgroupGameId) {
     } else if (e.kind === "pause_start") {
       if (playerId) get(playerId).pauses_called += 1;
     }
+  }
+  for (const [playerId, receivers] of Object.entries(knockoutReceiversByPlayer)) {
+    get(playerId).knockouts = receivers.size;
   }
 
   // Pause duration needs strict chronological pairing (a pause_start's
