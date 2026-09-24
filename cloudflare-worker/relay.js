@@ -76,6 +76,13 @@
  *   D1 and posts the rankings/deck-strength/win-rate screenshots -- see
  *   scripts/discord_report.py.
  *
+ * - POST /seasons/close, on an actual (non-idempotent-repeat) close, also
+ *   best-effort fires a "Season X Winners" Discord announcement -- see
+ *   announceSeasonWinners. Rather than holding its own copy of a Discord
+ *   bot token, this Worker calls a narrow, shared-secret-gated endpoint
+ *   (SEASON_ANNOUNCE_API_KEY) on the separate archidekt-trading-app
+ *   Worker, which already owns the real bot token ("Tonk Tonk").
+ *
  * - Every route requires a valid Discord session (see requireSession)
  *   except the three that manage the session itself: GET
  *   /auth/discord/callback -> DISCORD_CLIENT_SECRET completes the OAuth
@@ -100,6 +107,7 @@
  *              wrangler secret put PLAYGROUP_API_KEY
  *              wrangler secret put DISCORD_CLIENT_SECRET
  *              wrangler secret put INTERNAL_API_KEY
+ *              wrangler secret put SEASON_ANNOUNCE_API_KEY
  * Bindings:    KV namespace bound as DECK_CACHE
  *              D1 database bound as DB
  */
@@ -107,6 +115,15 @@
 const GITHUB_OWNER = "shuurit";
 const GITHUB_REPO = "mtg-pod-validator";
 const ALLOWED_ORIGIN = "https://shuurit.github.io";
+
+// Base URL for the separate archidekt-trading-app Worker's Tonk Tonk bot --
+// see announceSeasonWinners below. Cross-Worker call, not a shared bot
+// token: keeps DISCORD_BOT_TOKEN in exactly one place (that repo's own
+// Worker) and grants this app only a narrow "post this one message"
+// capability via SEASON_ANNOUNCE_API_KEY -- same reasoning INTERNAL_API_KEY
+// already established for the opposite direction (scripts/discord_report.py
+// calling into *this* Worker).
+const ARCHIDEKT_TRADING_APP_BASE_URL = "https://archidekt-trading-app.pages.dev";
 
 // A single misbehaving client (confirmed via Cloudflare's request log: one
 // IP firing /playgroup-games and /roster-diff repeatedly within the same
@@ -579,7 +596,7 @@ async function resolveSeasonId(env) {
 // permission check beyond the router's blanket requireSession gate, same
 // "any signed-in pod member can do anything" philosophy as every other
 // write endpoint.
-async function handleSeasonClose(request, env, session) {
+async function handleSeasonClose(request, env, ctx, session) {
   let seasonId;
   try {
     seasonId = await resolveSeasonId(env);
@@ -595,6 +612,18 @@ async function handleSeasonClose(request, env, session) {
   const closedAt = new Date().toISOString();
   await env.DB.prepare("UPDATE seasons SET closed_at = ?, closed_by_player_id = ? WHERE id = ?")
     .bind(closedAt, session.playerId, seasonId).run();
+
+  // Fire-and-forget, same pattern as handleGamesWrite's post-discord
+  // dispatch below -- the season is already durably closed above; a
+  // failure reaching archidekt-trading-app (down, bad shared key, no
+  // #season_winners channel found, Discord API hiccup) must never fail or
+  // delay this response. Logged only (visible via `wrangler tail`).
+  ctx.waitUntil(
+    announceSeasonWinners(env, seasonId).catch(err => {
+      console.error(`Season winners announcement failed for season ${seasonId}:`, err);
+    })
+  );
+
   return jsonResponse({ ok: true, seasonId, alreadyClosed: false, closedAt }, 200);
 }
 
@@ -2391,6 +2420,147 @@ async function gatherAchievementContext(env, seasonId) {
   };
 }
 
+// ---------- Season-close Discord announcement ----------
+
+const PLACE_ORDINAL = { 1: "First", 2: "Second", 3: "Third" };
+const PLACE_EMOJI = { 1: "🥇", 2: "🥈", 3: "🥉" };
+
+// Picks a player's best deck for the season-winners announcement: highest
+// win rate among decks with gamesPlayed >= MIN_GAMES_FOR_RATE (same floor
+// used everywhere else a rate-based winner is picked -- see ACHIEVEMENTS).
+// Falls back to whichever deck they played the most if nothing clears that
+// floor, rather than omitting the line -- a real top-3 finisher always gets
+// a best-deck callout.
+function pickBestDeck(decks) {
+  if (!decks.length) return null;
+  const qualifying = decks.filter(d => d.gamesPlayed >= MIN_GAMES_FOR_RATE);
+  if (qualifying.length) {
+    return qualifying.slice().sort((a, b) => b.winRate - a.winRate || b.gamesPlayed - a.gamesPlayed)[0];
+  }
+  return decks.slice().sort((a, b) => b.gamesPlayed - a.gamesPlayed || b.winRate - a.winRate)[0];
+}
+
+// Gathers everything formatSeasonWinnersMessage needs. Reuses
+// gatherAchievementContext's own rankings (same EXCLUDED_FROM_TROPHIES
+// filter, same wins+losses===0 null guard as season-champion/second-place/
+// third-place) so this can never disagree with the Trophy Case for this
+// season -- deliberately not a second, different standings computation.
+// players.discord_user_id may be null for a top-3 finisher never manually
+// linked -- callers fall back to their plain name, never fail.
+async function gatherSeasonWinnersData(env, seasonId) {
+  const [achievementCtx, deckWinRatesData, seasonRow] = await Promise.all([
+    gatherAchievementContext(env, seasonId),
+    computeDeckWinRatesData(env, seasonId),
+    env.DB.prepare("SELECT label FROM seasons WHERE id = ?").bind(seasonId).first(),
+  ]);
+
+  const deckDataByPlayerName = new Map(deckWinRatesData.players.map(p => [p.player, p]));
+
+  // Fixed index 0/1/2, exactly like season-champion/second-place/third-place's
+  // own compute(ctx) -- not "skip empty slots and compact" -- so this always
+  // agrees with the Trophy Case even in the same edge cases.
+  const placements = [0, 1, 2].map(i => {
+    const r = achievementCtx.rankings[i];
+    if (!r || r.wins + r.losses === 0) return null;
+    const deckData = deckDataByPlayerName.get(r.player);
+    return {
+      place: i + 1,
+      playerId: r.playerId,
+      playerName: r.player,
+      winRate: r.rate,
+      wins: r.wins,
+      losses: r.losses,
+      bestDeck: pickBestDeck(deckData ? deckData.decks : []),
+      discordUserId: null, // filled in below
+    };
+  }).filter(Boolean);
+
+  if (placements.length) {
+    const ids = placements.map(p => p.playerId);
+    const placeholders = ids.map(() => "?").join(", ");
+    const { results } = await env.DB.prepare(
+      `SELECT id, discord_user_id FROM players WHERE id IN (${placeholders})`
+    ).bind(...ids).all();
+    const discordIdByPlayerId = Object.fromEntries(results.map(r => [r.id, r.discord_user_id]));
+    for (const p of placements) p.discordUserId = discordIdByPlayerId[p.playerId] || null;
+  }
+
+  return {
+    seasonId,
+    seasonLabel: seasonRow ? seasonRow.label : `Season ${seasonId}`,
+    placements,
+  };
+}
+
+// Discord-markdown announcement text in Tonk Tonk's established
+// goblin-merchant voice (see archidekt-trading-app's _worker.js -- no shared
+// voice module across repos, this is hand-matched). Win rate + W-L record
+// matches the exact display format season-champion/second-place/third-place
+// already use in-app, for consistency. A finisher with no linked Discord
+// account gets their plain bolded name instead of an @mention.
+function formatSeasonWinnersMessage(data) {
+  const lines = [
+    `🔔 Tonk Tonk ring the big bell! **${data.seasonLabel} Winners** is in, come see who top the pod this time!`,
+    "",
+  ];
+  for (const p of data.placements) {
+    const who = p.discordUserId ? `<@${p.discordUserId}>` : `**${p.playerName}**`;
+    const pct = (p.winRate * 100).toFixed(1);
+    const deckLine = p.bestDeck
+      ? `best deck **${p.bestDeck.deck}** (${(p.bestDeck.winRate * 100).toFixed(1)}% over ${p.bestDeck.gamesPlayed} games)`
+      : "no deck logged this season, hmm";
+    lines.push(`${PLACE_EMOJI[p.place]} **${PLACE_ORDINAL[p.place]} Place** — ${who}, ${pct}% win rate (${p.wins}-${p.losses}), ${deckLine}!`);
+  }
+  lines.push("", "🤑 Great season, everybody! Tonk Tonk already sharpening deals for the next one, come back soon!");
+  return lines.join("\n");
+}
+
+// Best-effort: called only from handleSeasonClose's ctx.waitUntil, never
+// awaited on the request/response path. Posts to archidekt-trading-app's
+// shared-secret-gated relay endpoint rather than holding a copy of the real
+// Discord bot token here. Throws on any failure -- the caller's
+// ctx.waitUntil.catch() logs it; never surfaced to whoever closed the
+// season, never retried, never undoes the close.
+async function announceSeasonWinners(env, seasonId) {
+  const data = await gatherSeasonWinnersData(env, seasonId);
+  if (!data.placements.length) {
+    console.log(`Season ${seasonId} closed with no eligible finishers -- skipping Discord announcement.`);
+    return;
+  }
+  const content = formatSeasonWinnersMessage(data);
+  const res = await fetch(`${ARCHIDEKT_TRADING_APP_BASE_URL}/api/internal/season-winners-announce`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Season-Announce-Key": env.SEASON_ANNOUNCE_API_KEY,
+    },
+    body: JSON.stringify({ channelName: "season_winners", content }),
+  });
+  if (!res.ok) {
+    throw new Error(`archidekt-trading-app season-winners-announce failed: HTTP ${res.status} ${await res.text().catch(() => "")}`);
+  }
+}
+
+// Debug/verification aid ONLY -- computes and returns the exact data and
+// exact message string announceSeasonWinners would fire, without ever
+// calling archidekt-trading-app or Discord. ?season= optional (defaults to
+// the current, possibly-still-open season via resolveSeasonId). Exists so
+// the exact text can always be reviewed before a real season close, per the
+// standing "never test-post to real Discord without sign-off" rule.
+async function handleDebugSeasonWinners(request, env) {
+  const url = new URL(request.url);
+  const seasonParam = url.searchParams.get("season");
+  let seasonId;
+  try {
+    seasonId = seasonParam ? Number(seasonParam) : await resolveSeasonId(env);
+  } catch (err) {
+    return jsonResponse({ error: "Failed to resolve current season from playgroup.gg", detail: err.message }, 502);
+  }
+  const data = await gatherSeasonWinnersData(env, seasonId);
+  const message = data.placements.length ? formatSeasonWinnersMessage(data) : null;
+  return jsonResponse({ seasonId, data, message }, 200, { "Cache-Control": "no-store" });
+}
+
 // Freezes a season's winners permanently the first time it's read as
 // concluded (called from handleAchievements right after it computes real
 // winners for an inactive season) -- see the Trophy Case feature. A
@@ -2680,7 +2850,11 @@ export default {
     }
 
     if (request.method === "POST" && url.pathname === "/seasons/close") {
-      return handleSeasonClose(request, env, session);
+      return handleSeasonClose(request, env, ctx, session);
+    }
+
+    if (request.method === "GET" && url.pathname === "/debug/season-winners") {
+      return handleDebugSeasonWinners(request, env);
     }
 
     if (request.method === "GET" && url.pathname === "/debug/game") {
