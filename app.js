@@ -3299,14 +3299,14 @@ function computePlayerAdjustedWinRate(existingRows, newRow) {
 
 // Derives Place/KOs/TOV for every participant from playgroup.gg's raw
 // per-game event log (kill-kind events specifically) -- verified against
-// real already-logged games, not just the API docs: KOs is just a
-// kill-event count per killer; Place ranks the winner first, then
-// everyone else by elimination order (eliminated later = better place);
-// TOV is the turn a player was eliminated, or the last turn seen in the
-// event log for anyone never eliminated (the winner). Matches
-// participants by deck_name, which both /debug/game's raw participations
-// and /playgroup-games' transformed participants carry, and which is
-// unique within a single game.
+// real already-logged games, not just the API docs: KOs is the count of
+// distinct opponents a player eliminated (see kosByDeckName below); Place
+// ranks the winner first, then everyone else by elimination order
+// (eliminated later = better place); TOV is the turn a player was
+// eliminated, or the last turn seen in the event log for anyone never
+// eliminated (the winner). Matches participants by deck_name, which both
+// /debug/game's raw participations and /playgroup-games' transformed
+// participants carry, and which is unique within a single game.
 function deriveGameFieldsFromRawGame(rawGame) {
   // Sorted by happened_at rather than trusted to already be in order --
   // this is what makes same-turn tie-breaking below actually correct
@@ -3317,10 +3317,22 @@ function deriveGameFieldsFromRawGame(rawGame) {
   const deckNameByUserId = {};
   for (const p of rawGame.participations) deckNameByUserId[p.user_id] = p.deck_name;
 
-  const kosByDeckName = {};
+  // playgroup.gg logs multiple "kill" events for a single real elimination
+  // (confirmed against a real game: 3 actual knockouts showed up as 12 raw
+  // kill events, ~4 per receiver_user_id) -- same bug and same fix as
+  // relay.js's computeAndStoreGameEventStats. A plain per-event count
+  // over-counts, so KOs is the number of distinct opponents (by
+  // receiver_user_id) a killer actually eliminated, not the raw event count.
+  const knockoutReceiversByDeckName = {};
   for (const e of killEvents) {
     const deckName = deckNameByUserId[e.user_id];
-    if (deckName) kosByDeckName[deckName] = (kosByDeckName[deckName] || 0) + 1;
+    if (!deckName) continue;
+    if (!knockoutReceiversByDeckName[deckName]) knockoutReceiversByDeckName[deckName] = new Set();
+    knockoutReceiversByDeckName[deckName].add(e.receiver_user_id);
+  }
+  const kosByDeckName = {};
+  for (const [deckName, receivers] of Object.entries(knockoutReceiversByDeckName)) {
+    kosByDeckName[deckName] = receivers.size;
   }
 
   // turn alone isn't fine-grained enough to order two eliminations that
