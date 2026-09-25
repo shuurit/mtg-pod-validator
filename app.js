@@ -26,6 +26,8 @@ const AUTH_ME_RELAY_URL = RELAY_BASE_URL + "/auth/me";
 const AUTH_LOGOUT_RELAY_URL = RELAY_BASE_URL + "/auth/logout";
 const ACHIEVEMENTS_RELAY_URL = RELAY_BASE_URL + "/achievements";
 const TROPHY_CASE_RELAY_URL = RELAY_BASE_URL + "/trophy-case";
+const TROPHY_PINS_RELAY_URL = RELAY_BASE_URL + "/trophy-case/pins";
+const TROPHY_LEADERBOARD_RELAY_URL = RELAY_BASE_URL + "/trophy-leaderboard";
 const SEASON_CLOSE_RELAY_URL = RELAY_BASE_URL + "/seasons/close";
 
 // Discord OAuth sign-in. Client ID is public (it's part of the login URL
@@ -420,6 +422,9 @@ function applyPlayersFromD1(data) {
   setPlayers(data.players.map(p => ({
     id: p.id,
     name: p.name,
+    // Up to 3 trophies shown next to the name on Player Win Rates -- see
+    // buildWinRateCard and POST /trophy-case/pins.
+    pinnedTrophies: p.pinnedTrophies || [],
     decks: p.decks.map(d => ({
       id: d.id, name: d.name, power: d.power, playgroupId: d.playgroupId, archived: !!d.archived,
       bracket: d.bracket ?? null, bracketPending: !!d.bracketPending, newDeck: !!d.newDeck,
@@ -546,11 +551,20 @@ async function syncFromD1() {
 let selectedAchievementsSeasonId = null;
 
 // "trophies" = the existing one-season standings view; "case" = a single
-// player's history aggregated across every closed season. Two different
-// views of the same tab, not two tabs -- see initAchievementsTab and the
-// #achievements-view-toggle wiring below.
+// player's history aggregated across every closed season; "leaderboard" =
+// Most Decorated. Three views of the same tab, not three tabs -- see
+// initAchievementsTab and the #achievements-view-toggle wiring below.
 let achievementsView = "trophies";
 let selectedTrophyCasePlayerId = null;
+let compareTrophyCasePlayerId = null;
+// Last GET /trophy-case responses on screen (the open case, and the
+// compare player's when one is picked). The detail modal, pins and the
+// case card all read from these rather than refetching.
+let trophyCaseData = null;
+let compareTrophyCaseData = null;
+let trophyLeaderboardData = null;
+let trophyCaseRequestSeq = 0;
+let caseCardDrawSeq = 0;
 
 // The exact achievements array last rendered by loadAchievements(), kept
 // around purely so the Closing Ceremony button can hand it to
@@ -601,29 +615,624 @@ async function loadAchievements() {
   }
 }
 
+// ---------- Trophy Case ----------
+
+// Finishing second on one of these is a lucky escape, not a near miss, so
+// the runner-up box reads "Dodged it" instead of "So close".
+const ROAST_TROPHY_IDS = new Set(["wooden-spoon", "saltiest", "early-exit", "most-mulligans", "most-disruptions", "longest-turn"]);
+const TROPHY_PIN_LIMIT = 3;
+const TROPHY_STATUS_LABEL = { new: "New", defending: "Defending", dethroned: "Dethroned" };
+const TROPHY_FALLBACK_ICON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.2 20 12l-8 8.8L4 12z"></path><path d="M12 7.6 16.2 12 12 16.4 7.8 12z"></path></svg>';
+const PIN_ICON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17v5"></path><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z"></path></svg>';
+
+function tcEl(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined && text !== null) node.textContent = text;
+  return node;
+}
+
+function isOwnTrophyCase(d) {
+  return !!(currentUser && d && currentUser.playerId === d.playerId);
+}
+
+function trophyEmblemNode(slot) {
+  if (!slot.emblem) {
+    const icon = tcEl("span", "trophy-icon");
+    icon.innerHTML = TROPHY_FALLBACK_ICON_SVG;
+    return icon;
+  }
+  const img = tcEl("img", "trophy-emblem");
+  img.src = slot.emblem;
+  img.alt = "";
+  return img;
+}
+
+// 0 = plain frame, 2 = silver (won twice), 3 = gold foil (three or more).
+function trophyPrestigeTier(count) {
+  if (count >= 3) return 3;
+  if (count === 2) return 2;
+  return 0;
+}
+function trophyTierLabel(count) {
+  return count >= 3 ? `Gold Foil · ${count} wins` : "Silver · 2 wins";
+}
+
+// holders = distinct players who have ever won this trophy, across every
+// closed season (see handleTrophyCase in relay.js).
+function trophyRarity(slot, d) {
+  const n = slot.holders;
+  if (n === 0) return { tier: "unclaimed", label: "Unclaimed" };
+  if (n === 1) {
+    if (!slot.won) return { tier: "rare", label: "Rare · 1 holder" };
+    return { tier: "rare", label: isOwnTrophyCase(d) ? "Rare · only you" : `Rare · only ${d.playerName}` };
+  }
+  if (n <= 3) return { tier: "uncommon", label: `Uncommon · ${n} holders` };
+  return { tier: "common", label: `Common · ${n} holders` };
+}
+
+async function fetchTrophyCase(playerId) {
+  const res = await fetch(`${TROPHY_CASE_RELAY_URL}?player=${playerId}`, { cache: "no-store", headers: authHeaders() });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 // Fetches one player's full trophy history (every achievement, won or
-// locked) and renders it into #trophy-case-list. playerId defaults to
-// whoever's picked in the player <select>, falling back to the signed-in
-// player themselves the first time this view is opened.
+// locked), plus the compare player's when one is picked, and renders the
+// whole Trophy Case view. playerId defaults to whoever's picked in the
+// player <select>, falling back to the signed-in player themselves the
+// first time this view is opened. The sequence number drops a response
+// that arrives after a newer request (quick switching between players).
 async function loadTrophyCase(playerId) {
   const statusEl = document.getElementById("achievements-status");
-  const listEl = document.getElementById("trophy-case-list");
   const targetPlayerId = playerId ?? selectedTrophyCasePlayerId ?? (currentUser ? currentUser.playerId : null);
   if (!targetPlayerId) return;
   selectedTrophyCasePlayerId = targetPlayerId;
+  if (compareTrophyCasePlayerId === targetPlayerId) compareTrophyCasePlayerId = null;
+  const seq = ++trophyCaseRequestSeq;
   try {
-    const res = await fetch(`${TROPHY_CASE_RELAY_URL}?player=${targetPlayerId}`, { cache: "no-store", headers: authHeaders() });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
+    const [data, compareData] = await Promise.all([
+      fetchTrophyCase(targetPlayerId),
+      compareTrophyCasePlayerId ? fetchTrophyCase(compareTrophyCasePlayerId) : Promise.resolve(null),
+    ]);
+    if (seq !== trophyCaseRequestSeq) return;
+    trophyCaseData = data;
+    compareTrophyCaseData = compareData;
     renderTrophyCasePlayerSelect(data.playerId);
-    renderTrophyCase(data.slots);
+    renderTrophyCaseCompareSelect();
+    renderTrophyCaseView();
+    if (statusEl) statusEl.hidden = true;
+  } catch (err) {
+    if (seq !== trophyCaseRequestSeq) return;
+    trophyCaseData = null;
+    for (const id of ["trophy-case-summary", "trophy-case-compare", "trophy-case-list"]) {
+      const el = document.getElementById(id);
+      if (el) el.innerHTML = "";
+    }
+    if (statusEl) {
+      statusEl.hidden = false;
+      statusEl.textContent = `Couldn't load the trophy case (${err.message}).`;
+    }
+  }
+}
+
+function renderTrophyCaseView() {
+  if (!trophyCaseData) return;
+  renderTrophyCaseSummary(trophyCaseData);
+  renderTrophyCompare(trophyCaseData, compareTrophyCaseData);
+  renderTrophyCaseShelves(trophyCaseData);
+}
+
+function renderTrophyCaseSummary(d) {
+  const root = document.getElementById("trophy-case-summary");
+  if (!root) return;
+  root.innerHTML = "";
+  root.className = "tc-summary";
+  const held = d.slots.filter(s => s.won).length;
+  const totalWins = d.slots.reduce((sum, s) => sum + s.count, 0);
+
+  const head = tcEl("div", "tc-summary-head");
+  const nameBlock = tcEl("div", "tc-summary-name-block");
+  nameBlock.appendChild(tcEl("div", "tc-summary-name", d.playerName));
+  const count = tcEl("div", "tc-summary-count");
+  count.appendChild(tcEl("span", "tc-summary-count-n", String(held)));
+  count.appendChild(tcEl("span", "tc-summary-count-of", ` / ${d.totalSlots} trophies`));
+  nameBlock.appendChild(count);
+  head.appendChild(nameBlock);
+  const shareBtn = tcEl("button", "tc-share-btn", "Share card");
+  shareBtn.type = "button";
+  shareBtn.addEventListener("click", showCaseCardModal);
+  head.appendChild(shareBtn);
+  root.appendChild(head);
+
+  const bar = tcEl("div", "tc-progress");
+  bar.setAttribute("role", "img");
+  bar.setAttribute("aria-label", `${held} of ${d.totalSlots} trophies`);
+  const fill = tcEl("div", "tc-progress-fill");
+  fill.style.width = `${d.totalSlots ? (held / d.totalSlots) * 100 : 0}%`;
+  bar.appendChild(fill);
+  root.appendChild(bar);
+
+  const stats = tcEl("div", "tc-stats");
+  const seasonsLabel = d.mintedSeasonCount === 1 ? "season closed" : "seasons closed";
+  for (const [n, label] of [[held, "trophies held"], [totalWins, "total wins"], [d.mintedSeasonCount, seasonsLabel]]) {
+    const stat = tcEl("div", "tc-stat");
+    stat.appendChild(tcEl("div", "tc-stat-n", String(n)));
+    stat.appendChild(tcEl("div", "tc-stat-k", label));
+    stats.appendChild(stat);
+  }
+  root.appendChild(stats);
+
+  const milestones = tcEl("div", "tc-milestones");
+  for (const m of computeTrophyMilestones(d)) {
+    const chip = tcEl("div", "tc-milestone" + (m.done ? " tc-milestone-done" : ""));
+    chip.title = m.description;
+    chip.appendChild(tcEl("span", "tc-milestone-name", m.name));
+    chip.appendChild(tcEl("span", "tc-milestone-progress", m.progress));
+    milestones.appendChild(chip);
+  }
+  root.appendChild(milestones);
+}
+
+// Badges for the collection itself. Full Shelf names the closest shelf
+// (fewest trophies missing) when none is complete yet.
+function computeTrophyMilestones(d) {
+  const held = d.slots.filter(s => s.won).length;
+  const shelves = d.categories.map(c => {
+    const slots = d.slots.filter(s => s.category === c.id);
+    return { label: c.label, won: slots.filter(s => s.won).length, total: slots.length };
+  }).filter(s => s.total > 0);
+  const full = shelves.find(s => s.won === s.total);
+  const closest = [...shelves].sort((a, b) => (a.total - a.won) - (b.total - b.won) || b.won / b.total - a.won / a.total)[0];
+  const done = n => (held >= n ? "✓" : `${held}/${n}`);
+  return [
+    { name: "First Trophy", description: "Win any trophy.", done: held >= 1, progress: done(1) },
+    { name: "Collector", description: "Hold 10 different trophies.", done: held >= 10, progress: done(10) },
+    full
+      ? { name: "Full Shelf", description: `Every ${full.label} trophy.`, done: true, progress: full.label }
+      : { name: "Full Shelf", description: "Hold every trophy in one category.", done: false, progress: closest ? `${closest.label} ${closest.won}/${closest.total}` : "" },
+    { name: "Completionist", description: `Hold all ${d.totalSlots} trophies.`, done: held >= d.totalSlots, progress: done(d.totalSlots) },
+  ];
+}
+
+function renderTrophyCompare(a, b) {
+  const root = document.getElementById("trophy-case-compare");
+  if (!root) return;
+  root.innerHTML = "";
+  if (!b) {
+    root.hidden = true;
+    return;
+  }
+  root.hidden = false;
+  const aWon = new Set(a.slots.filter(s => s.won).map(s => s.id));
+  const bWon = new Set(b.slots.filter(s => s.won).map(s => s.id));
+  const columns = [
+    { title: `${a.playerName} only`, slots: a.slots.filter(s => aWon.has(s.id) && !bWon.has(s.id)) },
+    { title: "Both", slots: a.slots.filter(s => aWon.has(s.id) && bWon.has(s.id)) },
+    { title: `${b.playerName} only`, slots: b.slots.filter(s => bWon.has(s.id) && !aWon.has(s.id)) },
+  ];
+  root.appendChild(tcEl("div", "tc-compare-title", `${a.playerName} vs ${b.playerName}`));
+  const grid = tcEl("div", "tc-compare-grid");
+  for (const col of columns) {
+    const colEl = tcEl("div", "tc-compare-col");
+    const head = tcEl("div", "tc-compare-head");
+    head.appendChild(tcEl("span", null, col.title));
+    head.appendChild(tcEl("span", "tc-compare-count", String(col.slots.length)));
+    colEl.appendChild(head);
+    const emblems = tcEl("div", "tc-compare-emblems");
+    if (!col.slots.length) emblems.appendChild(tcEl("span", "tc-compare-empty", "None"));
+    for (const s of col.slots) {
+      const img = tcEl("img", "tc-mini-emblem");
+      img.src = s.emblem;
+      img.alt = s.title;
+      img.title = s.title;
+      emblems.appendChild(img);
+    }
+    colEl.appendChild(emblems);
+    grid.appendChild(colEl);
+  }
+  root.appendChild(grid);
+}
+
+// One shelf per category, in the order relay.js sends them.
+function renderTrophyCaseShelves(d) {
+  const root = document.getElementById("trophy-case-list");
+  if (!root) return;
+  root.innerHTML = "";
+  for (const cat of d.categories) {
+    const slots = d.slots.filter(s => s.category === cat.id);
+    if (!slots.length) continue;
+    const won = slots.filter(s => s.won).length;
+    const shelf = tcEl("section", "tc-shelf");
+    const head = tcEl("div", "tc-shelf-head");
+    head.appendChild(tcEl("h3", "tc-shelf-title", cat.label));
+    head.appendChild(tcEl("span", "tc-shelf-count" + (won === slots.length ? " tc-shelf-full" : ""), `${won}/${slots.length}`));
+    shelf.appendChild(head);
+    const grid = tcEl("div", "tc-shelf-grid");
+    for (const slot of slots) grid.appendChild(buildTrophyCaseCard(slot, d));
+    shelf.appendChild(grid);
+    root.appendChild(shelf);
+  }
+}
+
+// Same art/title/description anatomy as renderAchievements' cards, plus
+// the Trophy Case extras: prestige frame, status tag, pin marker, rarity,
+// and the runner-up box on locked slots. Opens showTrophyDetailModal via
+// the delegated handler in initAchievementsTab.
+function buildTrophyCaseCard(slot, d) {
+  const tier = trophyPrestigeTier(slot.count);
+  const card = tcEl("div", "trophy-card tc-card" + (slot.won ? "" : " trophy-card-locked") + (tier ? ` tc-prestige-${tier}` : ""));
+  card.dataset.id = slot.id;
+  card.tabIndex = 0;
+  card.setAttribute("role", "button");
+  card.setAttribute("aria-label", `${slot.title}, ${slot.won ? "won" : "locked"}. Show details.`);
+
+  if (slot.status) card.appendChild(tcEl("span", `tc-status tc-status-${slot.status}`, TROPHY_STATUS_LABEL[slot.status]));
+  if (slot.pinned) {
+    const pin = tcEl("span", "tc-pin-marker");
+    pin.title = "Pinned to Player Win Rates";
+    pin.innerHTML = PIN_ICON_SVG;
+    card.appendChild(pin);
+  }
+
+  card.appendChild(trophyEmblemNode(slot));
+  card.appendChild(tcEl("div", "trophy-title", slot.title));
+
+  const body = tcEl("div", "trophy-body");
+  body.appendChild(tcEl("div", "trophy-description", slot.description));
+  if (slot.won) {
+    const winnerRow = tcEl("div", "trophy-winner");
+    winnerRow.appendChild(tcEl("span", "trophy-winner-name", slot.latestSeasonLabel));
+    winnerRow.appendChild(tcEl("span", "trophy-winner-value", slot.latestDisplay));
+    body.appendChild(winnerRow);
+    if (tier) body.appendChild(tcEl("div", "tc-tier-label", trophyTierLabel(slot.count)));
+  } else {
+    body.appendChild(tcEl("div", "trophy-empty", "Locked"));
+    if (slot.runnerUp) body.appendChild(buildRunnerUpBox(slot, d));
+  }
+  const rarity = trophyRarity(slot, d);
+  body.appendChild(tcEl("span", `tc-rarity tc-rarity-${rarity.tier}`, rarity.label));
+  card.appendChild(body);
+  return card;
+}
+
+function buildRunnerUpBox(slot, d) {
+  const ru = slot.runnerUp;
+  const tied = ru.display === ru.winnerDisplay;
+  const heading = ROAST_TROPHY_IDS.has(slot.id) ? "Dodged it" : "So close";
+  const box = tcEl("div", "tc-runner-up");
+  box.appendChild(tcEl("span", "tc-runner-up-k", `${heading} · ${ru.seasonLabel}${tied ? " (tied)" : ""}`));
+  box.appendChild(tcEl("span", "tc-runner-up-v", `${isOwnTrophyCase(d) ? "You" : d.playerName}: ${ru.display}`));
+  box.appendChild(tcEl("span", "tc-runner-up-by", `${ru.winnerName} won with ${ru.winnerDisplay}`));
+  return box;
+}
+
+function showTrophyDetailModal(id) {
+  const d = trophyCaseData;
+  const slot = d && d.slots.find(s => s.id === id);
+  const modal = document.getElementById("trophy-detail-modal");
+  const body = document.getElementById("trophy-detail-body");
+  if (!slot || !modal || !body) return;
+  body.innerHTML = "";
+
+  const tier = trophyPrestigeTier(slot.count);
+  const art = tcEl("div", "tc-detail-art" + (slot.won ? "" : " trophy-card-locked") + (tier ? ` tc-prestige-${tier}` : ""));
+  art.appendChild(trophyEmblemNode(slot));
+  body.appendChild(art);
+  body.appendChild(tcEl("h2", null, slot.title));
+  body.appendChild(tcEl("p", "hint tc-detail-desc", slot.description));
+
+  const chips = tcEl("div", "tc-detail-chips");
+  const rarity = trophyRarity(slot, d);
+  chips.appendChild(tcEl("span", `tc-rarity tc-rarity-${rarity.tier}`, rarity.label));
+  if (slot.status) chips.appendChild(tcEl("span", `tc-status tc-status-${slot.status}`, TROPHY_STATUS_LABEL[slot.status]));
+  if (tier) chips.appendChild(tcEl("span", "tc-tier-label", trophyTierLabel(slot.count)));
+  body.appendChild(chips);
+  const holdersText = slot.holders === 0 ? "Nobody has won this yet."
+    : slot.holders === 1 ? "Held by 1 player." : `Held by ${slot.holders} players.`;
+  body.appendChild(tcEl("p", "tc-detail-holders", holdersText));
+
+  body.appendChild(tcEl("h3", "tc-detail-subhead", isOwnTrophyCase(d) ? "Your wins" : `${d.playerName}'s wins`));
+  if (slot.history.length) {
+    const list = tcEl("ol", "tc-history");
+    for (const h of slot.history) {
+      const li = tcEl("li");
+      li.appendChild(tcEl("span", null, h.seasonLabel));
+      li.appendChild(tcEl("b", null, h.display));
+      list.appendChild(li);
+    }
+    body.appendChild(list);
+  } else {
+    body.appendChild(tcEl("p", "tc-detail-empty", "Not won yet."));
+  }
+  if (!slot.won && slot.runnerUp) body.appendChild(buildRunnerUpBox(slot, d));
+  if (isOwnTrophyCase(d) && slot.won) body.appendChild(buildPinControls(slot, d));
+
+  modal.hidden = false;
+}
+
+function hideTrophyDetailModal() {
+  const modal = document.getElementById("trophy-detail-modal");
+  if (modal) modal.hidden = true;
+}
+
+function buildPinControls(slot, d) {
+  const wrap = tcEl("div", "tc-pin-controls");
+  const btn = tcEl("button", "tc-pin-btn" + (slot.pinned ? "" : " primary"), slot.pinned ? "Unpin" : "Pin to Player Win Rates");
+  btn.type = "button";
+  const hint = tcEl("span", "tc-pin-hint", `${d.pins.length} of ${TROPHY_PIN_LIMIT} pinned. Pinned trophies show next to your name on Player Win Rates.`);
+  if (!slot.pinned && d.pins.length >= TROPHY_PIN_LIMIT) {
+    btn.disabled = true;
+    hint.textContent = `You've pinned ${TROPHY_PIN_LIMIT}. Unpin one first.`;
+  }
+  btn.addEventListener("click", async () => {
+    const next = slot.pinned ? d.pins.filter(id => id !== slot.id) : [...d.pins, slot.id];
+    btn.disabled = true;
+    hint.textContent = "Saving…";
+    const error = await saveTrophyPins(next);
+    if (error) {
+      hint.textContent = error;
+      btn.disabled = false;
+      return;
+    }
+    showTrophyDetailModal(slot.id);
+  });
+  wrap.appendChild(btn);
+  wrap.appendChild(hint);
+  return wrap;
+}
+
+// Returns null on success, or a message to show. Updates the open case,
+// your own entry in `players`, and the Player Win Rates cards in place, so
+// the pin shows everywhere without a refetch.
+async function saveTrophyPins(ids) {
+  try {
+    const res = await fetch(TROPHY_PINS_RELAY_URL, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ achievementIds: ids }),
+    });
+    const body = await res.json().catch(() => null);
+    if (res.status === 401) {
+      showAuthStatusHint("Sign in with Discord to do this.");
+      return "Sign in to pin trophies.";
+    }
+    if (!res.ok) return body?.error || `Couldn't save (HTTP ${res.status}).`;
+    const pins = body.pins;
+    if (isOwnTrophyCase(trophyCaseData)) {
+      trophyCaseData.pins = pins;
+      for (const s of trophyCaseData.slots) s.pinned = pins.includes(s.id);
+      renderTrophyCaseView();
+    }
+    const me = currentUser ? players.find(p => p.id === currentUser.playerId) : null;
+    if (me && trophyCaseData) {
+      me.pinnedTrophies = pins
+        .map(id => trophyCaseData.slots.find(s => s.id === id))
+        .filter(Boolean)
+        .map(s => ({ id: s.id, title: s.title, emblem: s.emblem }));
+      renderWinRatesTable(playgroupGamesData);
+    }
+    return null;
+  } catch (err) {
+    return `Couldn't save (${err.message}).`;
+  }
+}
+
+// ---------- Most Decorated ----------
+
+async function loadTrophyLeaderboard() {
+  const statusEl = document.getElementById("achievements-status");
+  const listEl = document.getElementById("trophy-leaderboard-list");
+  try {
+    const res = await fetch(TROPHY_LEADERBOARD_RELAY_URL, { cache: "no-store", headers: authHeaders() });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    trophyLeaderboardData = await res.json();
+    renderTrophyLeaderboard(trophyLeaderboardData);
     if (statusEl) statusEl.hidden = true;
   } catch (err) {
     if (listEl) listEl.innerHTML = "";
     if (statusEl) {
       statusEl.hidden = false;
-      statusEl.textContent = `Couldn't load the trophy case (${err.message}).`;
+      statusEl.textContent = `Couldn't load Most Decorated (${err.message}).`;
     }
+  }
+}
+
+// Same ruled-row anatomy as the Player Win Rates cards (see
+// buildWinRateCard): rank, name, count out of 28, a bar, then the trophies
+// themselves. Rows open that player's Trophy Case via the delegated handler
+// in initAchievementsTab.
+function renderTrophyLeaderboard(d) {
+  const root = document.getElementById("trophy-leaderboard-list");
+  if (!root) return;
+  root.innerHTML = "";
+  const seasons = d.mintedSeasonCount === 1 ? "1 closed season" : `${d.mintedSeasonCount} closed seasons`;
+  root.appendChild(tcEl("p", "hint tl-hint", `Trophies held across ${seasons}. Tap a player to open their Trophy Case.`));
+  const list = tcEl("div", "wr-card-list tl-list");
+  for (const row of d.rows) {
+    const card = tcEl("div", "wr-card tl-row" + (row.trophies ? "" : " tl-row-empty"));
+    card.dataset.playerId = row.playerId;
+    card.tabIndex = 0;
+    card.setAttribute("role", "button");
+    card.setAttribute("aria-label", `${row.name}, ${row.trophies} of ${d.totalSlots} trophies. Open Trophy Case.`);
+
+    const header = tcEl("div", "wr-card-header");
+    header.appendChild(tcEl("span", "wr-rank", String(row.rank)));
+    header.appendChild(tcEl("span", "wr-name", row.name));
+    header.appendChild(tcEl("span", "wr-metric-value", `${row.trophies} / ${d.totalSlots}`));
+    card.appendChild(header);
+
+    const meter = tcEl("div", "wr-meter");
+    const bar = tcEl("div", "wr-bar");
+    const fill = tcEl("div", "wr-bar-fill");
+    fill.style.width = `${d.totalSlots ? (row.trophies / d.totalSlots) * 100 : 0}%`;
+    bar.appendChild(fill);
+    meter.appendChild(bar);
+    meter.appendChild(tcEl("span", "wr-record", row.totalWins === 1 ? "1 win" : `${row.totalWins} wins`));
+    card.appendChild(meter);
+
+    if (row.emblems.length) {
+      const emblems = tcEl("div", "tl-emblems");
+      for (const e of row.emblems) {
+        const img = tcEl("img", "tl-emblem");
+        img.src = e.emblem;
+        img.alt = e.title;
+        img.title = e.count > 1 ? `${e.title} ×${e.count}` : e.title;
+        emblems.appendChild(img);
+      }
+      card.appendChild(emblems);
+    }
+    list.appendChild(card);
+  }
+  root.appendChild(list);
+}
+
+// ---------- Trophy Case card (downloadable image) ----------
+
+function loadImage(src) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+}
+
+function showCaseCardModal() {
+  const modal = document.getElementById("case-card-modal");
+  if (!modal || !trophyCaseData) return;
+  modal.hidden = false;
+  drawTrophyCaseCard(document.getElementById("case-card-canvas"), trophyCaseData);
+}
+
+function hideCaseCardModal() {
+  const modal = document.getElementById("case-card-modal");
+  if (modal) modal.hidden = true;
+}
+
+// 1080x1350 portrait, in the current theme's colors -- same getComputedStyle
+// approach as drawRecapCard. Unlike the recap card this one draws the
+// emblem art: the images are same-origin (emblems/*.png), so the canvas
+// stays exportable. An emblem that fails to load is skipped, its title is
+// still drawn. caseCardDrawSeq drops a draw that a newer one has replaced.
+async function drawTrophyCaseCard(canvas, d) {
+  const status = document.getElementById("case-card-status");
+  const downloadRow = document.getElementById("case-card-download-row");
+  const link = document.getElementById("case-card-download");
+  if (!canvas) return;
+  const seq = ++caseCardDrawSeq;
+  if (status) status.textContent = "Drawing the card…";
+  if (downloadRow) downloadRow.hidden = true;
+
+  const won = d.slots.filter(s => s.won);
+  try {
+    await document.fonts.load('700 56px "Saira Condensed"');
+  } catch {
+    // Falls back to the stack below; the card still draws.
+  }
+  const images = await Promise.all(won.map(s => loadImage(s.emblem)));
+  if (seq !== caseCardDrawSeq) return;
+
+  const width = 1080;
+  const height = 1350;
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+
+  const styles = getComputedStyle(document.documentElement);
+  const color = (name, fallback) => styles.getPropertyValue(name).trim() || fallback;
+  const bg = color("--bg", "#0b0a10");
+  const ink = color("--ink", "#f2efe9");
+  const muted = color("--muted", "#9e97ac");
+  const accent = color("--accent", "#a48bff");
+  const border = color("--border", "#241f30");
+  const foil = color("--foil", "#c9a13f");
+  const silver = color("--silver", "#aeb6c2");
+  const displayFont = '"Saira Condensed", "Arial Narrow", sans-serif';
+  const bodyFont = '"IBM Plex Sans", "Segoe UI", sans-serif';
+
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, width, height);
+  ctx.textBaseline = "alphabetic";
+
+  ctx.fillStyle = accent;
+  ctx.font = `700 30px ${displayFont}`;
+  ctx.fillText("AMASS A GATHERING · TROPHY CASE", 60, 100);
+  ctx.fillStyle = ink;
+  ctx.font = `700 96px ${displayFont}`;
+  ctx.fillText(d.playerName.toUpperCase(), 60, 200);
+  ctx.fillStyle = muted;
+  ctx.font = `600 34px ${displayFont}`;
+  ctx.fillText(`${won.length} OF ${d.totalSlots} TROPHIES`, 60, 252);
+
+  ctx.fillStyle = border;
+  ctx.fillRect(60, 280, width - 120, 10);
+  ctx.fillStyle = accent;
+  ctx.fillRect(60, 280, (width - 120) * (d.totalSlots ? won.length / d.totalSlots : 0), 10);
+
+  if (!won.length) {
+    ctx.fillStyle = muted;
+    ctx.font = `600 44px ${displayFont}`;
+    ctx.textAlign = "center";
+    ctx.fillText("The shelf awaits.", width / 2, 760);
+    ctx.textAlign = "left";
+  } else {
+    const cols = won.length <= 9 ? 3 : won.length <= 16 ? 4 : 5;
+    const rows = Math.ceil(won.length / cols);
+    const gridTop = 340;
+    const gridHeight = 900;
+    const cellW = (width - 120) / cols;
+    const cellH = Math.min(gridHeight / rows, cellW + 50);
+    const titleSize = cols >= 5 ? 18 : 22;
+    won.forEach((slot, i) => {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      const cx = 60 + cellW * col + cellW / 2;
+      const top = gridTop + cellH * row;
+      const boxW = cellW - 24;
+      const boxH = cellH - titleSize - 34;
+      const img = images[i];
+      if (img) {
+        const scale = Math.min(boxW / img.naturalWidth, boxH / img.naturalHeight);
+        const w = img.naturalWidth * scale;
+        const h = img.naturalHeight * scale;
+        ctx.drawImage(img, cx - w / 2, top + (boxH - h) / 2, w, h);
+      }
+      const tier = trophyPrestigeTier(slot.count);
+      if (tier) {
+        ctx.strokeStyle = tier === 3 ? foil : silver;
+        ctx.lineWidth = 5;
+        ctx.strokeRect(cx - boxW / 2, top, boxW, boxH);
+      }
+      ctx.fillStyle = ink;
+      ctx.font = `600 ${titleSize}px ${bodyFont}`;
+      ctx.textAlign = "center";
+      ctx.fillText(slot.title + (slot.count > 1 ? ` ×${slot.count}` : ""), cx, top + boxH + titleSize + 8, cellW - 8);
+      ctx.textAlign = "left";
+    });
+  }
+
+  const latest = d.mintedSeasons.length ? d.mintedSeasons[d.mintedSeasons.length - 1].label : "";
+  ctx.fillStyle = muted;
+  ctx.font = `400 24px ${bodyFont}`;
+  if (latest) ctx.fillText(`Through ${latest}`, 60, 1310);
+  ctx.textAlign = "right";
+  ctx.fillText(d.mintedSeasonCount === 1 ? "1 season closed" : `${d.mintedSeasonCount} seasons closed`, width - 60, 1310);
+  ctx.textAlign = "left";
+
+  try {
+    if (link) {
+      link.href = canvas.toDataURL("image/png");
+      link.download = `trophy-case-${d.playerName.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.png`;
+    }
+    if (downloadRow) downloadRow.hidden = false;
+    if (status) status.textContent = "Saves as a PNG you can post anywhere.";
+  } catch (err) {
+    if (status) status.textContent = `Couldn't render the card (${err.message}).`;
   }
 }
 
@@ -644,79 +1253,23 @@ function renderTrophyCasePlayerSelect(playerId) {
   sel.value = playerId;
 }
 
-// One card per achievement, all 36 slots always shown -- unlike
-// renderAchievements (one season at a time), this is one player's history
-// across every closed season, so "never won" is a real, visible state
-// (dimmed art, "Locked" label) rather than something left off the grid.
-// Reuses the exact emblem/icon + title + description construction
-// renderAchievements uses (see the comment there on why the art carries
-// no text of its own), so a title/description change never needs to be
-// kept in sync between the two views.
-function renderTrophyCase(slots) {
-  const container = document.getElementById("trophy-case-list");
-  container.innerHTML = "";
-
-  for (const slot of slots) {
-    const card = document.createElement("div");
-    card.className = slot.won ? "trophy-card" : "trophy-card trophy-card-locked";
-
-    if (slot.emblem) {
-      const img = document.createElement("img");
-      img.className = "trophy-emblem";
-      img.src = slot.emblem;
-      img.alt = "";
-      card.appendChild(img);
-    } else {
-      const icon = document.createElement("span");
-      icon.className = "trophy-icon";
-      icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.2 20 12l-8 8.8L4 12z"></path><path d="M12 7.6 16.2 12 12 16.4 7.8 12z"></path></svg>';
-      card.appendChild(icon);
-    }
-
-    // Only shown for a repeat win (×1 would just be noise on every won
-    // card) -- the whole point of a season_awards row per season is that
-    // this can go up over time as more seasons close.
-    if (slot.count > 1) {
-      const badge = document.createElement("span");
-      badge.className = "trophy-count-badge";
-      badge.textContent = `×${slot.count}`;
-      card.appendChild(badge);
-    }
-
-    const title = document.createElement("div");
-    title.className = "trophy-title";
-    title.textContent = slot.title;
-    card.appendChild(title);
-
-    const body = document.createElement("div");
-    body.className = "trophy-body";
-    const description = document.createElement("div");
-    description.className = "trophy-description";
-    description.textContent = slot.description;
-    body.appendChild(description);
-
-    if (slot.won) {
-      const winnerRow = document.createElement("div");
-      winnerRow.className = "trophy-winner";
-      const season = document.createElement("span");
-      season.className = "trophy-winner-name";
-      season.textContent = slot.latestSeasonLabel;
-      const value = document.createElement("span");
-      value.className = "trophy-winner-value";
-      value.textContent = slot.latestDisplay;
-      winnerRow.appendChild(season);
-      winnerRow.appendChild(value);
-      body.appendChild(winnerRow);
-    } else {
-      const empty = document.createElement("div");
-      empty.className = "trophy-empty";
-      empty.textContent = "Locked";
-      body.appendChild(empty);
-    }
-
-    card.appendChild(body);
-    container.appendChild(card);
+// "No one" plus everyone except the player whose case is open.
+function renderTrophyCaseCompareSelect() {
+  const sel = document.getElementById("trophy-case-compare-select");
+  if (!sel) return;
+  sel.innerHTML = "";
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = "No one";
+  sel.appendChild(none);
+  for (const p of players) {
+    if (p.id === selectedTrophyCasePlayerId) continue;
+    const opt = document.createElement("option");
+    opt.value = p.id;
+    opt.textContent = p.name;
+    sel.appendChild(opt);
   }
+  sel.value = compareTrophyCasePlayerId ?? "";
 }
 
 function renderAchievementsSeasonSelect(seasons, seasonId) {
@@ -830,25 +1383,48 @@ function renderAchievements(achievements, seasonActive) {
   }
 }
 
-// Swaps which of the two views is visible/loaded -- the season <select>
-// and player <select> rows are mutually exclusive the same way the two
-// list containers are, since each only means something in its own view.
+// Swaps which of the three views is visible/loaded. Each view's controls
+// and containers only mean something in that view, so everything else is
+// hidden -- including the season-only reveal notice and ceremony/close
+// buttons, which used to stay visible in the Trophy Case view.
 function setAchievementsView(view) {
   achievementsView = view;
-  const seasonRow = document.getElementById("achievements-season-select")?.closest(".row");
-  const playerRow = document.getElementById("trophy-case-player-row");
-  const trophiesList = document.getElementById("achievements-list");
-  const caseList = document.getElementById("trophy-case-list");
-  const isCase = view === "case";
-  if (seasonRow) seasonRow.hidden = isCase;
-  if (playerRow) playerRow.hidden = !isCase;
-  if (trophiesList) trophiesList.hidden = isCase;
-  if (caseList) caseList.hidden = !isCase;
+  const show = {
+    "achievements-season-row": view === "trophies",
+    "season-view-controls": view === "trophies",
+    "achievements-list": view === "trophies",
+    "trophy-case-player-row": view === "case",
+    "trophy-case-view": view === "case",
+    "trophy-leaderboard-list": view === "leaderboard",
+  };
+  for (const [id, visible] of Object.entries(show)) {
+    const el = document.getElementById(id);
+    if (el) el.hidden = !visible;
+  }
   document.querySelectorAll(".view-toggle-btn").forEach(btn => {
     btn.classList.toggle("active", btn.dataset.view === view);
   });
-  if (isCase) loadTrophyCase();
-  else loadAchievements();
+  refreshAchievementsView();
+}
+
+// Reloads whichever Trophies view is showing (also used by refreshEverything).
+function refreshAchievementsView() {
+  if (achievementsView === "case") return loadTrophyCase();
+  if (achievementsView === "leaderboard") return loadTrophyLeaderboard();
+  return loadAchievements();
+}
+
+function openTrophyCaseFor(playerId) {
+  selectedTrophyCasePlayerId = playerId;
+  setAchievementsView("case");
+}
+
+// Enter/Space on a role="button" card behaves like a click.
+function onCardKey(e, handler) {
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    handler();
+  }
 }
 
 function initAchievementsTab() {
@@ -870,6 +1446,44 @@ function initAchievementsTab() {
       loadTrophyCase(casePlayerSel.value ? Number(casePlayerSel.value) : null);
     });
   }
+
+  const compareSel = document.getElementById("trophy-case-compare-select");
+  if (compareSel) {
+    compareSel.addEventListener("change", () => {
+      compareTrophyCasePlayerId = compareSel.value ? Number(compareSel.value) : null;
+      loadTrophyCase();
+    });
+  }
+
+  // Delegated, so re-rendering the shelves never stacks listeners.
+  const caseList = document.getElementById("trophy-case-list");
+  if (caseList) {
+    const openCard = target => {
+      const card = target.closest(".tc-card");
+      if (card) showTrophyDetailModal(card.dataset.id);
+    };
+    caseList.addEventListener("click", e => openCard(e.target));
+    caseList.addEventListener("keydown", e => onCardKey(e, () => openCard(e.target)));
+  }
+
+  const leaderboardList = document.getElementById("trophy-leaderboard-list");
+  if (leaderboardList) {
+    const openRow = target => {
+      const row = target.closest(".tl-row");
+      if (row) openTrophyCaseFor(Number(row.dataset.playerId));
+    };
+    leaderboardList.addEventListener("click", e => openRow(e.target));
+    leaderboardList.addEventListener("keydown", e => onCardKey(e, () => openRow(e.target)));
+  }
+
+  document.getElementById("trophy-detail-modal-close")?.addEventListener("click", hideTrophyDetailModal);
+  document.getElementById("trophy-detail-modal")?.addEventListener("click", e => {
+    if (e.target.id === "trophy-detail-modal") hideTrophyDetailModal();
+  });
+  document.getElementById("case-card-modal-close")?.addEventListener("click", hideCaseCardModal);
+  document.getElementById("case-card-modal")?.addEventListener("click", e => {
+    if (e.target.id === "case-card-modal") hideCaseCardModal();
+  });
 
   const ceremonyBtn = document.getElementById("ceremony-btn");
   if (ceremonyBtn) {
@@ -2265,6 +2879,8 @@ document.addEventListener("keydown", e => {
     hideComboTrackModal();
     hideClosingCeremonyModal();
     hideCloseSeasonModal();
+    hideTrophyDetailModal();
+    hideCaseCardModal();
     hideAuthMenu();
   }
   // Guarded on the modal actually being open so these never hijack arrow
@@ -2660,6 +3276,23 @@ function buildWinRateCard(row, rank, sortKey, direction) {
   const nameEl = document.createElement("span");
   nameEl.className = "wr-name";
   nameEl.textContent = row.name;
+  // Pinned trophies sit inside the name so .wr-name's flex:1 still owns
+  // the row's free space. Rows are keyed by name, not id (see
+  // renderWinRatesTable), hence the name lookup.
+  const pins = players.find(p => p.name === row.name)?.pinnedTrophies || [];
+  if (pins.length) {
+    const pinsEl = document.createElement("span");
+    pinsEl.className = "wr-pins";
+    for (const t of pins) {
+      const img = document.createElement("img");
+      img.className = "wr-pin";
+      img.src = t.emblem;
+      img.alt = t.title;
+      img.title = t.title;
+      pinsEl.appendChild(img);
+    }
+    nameEl.appendChild(pinsEl);
+  }
   header.appendChild(nameEl);
 
   if (row.adjPct !== null && direction) {
@@ -4690,7 +5323,7 @@ async function refreshEverything() {
   // three now-guaranteed-401 requests every time a signed-out visitor
   // switches back to the tab.
   if (!currentUser) return;
-  await Promise.all([syncFromD1(), refreshPlaygroupGames(), loadRosterDiff(), loadAchievements()]);
+  await Promise.all([syncFromD1(), refreshPlaygroupGames(), loadRosterDiff(), refreshAchievementsView()]);
 }
 
 // Only fires on an actual open/return to the app, not a timer -- catches

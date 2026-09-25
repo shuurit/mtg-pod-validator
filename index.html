@@ -17,7 +17,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="style.css?v=44">
+<link rel="stylesheet" href="style.css?v=45">
 
 <!-- Home-screen icon (iOS "Add to Home Screen" + Android/Chrome install).
      Generated from icon-source.png via scripts/generate_icons.py -- rerun
@@ -203,40 +203,57 @@
     <section class="card">
       <h2>Trophies</h2>
       <p class="hint">Computed from playgroup.gg's own per-game event log. Season 3 is the only season with a full history so far.</p>
-      <!-- Two views of this same tab, not two tabs -- see
+      <!-- Three views of this same tab, not three tabs -- see
            setAchievementsView in app.js. "Season Standings" is the
            original one-season-at-a-time view; "Trophy Case" is one
-           player's history aggregated across every closed season. -->
+           player's history across every closed season; "Most Decorated"
+           ranks everyone by trophies held. -->
       <div class="row align-center view-toggle" id="achievements-view-toggle">
         <button type="button" class="view-toggle-btn active" data-view="trophies">Season Standings</button>
         <button type="button" class="view-toggle-btn" data-view="case">Trophy Case</button>
+        <button type="button" class="view-toggle-btn" data-view="leaderboard">Most Decorated</button>
       </div>
-      <div class="row align-center">
+      <div class="row align-center" id="achievements-season-row">
         <label for="achievements-season-select">Season</label>
         <select id="achievements-season-select"></select>
       </div>
-      <div class="row align-center" id="trophy-case-player-row" hidden>
-        <label for="trophy-case-player-select">Player</label>
-        <select id="trophy-case-player-select"></select>
+      <div class="row align-center tc-pickers" id="trophy-case-player-row" hidden>
+        <span class="tc-picker">
+          <label for="trophy-case-player-select">Player</label>
+          <select id="trophy-case-player-select"></select>
+        </span>
+        <span class="tc-picker">
+          <label for="trophy-case-compare-select">Compare with</label>
+          <select id="trophy-case-compare-select"></select>
+        </span>
       </div>
-      <!-- The reveal rule, stated once for the whole season instead of on
-           every card (see renderAchievements in app.js). -->
-      <p class="notice" id="achievements-reveal-notice" hidden>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>
-        Winners are revealed when the season ends.
-      </p>
-      <!-- Shown only for a season that's already concluded (same
-           condition as achievements-reveal-notice above, inverted -- see
-           loadAchievements in app.js) -- replayable any time, not a
-           one-shot "you already saw this" flow. -->
-      <button type="button" id="ceremony-btn" hidden>Watch the Closing Ceremony</button>
-      <!-- Shown only for the current, still-live season (the exact inverse
-           condition of ceremony-btn above) -- see loadAchievements in
-           app.js. Opens close-season-modal for confirmation. -->
-      <button type="button" id="close-season-btn" hidden>Close the Season</button>
+      <!-- Only meaningful in Season Standings, so the whole group is hidden
+           in the other two views (see setAchievementsView). -->
+      <div id="season-view-controls">
+        <!-- The reveal rule, stated once for the whole season instead of on
+             every card (see renderAchievements in app.js). -->
+        <p class="notice" id="achievements-reveal-notice" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>
+          Winners are revealed when the season ends.
+        </p>
+        <!-- Shown only for a season that's already concluded (same
+             condition as achievements-reveal-notice above, inverted -- see
+             loadAchievements in app.js) -- replayable any time, not a
+             one-shot "you already saw this" flow. -->
+        <button type="button" id="ceremony-btn" hidden>Watch the Closing Ceremony</button>
+        <!-- Shown only for the current, still-live season (the exact inverse
+             condition of ceremony-btn above) -- see loadAchievements in
+             app.js. Opens close-season-modal for confirmation. -->
+        <button type="button" id="close-season-btn" hidden>Close the Season</button>
+      </div>
       <p class="hint" id="achievements-status">Shuffling up…</p>
       <div id="achievements-list"></div>
-      <div id="trophy-case-list" hidden></div>
+      <div id="trophy-case-view" hidden>
+        <div id="trophy-case-summary"></div>
+        <div id="trophy-case-compare" class="tc-compare" hidden></div>
+        <div id="trophy-case-list"></div>
+      </div>
+      <div id="trophy-leaderboard-list" hidden></div>
     </section>
   </div>
 </div>
@@ -337,6 +354,29 @@
   </div>
 </div>
 
-<script src="app.js?v=47"></script>
+<!-- Opened by tapping any card in the Trophy Case -- see
+     showTrophyDetailModal in app.js. Body is rebuilt on every open. -->
+<div id="trophy-detail-modal" class="modal-overlay" hidden>
+  <div class="modal-card">
+    <button id="trophy-detail-modal-close" class="icon-btn modal-close" aria-label="Close">&#10005;</button>
+    <div id="trophy-detail-body"></div>
+  </div>
+</div>
+
+<!-- The downloadable image of one player's Trophy Case -- see
+     showCaseCardModal / drawTrophyCaseCard in app.js. -->
+<div id="case-card-modal" class="modal-overlay" hidden>
+  <div class="modal-card">
+    <button id="case-card-modal-close" class="icon-btn modal-close" aria-label="Close">&#10005;</button>
+    <h2>Trophy Case Card</h2>
+    <p id="case-card-status" class="hint">Drawing the card…</p>
+    <canvas id="case-card-canvas" class="case-card-canvas"></canvas>
+    <div id="case-card-download-row" hidden>
+      <a id="case-card-download" class="primary to-game-btn" download="trophy-case.png">Download Card</a>
+    </div>
+  </div>
+</div>
+
+<script src="app.js?v=48"></script>
 </body>
 </html>
