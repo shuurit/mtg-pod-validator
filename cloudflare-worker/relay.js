@@ -96,7 +96,9 @@
  *   request never reaches any handler -- including reads (GET /players,
  *   /games, etc.), not just writes. A signed-in pod member can write any
  *   of the five write endpoints for any deck/player, not just their own;
- *   there's no per-owner restriction in v1. One narrow exception: GET
+ *   there's no per-owner restriction on shared pod data. The one
+ *   own-player-only write is POST /trophy-case/pins, which only ever sets
+ *   the caller's own pinned trophies. One narrow exception: GET
  *   /players, /games, and /deck-win-rates also accept an X-Internal-Key
  *   header matching INTERNAL_API_KEY in place of a session -- that's
  *   scripts/discord_report.py calling in from GitHub Actions
@@ -613,13 +615,29 @@ async function handleSeasonClose(request, env, ctx, session) {
   await env.DB.prepare("UPDATE seasons SET closed_at = ?, closed_by_player_id = ? WHERE id = ?")
     .bind(closedAt, session.playerId, seasonId).run();
 
+  // Lock in the season's trophies now, on the request path, rather than on
+  // whoever's first read of the finished season. Awaited so the client's
+  // follow-up GET /achievements finds them already minted -- otherwise that
+  // read could lazily mint before the missing-stats backfill below runs,
+  // freezing a season that's missing its last game. On failure the lazy
+  // mint in handleAchievements still happens on first read, just without
+  // the backfill. (achievementCtx, not ctx: ctx here is the Workers
+  // ExecutionContext.)
+  let precomputed = null;
+  try {
+    await backfillMissingEventStats(env, seasonId);
+    precomputed = await computeAndMintSeason(env, seasonId);
+  } catch (err) {
+    console.error(`Minting season ${seasonId} at close failed; the first read will mint it instead:`, err);
+  }
+
   // Fire-and-forget, same pattern as handleGamesWrite's post-discord
   // dispatch below -- the season is already durably closed above; a
   // failure reaching archidekt-trading-app (down, bad shared key, no
   // #season_winners channel found, Discord API hiccup) must never fail or
   // delay this response. Logged only (visible via `wrangler tail`).
   ctx.waitUntil(
-    announceSeasonWinners(env, seasonId).catch(err => {
+    announceSeasonWinners(env, seasonId, precomputed).catch(err => {
       console.error(`Season winners announcement failed for season ${seasonId}:`, err);
     })
   );
@@ -1682,6 +1700,24 @@ async function computePlayersData(env) {
     });
   }
 
+  // Pinned trophies, shown on the Player Win Rates tab. In their own
+  // try/catch so a problem reading them can never take down /players, which
+  // the whole app and scripts/discord_report.py depend on. Pins on a
+  // since-retired achievement are skipped here rather than deleted.
+  const pinsByPlayer = {};
+  try {
+    const { results: pinRows } = await env.DB.prepare(
+      "SELECT player_id, achievement_id FROM trophy_pins ORDER BY player_id, position"
+    ).all();
+    for (const r of pinRows) {
+      const a = ACHIEVEMENT_BY_ID.get(r.achievement_id);
+      if (!a) continue;
+      (pinsByPlayer[r.player_id] ||= []).push({ id: a.id, title: a.title, emblem: emblemUrl(a.emblem) });
+    }
+  } catch (err) {
+    console.error("Failed to read trophy pins for /players:", err);
+  }
+
   // Every player, unfiltered -- same split of responsibility as today's
   // players (all) vs podPlayers (playgroup-linked only) in app.js. This
   // endpoint hands back the raw truth; filtering stays client-side.
@@ -1690,6 +1726,7 @@ async function computePlayersData(env) {
     name: p.name,
     playgroupUsername: p.playgroup_username,
     decks: decksByPlayer[p.id] || [],
+    pinnedTrophies: pinsByPlayer[p.id] || [],
   }));
 
   return { generated_at: new Date().toISOString(), players };
@@ -2527,12 +2564,16 @@ function pickBestDeck(decks) {
 // season -- deliberately not a second, different standings computation.
 // players.discord_user_id may be null for a top-3 finisher never manually
 // linked -- callers fall back to their plain name, never fail.
-async function gatherSeasonWinnersData(env, seasonId) {
+// `precomputed` is the { achievementCtx, computed } the close path already
+// built while minting; without it (the debug route) this computes the same
+// thing itself but never mints.
+async function gatherSeasonWinnersData(env, seasonId, precomputed = null) {
   const [achievementCtx, deckWinRatesData, seasonRow] = await Promise.all([
-    gatherAchievementContext(env, seasonId),
+    precomputed ? precomputed.achievementCtx : gatherAchievementContext(env, seasonId),
     computeDeckWinRatesData(env, seasonId),
     env.DB.prepare("SELECT label FROM seasons WHERE id = ?").bind(seasonId).first(),
   ]);
+  const computed = precomputed ? precomputed.computed : computeSeasonAchievements(achievementCtx);
 
   const deckDataByPlayerName = new Map(deckWinRatesData.players.map(p => [p.player, p]));
 
@@ -2555,21 +2596,45 @@ async function gatherSeasonWinnersData(env, seasonId) {
     };
   }).filter(Boolean);
 
-  if (placements.length) {
-    const ids = placements.map(p => p.playerId);
+  const haul = computeTrophyHaul(computed);
+
+  const people = [...placements, ...(haul ? haul.players : [])];
+  if (people.length) {
+    const ids = [...new Set(people.map(p => p.playerId))];
     const placeholders = ids.map(() => "?").join(", ");
     const { results } = await env.DB.prepare(
       `SELECT id, discord_user_id FROM players WHERE id IN (${placeholders})`
     ).bind(...ids).all();
     const discordIdByPlayerId = Object.fromEntries(results.map(r => [r.id, r.discord_user_id]));
-    for (const p of placements) p.discordUserId = discordIdByPlayerId[p.playerId] || null;
+    for (const p of people) p.discordUserId = discordIdByPlayerId[p.playerId] || null;
   }
 
   return {
     seasonId,
     seasonLabel: seasonRow ? seasonRow.label : `Season ${seasonId}`,
     placements,
+    haul,
   };
+}
+
+// Who won the most trophies in one season: every player tied at the top,
+// alphabetical. `computed` comes from computeSeasonAchievements, so it only
+// ever covers current achievements.
+function computeTrophyHaul(computed) {
+  const byPlayer = new Map();
+  for (const c of computed) {
+    if (!c.winner) continue;
+    const entry = byPlayer.get(c.winner.playerId) || { playerId: c.winner.playerId, playerName: c.winner.name, count: 0 };
+    entry.count++;
+    byPlayer.set(c.winner.playerId, entry);
+  }
+  if (!byPlayer.size) return null;
+  const top = Math.max(...[...byPlayer.values()].map(e => e.count));
+  const players = [...byPlayer.values()]
+    .filter(e => e.count === top)
+    .sort((a, b) => a.playerName.localeCompare(b.playerName))
+    .map(e => ({ playerId: e.playerId, playerName: e.playerName, discordUserId: null }));
+  return { count: top, players };
 }
 
 // Discord-markdown announcement text in Tonk Tonk's established
@@ -2579,17 +2644,24 @@ async function gatherSeasonWinnersData(env, seasonId) {
 // already use in-app, for consistency. A finisher with no linked Discord
 // account gets their plain bolded name instead of an @mention.
 function formatSeasonWinnersMessage(data) {
+  const mention = p => (p.discordUserId ? `<@${p.discordUserId}>` : `**${p.playerName}**`);
   const lines = [
     `🔔 Tonk Tonk ring the big bell! **${data.seasonLabel} Winners** is in, come see who top the pod this time!`,
     "",
   ];
   for (const p of data.placements) {
-    const who = p.discordUserId ? `<@${p.discordUserId}>` : `**${p.playerName}**`;
     const pct = (p.winRate * 100).toFixed(1);
     const deckLine = p.bestDeck
       ? `best deck **${p.bestDeck.deck}** (${(p.bestDeck.winRate * 100).toFixed(1)}% over ${p.bestDeck.gamesPlayed} games)`
       : "no deck logged this season, hmm";
-    lines.push(`${PLACE_EMOJI[p.place]} **${PLACE_ORDINAL[p.place]} Place** — ${who}, ${pct}% win rate (${p.wins}-${p.losses}), ${deckLine}!`);
+    lines.push(`${PLACE_EMOJI[p.place]} **${PLACE_ORDINAL[p.place]} Place** — ${mention(p)}, ${pct}% win rate (${p.wins}-${p.losses}), ${deckLine}!`);
+  }
+  if (data.haul) {
+    const names = data.haul.players.map(mention);
+    const who = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+    const each = names.length > 1 ? " each" : "";
+    const noun = data.haul.count === 1 ? "trophy" : "trophies";
+    lines.push("", `🏆 Biggest haul: ${who}${each} walk away with **${data.haul.count} ${noun}**! Tonk Tonk need bigger shelf!`);
   }
   lines.push("", "🤑 Great season, everybody! Tonk Tonk already sharpening deals for the next one, come back soon!");
   return lines.join("\n");
@@ -2601,8 +2673,8 @@ function formatSeasonWinnersMessage(data) {
 // Discord bot token here. Throws on any failure -- the caller's
 // ctx.waitUntil.catch() logs it; never surfaced to whoever closed the
 // season, never retried, never undoes the close.
-async function announceSeasonWinners(env, seasonId) {
-  const data = await gatherSeasonWinnersData(env, seasonId);
+async function announceSeasonWinners(env, seasonId, precomputed = null) {
+  const data = await gatherSeasonWinnersData(env, seasonId, precomputed);
   if (!data.placements.length) {
     console.log(`Season ${seasonId} closed with no eligible finishers -- skipping Discord announcement.`);
     return;
@@ -2918,6 +2990,54 @@ async function handleTrophyLeaderboard(env) {
   }, 200, { "Cache-Control": "no-store" });
 }
 
+// POST /trophy-case/pins -- replaces the signed-in player's pinned
+// trophies (shown next to their name on the Player Win Rates tab). This is
+// the app's one own-player-only write: every other write endpoint edits
+// shared pod data any member may fix, but pins are a personal choice, so
+// this always writes session.playerId and ignores any player id in the
+// body. Only trophies the caller has actually won can be pinned.
+async function handleTrophyPinsWrite(request, env, session) {
+  let payload;
+  try {
+    payload = await request.json();
+  } catch {
+    return jsonResponse({ error: "Invalid JSON" }, 400);
+  }
+  const ids = payload ? payload.achievementIds : undefined;
+  if (!Array.isArray(ids)) {
+    return jsonResponse({ error: "achievementIds must be an array" }, 400);
+  }
+  if (ids.length > MAX_TROPHY_PINS) {
+    return jsonResponse({ error: `You can pin up to ${MAX_TROPHY_PINS} trophies.` }, 400);
+  }
+  if (ids.some(id => typeof id !== "string" || !ACHIEVEMENT_BY_ID.has(id))) {
+    return jsonResponse({ error: "Unknown trophy." }, 400);
+  }
+  if (new Set(ids).size !== ids.length) {
+    return jsonResponse({ error: "Each trophy can only be pinned once." }, 400);
+  }
+
+  const playerId = session.playerId;
+  if (ids.length) {
+    const { results } = await env.DB.prepare(
+      "SELECT DISTINCT achievement_id FROM season_awards WHERE player_id = ?"
+    ).bind(playerId).all();
+    const won = new Set(results.map(r => r.achievement_id));
+    const notWon = ids.find(id => !won.has(id));
+    if (notWon) {
+      return jsonResponse({ error: `You haven't won ${ACHIEVEMENT_BY_ID.get(notWon).title} yet.` }, 403);
+    }
+  }
+
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM trophy_pins WHERE player_id = ?").bind(playerId),
+    ...ids.map((id, position) => env.DB.prepare(
+      "INSERT INTO trophy_pins (player_id, achievement_id, position) VALUES (?, ?, ?)"
+    ).bind(playerId, id, position)),
+  ]);
+  return jsonResponse({ ok: true, playerId, pins: ids }, 200);
+}
+
 // POST /achievements/backfill-runner-ups[?dryRun=true] -- fills the
 // runner_up_* columns for rows minted before those columns existed (see
 // schema.sql). Safe to rerun: only ever touches rows WHERE
@@ -3012,6 +3132,29 @@ async function handleAchievementsBackfill(env, force) {
   }
 
   return jsonResponse({ processed, remaining: rows.length === MAX_EVENT_STATS_BACKFILL_PER_RUN, errors }, 200);
+}
+
+// Run just before a season's trophies are locked in at close: fetch event
+// stats for any of its games that don't have them yet. POST /games computes
+// those stats in ctx.waitUntil after it has already responded, so closing
+// right after the last game could otherwise mint without that game.
+// Same query as handleAchievementsBackfill, scoped to one season.
+async function backfillMissingEventStats(env, seasonId) {
+  const { results: rows } = await env.DB.prepare(`
+    SELECT g.id AS game_id, g.playgroup_game_id
+    FROM games g
+    WHERE g.season_id = ? AND g.playgroup_game_id IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM game_event_stats s WHERE s.game_id = g.id)
+    ORDER BY g.id
+    LIMIT ?
+  `).bind(seasonId, MAX_EVENT_STATS_BACKFILL_PER_RUN).all();
+  for (const row of rows) {
+    try {
+      await computeAndStoreGameEventStats(env, row.game_id, row.playgroup_game_id);
+    } catch (err) {
+      console.error(`Event-stats backfill at season close failed for game ${row.game_id}:`, err);
+    }
+  }
 }
 
 // ---------- router ----------
@@ -3116,6 +3259,10 @@ export default {
 
     if (request.method === "GET" && url.pathname === "/trophy-leaderboard") {
       return handleTrophyLeaderboard(env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/trophy-case/pins") {
+      return handleTrophyPinsWrite(request, env, session);
     }
 
     if (request.method === "POST" && url.pathname === "/seasons/close") {
