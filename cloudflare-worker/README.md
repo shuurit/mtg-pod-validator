@@ -1,8 +1,9 @@
 # mtg-pod-validator relay
 
-This Worker holds two write/read credentials server-side so the browser
-never sees either of them, and reads/writes the app's Cloudflare D1
-database directly:
+This Worker holds its credentials server-side so the browser never sees
+any of them, and reads/writes the app's Cloudflare D1 database directly.
+Five secrets, the same list as the `Secrets:` block at the top of
+`relay.js`:
 
 - **GITHUB_TOKEN** — fires a `repository_dispatch` event at the repo after
   a game is submitted (`POST /games`), to trigger the Discord-posting
@@ -11,6 +12,18 @@ database directly:
 - **PLAYGROUP_API_KEY** — reads playgroup.gg live (games, active-league
   membership, and full member/deck rosters) so the app doesn't need a
   manually-regenerated static file.
+- **DISCORD_CLIENT_SECRET** — completes Discord sign-in: `GET
+  /auth/discord/callback` exchanges the OAuth code for the player's Discord
+  identity. The matching client ID is public and lives in the code as
+  `DISCORD_CLIENT_ID`.
+- **INTERNAL_API_KEY** — lets `scripts/discord_report.py` (running in
+  GitHub Actions, with no Discord account) read `GET /players`, `/games`
+  and `/deck-win-rates` by sending an `X-Internal-Key` header instead of
+  signing in. Must match the `RELAY_INTERNAL_KEY` GitHub repo secret.
+- **SEASON_ANNOUNCE_API_KEY** — shared secret for the "Season X Winners"
+  Discord post at season close, which this Worker asks the separate
+  archidekt-trading-app Worker (Tonk Tonk's bot) to send. Must match that
+  project's own `SEASON_ANNOUNCE_API_KEY`.
 
 It also uses a **KV namespace** (`DECK_CACHE`, no secret involved — just
 storage), for:
@@ -109,33 +122,16 @@ works without one.
 - `GET /deck-win-rates` — games/wins/win-rate per deck, and per player
   (subtotal), scoped to the current season. Used by the Discord scripts
   (`scripts/discord_report.py`).
-- `GET /achievements?season=<id>` — season standings for an extensible
-  list of achievements (30 as of this writing) computed from
-  `game_event_stats`, `game_results`, and (for Most Likely to Win)
+- `GET /achievements?season=<id>` — season standings for the achievement
+  list (28 as of this writing; see `ACHIEVEMENTS` in `relay.js`) computed
+  from `game_event_stats`, `game_results`, and (for Most Likely to Win)
   `computeRankingsData`'s Player Adjusted Win Rate. `season` defaults to the most
   recent season. Winners are withheld (`winner: null` for everything,
   `seasonActive: true` in the response) while that season is still being
-  played, revealed once playgroup.gg's active league moves on. Powers the
-  app's Achievements tab. Each achievement also carries `votes: {keep, cut,
-  mine}` from `achievement_votes` (not season-scoped); the response also
-  carries top-level `votingOpen` (`Date.now() < ACHIEVEMENT_VOTING_DEADLINE`)
-  — see `POST /achievements/vote` below.
-- `POST /achievements/vote` — body `{achievementId, vote}` where `vote` is
-  `"keep"`, `"cut"`, or `null` to retract; casts (or changes) the signed-in
-  player's own keep/cut opinion on one achievement, for deciding which of
-  the season's achievements are worth keeping before it ends. Upserts on
-  `(achievement_id, player_id)`, so voting again just changes this player's
-  prior vote. Returns the updated `{keep, cut, mine}` tally for that
-  achievement. Returns 403 once `ACHIEVEMENT_VOTING_DEADLINE` (a hardcoded
-  one-time cutoff, currently 2026-09-15) has passed — the app switches the
-  Keep/Cut buttons to a read-only tally at that point rather than letting a
-  vote fail silently.
-- `POST /achievements/comment` — body `{comment}`; free-text feedback about
-  the achievements list overall (not tied to a specific achievement or
-  gated by the voting deadline above), stored in `achievement_comments`.
-  Write-only — nothing reads it back or renders it anywhere in the app;
-  read it directly with `wrangler d1 execute` when deciding what to
-  actually keep or cut.
+  played, and revealed once it's closed (`POST /seasons/close`) or
+  playgroup.gg's active league moves on. The first read of a finished
+  season also locks its winners and runner-ups into `season_awards` for
+  good. Powers the Trophies tab's Season Standings view.
 - `POST /achievements/backfill[?force=true]` — one-time (safe-to-rerun)
   pass that fills in `game_event_stats` for games logged before that table
   existed, by re-fetching each one's event log from playgroup.gg. Capped
@@ -144,6 +140,39 @@ works without one.
   regardless of whether it already has a stats row — needed whenever a new
   column gets added to what's captured, since the default run only looks
   at games with no row at all.
+- `POST /achievements/backfill-runner-ups[?dryRun=true]` — fills the
+  runner-up columns on `season_awards` rows locked in before those columns
+  existed. Safe to rerun: it only touches rows that have no runner-up yet
+  and never changes a winner. A row whose stored winner no longer matches
+  today's data is reported as `winner-mismatch` and skipped rather than
+  guessed at. `dryRun=true` returns the per-row report without writing.
+- `GET /trophy-case?player=<id>` — one player's Trophy Case across every
+  closed season, read from `season_awards` (`player` defaults to the
+  signed-in player). One slot per current achievement, each with
+  `category` (its shelf), `won`/`count`, `history` (every season won, with
+  its value), `holders` (how many players have ever won it), `runnerUp`
+  (locked slots only: the latest season this player finished second, and
+  who won), `status` (`new`/`defending`/`dethroned`, comparing the two most
+  recent closed seasons; `null` until there are two), and `pinned`. Also
+  returns `categories` (shelf order and labels), `pins`, and
+  `mintedSeasonCount`. Rows for retired achievements are ignored.
+- `GET /trophy-leaderboard` — Most Decorated: every player (except the
+  ones excluded from trophies) ranked by distinct trophies held across
+  every closed season, then total wins counting repeats, then name.
+  Players tied on both share a rank.
+- `POST /trophy-case/pins` — body `{achievementIds}`, up to 3. Replaces
+  the signed-in player's pinned trophies, shown next to their name on
+  Player Win Rates. Always writes the caller's own pins (any player id in
+  the body is ignored), and only for trophies they've won: 400 for more
+  than 3, duplicates, or unknown/retired ids; 403 for a trophy they
+  haven't won. `GET /players` returns each player's `pinnedTrophies`.
+- `POST /seasons/close` — closes the current season, resolved the same way
+  as `POST /games` (never taken from the client). Locks its trophies into
+  `season_awards` right away and fires the "Season X Winners" Discord
+  post (best effort; see `SEASON_ANNOUNCE_API_KEY`). Closing an
+  already-closed season is a no-op. `GET /debug/season-winners?season=<id>`
+  returns that post's exact text without sending it or locking anything
+  in.
 - `POST /games` — logs a game: resolves the season from playgroup.gg's
   *current* active league (never trusted from the client, auto-creating a
   season the first time a league is seen), resolves each participant's
@@ -177,8 +206,17 @@ no new bindings, same `DECK_CACHE`/`DB` bindings as before.
    create one.
 3. **Deploy**: Cloudflare dashboard → Workers & Pages → Create → Worker →
    Start with Hello World → paste in `relay.js` → Deploy.
-4. **Secrets**: Worker → Settings → Variables and Secrets → add both
-   `GITHUB_TOKEN` and `PLAYGROUP_API_KEY`.
+4. **Secrets**: Worker → Settings → Variables and Secrets (or `npx
+   wrangler secret put <NAME>` from this folder) → add all five listed at
+   the top of this file:
+   - `GITHUB_TOKEN` (step 1) and `PLAYGROUP_API_KEY` (step 2).
+   - `DISCORD_CLIENT_SECRET` — Discord Developer Portal → your application
+     → OAuth2 → Client Secret.
+   - `INTERNAL_API_KEY` — any random string. Set the same value as the
+     `RELAY_INTERNAL_KEY` GitHub repo secret.
+   - `SEASON_ANNOUNCE_API_KEY` — any random string. Set the same value on
+     archidekt-trading-app's Pages project (`npx wrangler pages secret put
+     SEASON_ANNOUNCE_API_KEY --project-name archidekt-trading-app`).
 5. **KV namespace**: **Workers & Pages** → **KV** → **Create a namespace**
    (e.g. `mtg-pod-validator-cache`) → bind it to the Worker under
    **Settings** → **Bindings**, variable name exactly `DECK_CACHE`.
@@ -200,9 +238,11 @@ screenshot each of the player rankings, Current Deck Strength, and Deck
 Win Rates (see `scripts/post_to_discord.py` — rendered as images with
 matplotlib, not plain text, since a ~74-row wall of text was unreadable in
 practice; data read live from this Worker's `/players`, `/games`, and
-`/deck-win-rates`, not from a file). Needs one GitHub repo secret:
+`/deck-win-rates`, not from a file). Needs two GitHub repo secrets:
 `SEASON_STAT_WEBHOOK` (Discord: channel → Edit Channel → Integrations →
-Webhooks → New Webhook → Copy Webhook URL). Without it, the game still
+Webhooks → New Webhook → Copy Webhook URL) and `RELAY_INTERNAL_KEY` (the
+same value as the Worker's `INTERNAL_API_KEY`, so the scripts can read
+those endpoints without signing in). Without the webhook, the game still
 gets logged either way — only the Discord post fails, silently (logged via
 `console.error`, not surfaced to the client).
 
