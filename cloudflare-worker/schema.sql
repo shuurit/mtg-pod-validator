@@ -283,11 +283,14 @@ CREATE TABLE achievement_comments (
 -- One row per (season, achievement) once that season's winner is frozen
 -- permanently -- see mintSeasonAwardsIfNeeded in relay.js. achievement_id
 -- matches ACHIEVEMENTS[].id in relay.js, same "no FK, it's not a table of
--- its own" convention as achievement_votes.achievement_id above. Rows are
--- never updated or deleted once written -- a season's trophy case is
--- permanent, even if underlying game data were ever corrected later.
--- Absence of any rows for a season just means it hasn't been read as
--- concluded yet, not that it has no winners.
+-- its own" convention as achievement_votes.achievement_id above. The winner
+-- columns are never updated or deleted once written -- a season's trophy
+-- case is permanent, even if underlying game data were ever corrected
+-- later. The one exception is the runner_up_* columns: rows minted before
+-- they existed can have them filled in once, by POST
+-- /achievements/backfill-runner-ups (only WHERE runner_up_player_id IS
+-- NULL, never overwriting). Absence of any rows for a season just means it
+-- hasn't been minted yet, not that it has no winners.
 CREATE TABLE season_awards (
   season_id INTEGER NOT NULL REFERENCES seasons(id),
   achievement_id TEXT NOT NULL,
@@ -295,6 +298,29 @@ CREATE TABLE season_awards (
   value REAL,               -- winner.value at mint time, may be null
   display TEXT NOT NULL,    -- winner.display, frozen verbatim forever
   minted_at TEXT NOT NULL DEFAULT (datetime('now')),
+  -- The best result by anyone other than the winner, computed from the same
+  -- season data at mint time (see computeSeasonAchievements in relay.js).
+  -- Drives the Trophy Case's "So close" box. All three NULL when nobody
+  -- else qualified.
+  runner_up_player_id INTEGER REFERENCES players(id),
+  runner_up_value REAL,
+  runner_up_display TEXT,
   PRIMARY KEY (season_id, achievement_id)
 );
 CREATE INDEX idx_season_awards_player ON season_awards(player_id);
+CREATE INDEX idx_season_awards_runner_up ON season_awards(runner_up_player_id);
+
+-- Up to 3 trophies a player chooses to show next to their name on the
+-- Player Win Rates tab (see POST /trophy-case/pins in relay.js). Only ever
+-- written for the signed-in player's own id, and only for trophies they've
+-- actually won (a season_awards row with their player_id). achievement_id
+-- follows the same no-FK convention as season_awards above; pins on a
+-- since-retired achievement are filtered out on read rather than deleted.
+CREATE TABLE trophy_pins (
+  player_id INTEGER NOT NULL REFERENCES players(id),
+  achievement_id TEXT NOT NULL,
+  position INTEGER NOT NULL CHECK (position BETWEEN 0 AND 2),
+  pinned_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (player_id, achievement_id),
+  UNIQUE (player_id, position)
+);

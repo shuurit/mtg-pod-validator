@@ -2000,6 +2000,7 @@ const MIN_GAMES_FOR_RATE = 3;
 const ACHIEVEMENTS = [
   {
     id: "season-champion",
+    category: "standings",
     title: "Most Likely to Win",
     emblem: "emblems/season-champion.png",
     description: "Highest Player Adjusted Win Rate across the season.",
@@ -2016,6 +2017,7 @@ const ACHIEVEMENTS = [
   },
   {
     id: "second-place",
+    category: "standings",
     title: "Silver Lining",
     emblem: "emblems/second-place.png",
     description: "2nd-highest Player Adjusted Win Rate across the season.",
@@ -2032,6 +2034,7 @@ const ACHIEVEMENTS = [
   },
   {
     id: "third-place",
+    category: "standings",
     title: "Bronze Age",
     emblem: "emblems/third-place.png",
     description: "3rd-highest Player Adjusted Win Rate across the season.",
@@ -2048,6 +2051,7 @@ const ACHIEVEMENTS = [
   },
   {
     id: "most-damage",
+    category: "combat",
     title: "I Hate My Friends",
     emblem: "emblems/most-damage.png",
     description: "Most total damage dealt across the season.",
@@ -2058,6 +2062,7 @@ const ACHIEVEMENTS = [
   },
   {
     id: "most-damage-game",
+    category: "combat",
     title: "Overkill",
     emblem: "emblems/most-damage-game.png",
     description: "Most damage dealt in a single game.",
@@ -2071,6 +2076,7 @@ const ACHIEVEMENTS = [
   },
   {
     id: "most-healing",
+    category: "table",
     title: "The Medic",
     emblem: "emblems/most-healing.png",
     description: "Most total healing done across the season.",
@@ -2081,6 +2087,7 @@ const ACHIEVEMENTS = [
   },
   {
     id: "healing-ratio",
+    category: "table",
     title: "The Pacifist",
     emblem: "emblems/healing-ratio.png",
     description: "Most healing done per point of damage dealt.",
@@ -2096,6 +2103,7 @@ const ACHIEVEMENTS = [
   },
   {
     id: "most-knockouts",
+    category: "combat",
     title: "Grim Reaper",
     emblem: "emblems/most-knockouts.png",
     description: "Most knockouts across the season.",
@@ -2106,6 +2114,7 @@ const ACHIEVEMENTS = [
   },
   {
     id: "most-knockouts-game",
+    category: "combat",
     title: "One-Man Army",
     emblem: "emblems/most-knockouts-game.png",
     description: "Most knockouts in a single game.",
@@ -2119,6 +2128,7 @@ const ACHIEVEMENTS = [
   },
   {
     id: "most-fun",
+    category: "table",
     title: "Life of the Party",
     emblem: "emblems/most-fun.png",
     description: "Highest average self-reported fun rating.",
@@ -2129,6 +2139,7 @@ const ACHIEVEMENTS = [
   },
   {
     id: "saltiest",
+    category: "table",
     title: "Tilted",
     emblem: "emblems/saltiest.png",
     description: "Highest average self-reported salt rating.",
@@ -2139,6 +2150,7 @@ const ACHIEVEMENTS = [
   },
   {
     id: "most-mulligans",
+    category: "tempo",
     title: "Bad Hands",
     emblem: "emblems/most-mulligans.png",
     description: "Most mulligans taken across the season.",
@@ -2149,6 +2161,7 @@ const ACHIEVEMENTS = [
   },
   {
     id: "fewest-mulligans",
+    category: "tempo",
     title: "Lucky Draw",
     emblem: "emblems/fewest-mulligans.png",
     description: "Lowest average mulligans taken per game.",
@@ -2159,6 +2172,7 @@ const ACHIEVEMENTS = [
   },
   {
     id: "combat-wins",
+    category: "combat",
     title: "Timmy Award",
     emblem: "emblems/combat-wins.png",
     description: "Most wins by combat damage.",
@@ -2169,6 +2183,7 @@ const ACHIEVEMENTS = [
   },
   {
     id: "altwin-wins",
+    category: "playstyle",
     title: "Johnny Award",
     emblem: "emblems/altwin-wins.png",
     description: "Most wins by a non-combat win condition.",
@@ -2179,6 +2194,7 @@ const ACHIEVEMENTS = [
   },
   {
     id: "front-runner",
+    category: "playstyle",
     title: "Front Runner",
     emblem: "emblems/front-runner.png",
     description: "Best win rate in games they went first.",
@@ -2192,6 +2208,7 @@ const ACHIEVEMENTS = [
   },
   {
     id: "closest-call",
+    category: "survival",
     title: "Nine Lives",
     emblem: "emblems/closest-call.png",
     description: "Won with the lowest life total remaining.",
@@ -2208,6 +2225,7 @@ const ACHIEVEMENTS = [
   },
   {
     id: "untouchable",
+    category: "survival",
     title: "Untouchable",
     emblem: "emblems/untouchable.png",
     description: "Won with the highest life total remaining.",
@@ -2224,6 +2242,7 @@ const ACHIEVEMENTS = [
   },
   {
     id: "bridesmaid",
+    category: "standings",
     title: "Bridesmaid",
     emblem: "emblems/bridesmaid.png",
     description: "Most 2nd-place finishes across the season.",
@@ -2234,6 +2253,7 @@ const ACHIEVEMENTS = [
   },
   {
     id: "wooden-spoon",
+    category: "standings",
     title: "Wooden Spoon",
     emblem: "emblems/wooden-spoon.png",
     description: "Most last-place finishes across the season.",
@@ -2244,6 +2264,7 @@ const ACHIEVEMENTS = [
   },
   {
     id: "longest-survivor",
+    category: "survival",
     title: "Last One Standing",
     emblem: "emblems/longest-survivor.png",
     description: "Highest average turn of elimination in games they lost.",
@@ -2254,6 +2275,7 @@ const ACHIEVEMENTS = [
   },
   {
     id: "early-exit",
+    category: "survival",
     title: "Early Exit",
     emblem: "emblems/early-exit.png",
     description: "Lowest average turn of elimination in games they lost.",
@@ -2264,6 +2286,7 @@ const ACHIEVEMENTS = [
   },
   {
     id: "most-decks",
+    category: "playstyle",
     title: "Brewmaster",
     emblem: "emblems/most-decks.png",
     description: "Most different decks piloted across the season.",
@@ -2282,6 +2305,7 @@ const ACHIEVEMENTS = [
   },
   {
     id: "most-popoffs",
+    category: "playstyle",
     title: "Went Off",
     emblem: "emblems/most-popoffs.png",
     description: "Most pop-off turns across the season.",
@@ -2292,6 +2316,7 @@ const ACHIEVEMENTS = [
   },
   {
     id: "most-disruptions",
+    category: "playstyle",
     title: "Punching Bag",
     emblem: "emblems/most-disruptions.png",
     description: "Most times disrupted across the season.",
@@ -2302,6 +2327,7 @@ const ACHIEVEMENTS = [
   },
   {
     id: "best-recovery-rate",
+    category: "playstyle",
     title: "Comeback Kid",
     emblem: "emblems/best-recovery-rate.png",
     description: "Best recovery rate after being disrupted.",
@@ -2319,6 +2345,7 @@ const ACHIEVEMENTS = [
   },
   {
     id: "longest-turn",
+    category: "tempo",
     title: "Analysis Paralysis",
     emblem: "emblems/longest-turn.png",
     description: "Longest single turn across the season.",
@@ -2336,6 +2363,7 @@ const ACHIEVEMENTS = [
   },
   {
     id: "shortest-turn",
+    category: "tempo",
     title: "Speedrun",
     emblem: "emblems/shortest-turn.png",
     description: "Lowest average turn length across the season.",
@@ -2360,6 +2388,26 @@ const ACHIEVEMENTS = [
     },
   },
 ];
+
+// Trophy Case shelf order and labels -- every ACHIEVEMENTS entry's
+// `category` is one of these ids. Returned as-is by GET /trophy-case so the
+// client never hardcodes the grouping.
+const ACHIEVEMENT_CATEGORIES = [
+  { id: "standings", label: "Standings" },
+  { id: "combat", label: "Combat" },
+  { id: "survival", label: "Survival" },
+  { id: "playstyle", label: "Playstyle" },
+  { id: "table", label: "Table" },
+  { id: "tempo", label: "Draws & Tempo" },
+];
+// Current achievements only. season_awards still holds rows for retired
+// ids (they were cut after Season 2 minted); every Trophy Case read goes
+// through this map so those rows are ignored consistently.
+const ACHIEVEMENT_BY_ID = new Map(ACHIEVEMENTS.map(a => [a.id, a]));
+// New/Defending/Dethroned compare the two most recent minted seasons, so
+// they stay off until there are two to compare.
+const TROPHY_STATUS_MIN_MINTED_SEASONS = 2;
+const MAX_TROPHY_PINS = 3;
 
 // One season's worth of raw material every achievement above draws from --
 // gathered once per request, not once per achievement, since several
@@ -2418,6 +2466,38 @@ async function gatherAchievementContext(env, seasonId) {
     eventStats, gameResults, rankings,
     eventStatsByPlayer: groupByPlayer(eventStats),
   };
+}
+
+// The same season context with one player's rows removed from every source
+// a compute() can read. Every compute is a pure function of ctx, so running
+// it again on this gives "the best result by anyone else" -- the runner-up.
+// For the fixed-index ranking trophies that naturally means the next
+// finisher down (Most Likely to Win -> 2nd place, Silver Lining -> 3rd,
+// Bronze Age -> 4th); for single-game trophies it's the best game by a
+// different player, not the winner's own second-best game.
+function ctxWithoutPlayer(ctx, playerId) {
+  const eventStats = ctx.eventStats.filter(r => r.player_id !== playerId);
+  return {
+    eventStats,
+    gameResults: ctx.gameResults.filter(r => r.player_id !== playerId),
+    rankings: ctx.rankings.filter(r => r.playerId !== playerId),
+    eventStatsByPlayer: groupByPlayer(eventStats),
+  };
+}
+
+// Winner and runner-up for every achievement, in ACHIEVEMENTS order. The
+// filtered context is built once per distinct winner (one player can win
+// a dozen trophies in a season).
+function computeSeasonAchievements(ctx) {
+  const withoutByPlayer = new Map();
+  return ACHIEVEMENTS.map(a => {
+    const winner = a.compute(ctx);
+    if (!winner) return { id: a.id, winner: null, runnerUp: null };
+    if (!withoutByPlayer.has(winner.playerId)) {
+      withoutByPlayer.set(winner.playerId, ctxWithoutPlayer(ctx, winner.playerId));
+    }
+    return { id: a.id, winner, runnerUp: a.compute(withoutByPlayer.get(winner.playerId)) };
+  });
 }
 
 // ---------- Season-close Discord announcement ----------
@@ -2570,23 +2650,41 @@ async function handleDebugSeasonWinners(request, env) {
 // achievement_id) PRIMARY KEY below makes the loser of that race a
 // no-op per row rather than a duplicate or an error, same reasoning
 // resolveSeasonId's own INSERT OR IGNORE already relies on. Takes the
-// achievements array this same request already computed rather than
-// recomputing anything -- gatherAchievementContext only ever needs to
-// run once per request. Once written, a row here is never updated or
-// deleted, even if the underlying game data were ever corrected later --
-// what you won is what you won.
-async function mintSeasonAwardsIfNeeded(env, seasonId, achievements) {
+// computeSeasonAchievements result this same request already built rather
+// than recomputing anything. Written as one batch, so a season is either
+// fully minted or not at all -- a failure part-way can never leave a
+// partial season that the COUNT check would then treat as done. Once
+// written, a row's winner is never updated or deleted, even if the
+// underlying game data were ever corrected later -- what you won is what
+// you won.
+async function mintSeasonAwardsIfNeeded(env, seasonId, computed) {
   const { count } = await env.DB.prepare(
     "SELECT COUNT(*) AS count FROM season_awards WHERE season_id = ?"
   ).bind(seasonId).first();
   if (count > 0) return;
 
-  const withWinners = achievements.filter(a => a.winner);
-  for (const a of withWinners) {
-    await env.DB.prepare(
-      "INSERT OR IGNORE INTO season_awards (season_id, achievement_id, player_id, value, display) VALUES (?, ?, ?, ?, ?)"
-    ).bind(seasonId, a.id, a.winner.playerId, a.winner.value ?? null, a.winner.display).run();
-  }
+  const inserts = computed.filter(c => c.winner).map(c => env.DB.prepare(`
+    INSERT OR IGNORE INTO season_awards
+      (season_id, achievement_id, player_id, value, display, runner_up_player_id, runner_up_value, runner_up_display)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    seasonId, c.id, c.winner.playerId, c.winner.value ?? null, c.winner.display,
+    c.runnerUp ? c.runnerUp.playerId : null,
+    c.runnerUp ? c.runnerUp.value ?? null : null,
+    c.runnerUp ? c.runnerUp.display : null,
+  ));
+  if (inserts.length) await env.DB.batch(inserts);
+}
+
+// Everything a season close needs, in one place: compute the context,
+// every winner and runner-up, and mint them. Used by handleAchievements
+// (lazy, on first read of a finished season) and handleSeasonClose (eager,
+// at the moment of closing).
+async function computeAndMintSeason(env, seasonId) {
+  const achievementCtx = await gatherAchievementContext(env, seasonId);
+  const computed = computeSeasonAchievements(achievementCtx);
+  await mintSeasonAwardsIfNeeded(env, seasonId, computed);
+  return { achievementCtx, computed };
 }
 
 // season query param defaults to the most recent season (highest id) --
@@ -2640,9 +2738,8 @@ async function handleAchievements(request, env, session) {
   if (seasonActive) {
     achievements = ACHIEVEMENTS.map(a => ({ id: a.id, title: a.title, emblem: emblemUrl(a.emblem), description: a.description, winner: null }));
   } else {
-    const ctx = await gatherAchievementContext(env, seasonId);
-    achievements = ACHIEVEMENTS.map(a => ({ id: a.id, title: a.title, emblem: emblemUrl(a.emblem), description: a.description, winner: a.compute(ctx) }));
-    await mintSeasonAwardsIfNeeded(env, seasonId, achievements);
+    const { computed } = await computeAndMintSeason(env, seasonId);
+    achievements = ACHIEVEMENTS.map((a, i) => ({ id: a.id, title: a.title, emblem: emblemUrl(a.emblem), description: a.description, winner: computed[i].winner }));
   }
 
   return jsonResponse({
@@ -2666,51 +2763,215 @@ async function handleAchievements(request, env, session) {
 // filter runs upstream, inside gatherAchievementContext, before minting
 // ever sees their name) -- their case renders as all-locked with no
 // extra filtering needed here.
+//
+// Per slot, on top of won/count/latest*: category (shelf), history (every
+// season won), holders (distinct players who have ever won it -- rarity),
+// runnerUp (locked slots only: the latest season this player finished
+// second for it), status (new/defending/dethroned against the two most
+// recent minted seasons, only once there are two), and pinned.
 async function handleTrophyCase(request, env, session) {
   const url = new URL(request.url);
   const playerParam = url.searchParams.get("player");
   const playerId = playerParam ? Number(playerParam) : session.playerId;
 
-  const player = await env.DB.prepare("SELECT id, name FROM players WHERE id = ?").bind(playerId).first();
+  const [player, minted, pinsRes] = await Promise.all([
+    env.DB.prepare("SELECT id, name FROM players WHERE id = ?").bind(playerId).first(),
+    loadMintedAwards(env),
+    env.DB.prepare("SELECT achievement_id FROM trophy_pins WHERE player_id = ? ORDER BY position").bind(playerId).all(),
+  ]);
   if (!player) {
     return jsonResponse({ error: `Unknown player ${playerId}` }, 400);
   }
 
-  const { results } = await env.DB.prepare(`
-    SELECT sa.achievement_id, sa.display, s.label AS season_label
-    FROM season_awards sa
-    JOIN seasons s ON s.id = sa.season_id
-    WHERE sa.player_id = ?
-    ORDER BY sa.season_id ASC
-  `).bind(playerId).all();
+  const { mintedSeasons, rows } = minted;
+  const pins = pinsRes.results.map(r => r.achievement_id).filter(id => ACHIEVEMENT_BY_ID.has(id));
+  const pinned = new Set(pins);
+  const statusTagsActive = mintedSeasons.length >= TROPHY_STATUS_MIN_MINTED_SEASONS;
+  const latestSeasonId = mintedSeasons.length ? mintedSeasons[mintedSeasons.length - 1].id : null;
+  const previousSeasonId = mintedSeasons.length >= 2 ? mintedSeasons[mintedSeasons.length - 2].id : null;
 
-  // ORDER BY season_id ASC above means the last row written into each
-  // bucket as this loop runs is always the most recent season -- exactly
-  // what latestSeasonLabel/latestDisplay below are meant to show.
-  const byAchievement = new Map();
-  for (const row of results) {
-    const bucket = byAchievement.get(row.achievement_id) || { count: 0 };
-    bucket.count++;
-    bucket.latestSeasonLabel = row.season_label;
-    bucket.latestDisplay = row.display;
-    byAchievement.set(row.achievement_id, bucket);
+  // rows come back season-ascending, so each per-achievement list is too.
+  const rowsByAchievement = new Map();
+  for (const r of rows) {
+    if (!rowsByAchievement.has(r.achievement_id)) rowsByAchievement.set(r.achievement_id, []);
+    rowsByAchievement.get(r.achievement_id).push(r);
   }
 
   const slots = ACHIEVEMENTS.map(a => {
-    const won = byAchievement.get(a.id);
+    const all = rowsByAchievement.get(a.id) || [];
+    const mine = all.filter(r => r.player_id === player.id);
+    const latest = mine[mine.length - 1];
+
+    let status = null;
+    if (statusTagsActive) {
+      const wonLatest = mine.some(r => r.season_id === latestSeasonId);
+      const wonPrevious = mine.some(r => r.season_id === previousSeasonId);
+      const takenByOther = all.some(r => r.season_id === latestSeasonId && r.player_id !== player.id);
+      if (wonLatest && wonPrevious) status = "defending";
+      else if (wonLatest) status = "new";
+      else if (wonPrevious && takenByOther) status = "dethroned";
+    }
+
+    let runnerUp = null;
+    if (!mine.length) {
+      const ru = [...all].reverse().find(r => r.runner_up_player_id === player.id);
+      if (ru) {
+        runnerUp = { seasonLabel: ru.season_label, display: ru.runner_up_display, winnerName: ru.winner_name, winnerDisplay: ru.display };
+      }
+    }
+
     return {
       id: a.id,
       title: a.title,
       description: a.description,
       emblem: emblemUrl(a.emblem),
-      won: !!won,
-      count: won ? won.count : 0,
-      latestSeasonLabel: won ? won.latestSeasonLabel : null,
-      latestDisplay: won ? won.latestDisplay : null,
+      category: a.category,
+      won: mine.length > 0,
+      count: mine.length,
+      latestSeasonLabel: latest ? latest.season_label : null,
+      latestDisplay: latest ? latest.display : null,
+      history: mine.map(r => ({ seasonId: r.season_id, seasonLabel: r.season_label, display: r.display })),
+      holders: new Set(all.map(r => r.player_id)).size,
+      status,
+      runnerUp,
+      pinned: pinned.has(a.id),
     };
   });
 
-  return jsonResponse({ playerId: player.id, playerName: player.name, slots }, 200, { "Cache-Control": "no-store" });
+  return jsonResponse({
+    playerId: player.id,
+    playerName: player.name,
+    totalSlots: ACHIEVEMENTS.length,
+    mintedSeasonCount: mintedSeasons.length,
+    mintedSeasons,
+    statusTagsActive,
+    categories: ACHIEVEMENT_CATEGORIES,
+    pins,
+    slots,
+  }, 200, { "Cache-Control": "no-store" });
+}
+
+// Every minted season_awards row with its season label and winner name,
+// season-ascending. mintedSeasons is every season with any rows at all;
+// rows is filtered to current achievements, so retired ids never reach the
+// Trophy Case, rarity counts or the leaderboard.
+async function loadMintedAwards(env) {
+  const { results } = await env.DB.prepare(`
+    SELECT sa.season_id, s.label AS season_label, sa.achievement_id, sa.player_id,
+           w.name AS winner_name, sa.display, sa.runner_up_player_id, sa.runner_up_display
+    FROM season_awards sa
+    JOIN seasons s ON s.id = sa.season_id
+    JOIN players w ON w.id = sa.player_id
+    ORDER BY sa.season_id ASC
+  `).all();
+  const seasonsById = new Map();
+  for (const r of results) {
+    if (!seasonsById.has(r.season_id)) seasonsById.set(r.season_id, { id: r.season_id, label: r.season_label });
+  }
+  return {
+    mintedSeasons: [...seasonsById.values()],
+    rows: results.filter(r => ACHIEVEMENT_BY_ID.has(r.achievement_id)),
+  };
+}
+
+// GET /trophy-leaderboard -- "Most Decorated": every player (minus
+// EXCLUDED_FROM_TROPHIES) ranked by distinct current trophies held across
+// all minted seasons, then total wins (repeats count), then name. Equal
+// trophies and total wins share a rank (1, 2, 3, 3, 3, 6).
+async function handleTrophyLeaderboard(env) {
+  const [minted, playersRes] = await Promise.all([
+    loadMintedAwards(env),
+    env.DB.prepare("SELECT id, name FROM players ORDER BY id").all(),
+  ]);
+
+  const countsByPlayer = new Map();
+  for (const r of minted.rows) {
+    if (!countsByPlayer.has(r.player_id)) countsByPlayer.set(r.player_id, new Map());
+    const counts = countsByPlayer.get(r.player_id);
+    counts.set(r.achievement_id, (counts.get(r.achievement_id) || 0) + 1);
+  }
+
+  const rows = playersRes.results
+    .filter(p => !EXCLUDED_FROM_TROPHIES.includes(p.name))
+    .map(p => {
+      const counts = countsByPlayer.get(p.id) || new Map();
+      return {
+        playerId: p.id,
+        name: p.name,
+        trophies: counts.size,
+        totalWins: [...counts.values()].reduce((sum, n) => sum + n, 0),
+        emblems: ACHIEVEMENTS.filter(a => counts.has(a.id))
+          .map(a => ({ id: a.id, title: a.title, emblem: emblemUrl(a.emblem), count: counts.get(a.id) })),
+      };
+    })
+    .sort((a, b) => b.trophies - a.trophies || b.totalWins - a.totalWins || a.name.localeCompare(b.name));
+
+  rows.forEach((r, i) => {
+    const prev = rows[i - 1];
+    r.rank = prev && prev.trophies === r.trophies && prev.totalWins === r.totalWins ? prev.rank : i + 1;
+  });
+
+  return jsonResponse({
+    totalSlots: ACHIEVEMENTS.length,
+    mintedSeasonCount: minted.mintedSeasons.length,
+    rows,
+  }, 200, { "Cache-Control": "no-store" });
+}
+
+// POST /achievements/backfill-runner-ups[?dryRun=true] -- fills the
+// runner_up_* columns for rows minted before those columns existed (see
+// schema.sql). Safe to rerun: only ever touches rows WHERE
+// runner_up_player_id IS NULL, and never changes a winner. Before filling
+// a row it recomputes the winner from today's data; if that no longer
+// matches the stored winner (game data corrected since minting), the row
+// is reported as winner-mismatch and skipped rather than guessed at. The
+// runner-up always excludes the *stored* winner.
+async function handleRunnerUpBackfill(env, dryRun) {
+  const { results } = await env.DB.prepare(
+    "SELECT season_id, achievement_id, player_id, runner_up_player_id FROM season_awards ORDER BY season_id"
+  ).all();
+
+  const bySeason = new Map();
+  for (const r of results) {
+    if (!ACHIEVEMENT_BY_ID.has(r.achievement_id)) continue;
+    if (!bySeason.has(r.season_id)) bySeason.set(r.season_id, []);
+    bySeason.get(r.season_id).push(r);
+  }
+
+  const report = [];
+  const updates = [];
+  for (const [seasonId, seasonRows] of bySeason) {
+    const pending = seasonRows.filter(r => r.runner_up_player_id === null);
+    for (const r of seasonRows) {
+      if (r.runner_up_player_id !== null) report.push({ seasonId, achievementId: r.achievement_id, status: "already-filled" });
+    }
+    if (!pending.length) continue;
+
+    const achievementCtx = await gatherAchievementContext(env, seasonId);
+    const withoutByPlayer = new Map();
+    for (const r of pending) {
+      const a = ACHIEVEMENT_BY_ID.get(r.achievement_id);
+      const recomputed = a.compute(achievementCtx);
+      if (!recomputed || recomputed.playerId !== r.player_id) {
+        report.push({ seasonId, achievementId: r.achievement_id, status: "winner-mismatch" });
+        continue;
+      }
+      if (!withoutByPlayer.has(r.player_id)) withoutByPlayer.set(r.player_id, ctxWithoutPlayer(achievementCtx, r.player_id));
+      const runnerUp = a.compute(withoutByPlayer.get(r.player_id));
+      if (!runnerUp) {
+        report.push({ seasonId, achievementId: r.achievement_id, status: "no-runner-up" });
+        continue;
+      }
+      report.push({ seasonId, achievementId: r.achievement_id, status: "filled", runnerUpName: runnerUp.name, runnerUpDisplay: runnerUp.display });
+      updates.push(env.DB.prepare(`
+        UPDATE season_awards SET runner_up_player_id = ?, runner_up_value = ?, runner_up_display = ?
+        WHERE season_id = ? AND achievement_id = ? AND runner_up_player_id IS NULL
+      `).bind(runnerUp.playerId, runnerUp.value ?? null, runnerUp.display, seasonId, r.achievement_id));
+    }
+  }
+
+  if (!dryRun && updates.length) await env.DB.batch(updates);
+  return jsonResponse({ dryRun, updated: dryRun ? 0 : updates.length, report }, 200);
 }
 
 // One-time (or safe-to-rerun) pass for games logged before
@@ -2845,8 +3106,16 @@ export default {
       return handleAchievementsBackfill(env, url.searchParams.get("force") === "true");
     }
 
+    if (request.method === "POST" && url.pathname === "/achievements/backfill-runner-ups") {
+      return handleRunnerUpBackfill(env, url.searchParams.get("dryRun") === "true");
+    }
+
     if (request.method === "GET" && url.pathname === "/trophy-case") {
       return handleTrophyCase(request, env, session);
+    }
+
+    if (request.method === "GET" && url.pathname === "/trophy-leaderboard") {
+      return handleTrophyLeaderboard(env);
     }
 
     if (request.method === "POST" && url.pathname === "/seasons/close") {
