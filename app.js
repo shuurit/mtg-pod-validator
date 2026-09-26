@@ -5104,18 +5104,50 @@ function applyTheme(choice) {
 // fixed delay is long enough -- with a timeout fallback in case this
 // browser doesn't fire one at all, so a short page still ends up with
 // SOME value instead of hanging forever.
+//
+// That scroll trick is only ever safe at the very top of the page, though:
+// its scrollTo(0, 0) is "invisible" there, but anywhere else it throws the
+// user back to the top. And this runs on every resize, not just on load --
+// including the on-screen keyboard opening and closing, which is a
+// visualViewport resize. Confirmed the hard way on Games to Update: tapping
+// any field partway down the game form (Disruptions, KOs...) opened the
+// keyboard, which yanked the page to the top and left the field being
+// typed into ~1900px off-screen, again on every field. Hence the two
+// early-outs below: a keyboard resize is ignored outright (the keyboard-
+// shrunk height is the wrong value for --app-vh anyway -- it's meant to be
+// the full screen), and a page that's already scrolled just gets read
+// directly -- it's genuinely scrollable and a real scroll has already
+// happened, the exact state the trick exists to force, so there's nothing
+// to fix up and no reason to move the page.
+const NON_TEXT_INPUT_TYPES = new Set(["checkbox", "radio", "button", "submit", "reset", "range", "color", "file", "image", "hidden"]);
+function isTextEntryFocused() {
+  const el = document.activeElement;
+  if (!el) return false;
+  if (el.isContentEditable || el.tagName === "TEXTAREA" || el.tagName === "SELECT") return true;
+  return el.tagName === "INPUT" && !NON_TEXT_INPUT_TYPES.has(el.type);
+}
+
+function readViewportHeight() {
+  return window.visualViewport ? window.visualViewport.height : window.innerHeight;
+}
+
 let syncingViewportHeight = false;
 function syncViewportHeight() {
   if (syncingViewportHeight) return; // guards against a resize this itself triggers
-  syncingViewportHeight = true;
+  if (isTextEntryFocused()) return;
 
   const root = document.documentElement;
+  if ((window.scrollY || root.scrollTop) > 0) {
+    root.style.setProperty("--app-vh", `${readViewportHeight()}px`);
+    return;
+  }
+
+  syncingViewportHeight = true;
   let finished = false;
   const finish = () => {
     if (finished) return; // the resize listener and the safety-net timeout below can both fire
     finished = true;
-    const height = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-    root.style.setProperty("--app-vh", `${height}px`);
+    root.style.setProperty("--app-vh", `${readViewportHeight()}px`);
     root.style.minHeight = "";
     syncingViewportHeight = false;
   };
