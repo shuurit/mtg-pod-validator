@@ -1630,7 +1630,7 @@ async function handleRosterDiff(env, ctx) {
 // stops mattering -- real game data always wins over a manual guess.
 async function computePlayersData(env) {
   const { results: playerRows } = await env.DB.prepare(
-    "SELECT id, name, playgroup_username FROM players ORDER BY id"
+    "SELECT id, name, playgroup_username FROM players WHERE playgroup_user_id IS NOT NULL ORDER BY id"
   ).all();
 
   const { results: deckRows } = await env.DB.prepare(`
@@ -1718,9 +1718,9 @@ async function computePlayersData(env) {
     console.error("Failed to read trophy pins for /players:", err);
   }
 
-  // Every player, unfiltered -- same split of responsibility as today's
-  // players (all) vs podPlayers (playgroup-linked only) in app.js. This
-  // endpoint hands back the raw truth; filtering stays client-side.
+  // playerRows is already scoped to playgroup_user_id IS NOT NULL (see the
+  // query above) -- a player with no linked playgroup.gg account (inactive,
+  // never played, etc.) never appears here or anywhere downstream of it.
   const players = playerRows.map(p => ({
     id: p.id,
     name: p.name,
@@ -1762,6 +1762,7 @@ async function computeGamesData(env) {
     JOIN seasons s ON s.id = g.season_id
     JOIN players p ON p.id = gr.player_id
     JOIN decks d ON d.id = gr.deck_id
+    WHERE p.playgroup_user_id IS NOT NULL
     ORDER BY g.id, p.name
   `).all();
 
@@ -1839,7 +1840,9 @@ function computePlayerAdjustedWinRate(rows) {
 // gameLogRowsFromD1 and discord_report.py's current_season_games already
 // established (Player Adjusted Ranks has never combined seasons).
 async function computeRankingsData(env, seasonId) {
-  const { results: playerRows } = await env.DB.prepare("SELECT id, name FROM players ORDER BY id").all();
+  const { results: playerRows } = await env.DB.prepare(
+    "SELECT id, name FROM players WHERE playgroup_user_id IS NOT NULL ORDER BY id"
+  ).all();
   const { results: gameRows } = await env.DB.prepare(`
     SELECT p.name AS player, gr.result,
            gr.adjusted_pod_size_score AS j, gr.knockout_score AS k, gr.win_probability AS m
@@ -1893,6 +1896,7 @@ async function computeDeckWinRatesData(env, seasonId) {
     JOIN players p ON p.id = d.player_id
     LEFT JOIN game_results gr ON gr.deck_id = d.id
       AND gr.game_id IN (SELECT id FROM games WHERE season_id = ?)
+    WHERE p.playgroup_user_id IS NOT NULL
     GROUP BY d.id
     ORDER BY d.id
   `).bind(seasonId).all();
@@ -1904,6 +1908,7 @@ async function computeDeckWinRatesData(env, seasonId) {
     FROM players p
     LEFT JOIN game_results gr ON gr.player_id = p.id
       AND gr.game_id IN (SELECT id FROM games WHERE season_id = ?)
+    WHERE p.playgroup_user_id IS NOT NULL
     GROUP BY p.id
     ORDER BY p.id
   `).bind(seasonId).all();
@@ -2453,19 +2458,14 @@ const MAX_TROPHY_PINS = 3;
 // comes from game_results (the submitted-game table, already carrying
 // place/tov/win_con/starting_player_id via the joins below) -- see
 // schema.sql for both.
-// Same players and same reasoning as discord_report.py's
-// EXCLUDED_FROM_REPORTS -- Kristy and Joseph are inactive and shouldn't be
-// crowned a trophy winner. Deliberately scoped to achievements only, not
-// applied at the SQL/schema level: /players, /rankings, /games etc. still
-// need to return them (their historical games are real and still feed
-// other players' own stats -- e.g. a game they lost still counts toward
-// whoever beat them), this only ever removes them from being the *winner*
-// shown for a trophy. Filtering once here, at the one place every
-// achievement's compute() reads from, means every achievement is covered
-// without each one needing its own exclusion check -- next-highest-ranked
-// eligible player wins instead, same as if the excluded player had simply
-// not played.
-const EXCLUDED_FROM_TROPHIES = ["Kristy", "Joseph"];
+// A player with no linked playgroup.gg account (playgroup_user_id NULL --
+// inactive, never played, etc.) is excluded at the SQL level below, the
+// same rule GET /players, /rankings, /games and /deck-win-rates all use
+// now, so an achievement can never crown them a winner. Filtering once
+// here, at the one place every achievement's compute() reads from, means
+// every achievement is covered without each one needing its own exclusion
+// check -- next-highest-ranked eligible player wins instead, same as if
+// the excluded player had simply not played.
 
 async function gatherAchievementContext(env, seasonId) {
   const [eventStatsRes, gameResultsRes, rankingsData] = await Promise.all([
@@ -2478,7 +2478,7 @@ async function gatherAchievementContext(env, seasonId) {
       FROM game_event_stats s
       JOIN games g ON g.id = s.game_id
       JOIN players p ON p.id = s.player_id
-      WHERE g.season_id = ?
+      WHERE g.season_id = ? AND p.playgroup_user_id IS NOT NULL
     `).bind(seasonId).all(),
     env.DB.prepare(`
       SELECT gr.game_id, gr.player_id, p.name, gr.place, gr.result, gr.tov, gr.deck_id,
@@ -2487,7 +2487,7 @@ async function gatherAchievementContext(env, seasonId) {
       FROM game_results gr
       JOIN games g ON g.id = gr.game_id
       JOIN players p ON p.id = gr.player_id
-      WHERE g.season_id = ?
+      WHERE g.season_id = ? AND p.playgroup_user_id IS NOT NULL
     `).bind(seasonId).all(),
     // Reuses the same Player Adjusted Win Rate formula the (currently
     // otherwise-unused) GET /rankings already computes -- verified exact
@@ -2496,9 +2496,9 @@ async function gatherAchievementContext(env, seasonId) {
     // #1, not a second, different opinion about who's winning.
     computeRankingsData(env, seasonId),
   ]);
-  const eventStats = eventStatsRes.results.filter(r => !EXCLUDED_FROM_TROPHIES.includes(r.name));
-  const gameResults = gameResultsRes.results.filter(r => !EXCLUDED_FROM_TROPHIES.includes(r.name));
-  const rankings = rankingsData.rankings.filter(r => !EXCLUDED_FROM_TROPHIES.includes(r.player));
+  const eventStats = eventStatsRes.results;
+  const gameResults = gameResultsRes.results;
+  const rankings = rankingsData.rankings;
   return {
     eventStats, gameResults, rankings,
     eventStatsByPlayer: groupByPlayer(eventStats),
@@ -2558,8 +2558,8 @@ function pickBestDeck(decks) {
 }
 
 // Gathers everything formatSeasonWinnersMessage needs. Reuses
-// gatherAchievementContext's own rankings (same EXCLUDED_FROM_TROPHIES
-// filter, same wins+losses===0 null guard as season-champion/second-place/
+// gatherAchievementContext's own rankings (same playgroup_user_id filter,
+// same wins+losses===0 null guard as season-champion/second-place/
 // third-place) so this can never disagree with the Trophy Case for this
 // season -- deliberately not a second, different standings computation.
 // players.discord_user_id may be null for a top-3 finisher never manually
@@ -2830,11 +2830,11 @@ async function handleAchievements(request, env, session) {
 // id but is overridable to view anyone's case -- no extra permission
 // check beyond the existing session requirement, matching every other
 // stats view in this app (Player Win Rates, Games to Update) where any
-// signed-in player can already see anyone's numbers. A player who's
-// EXCLUDED_FROM_TROPHIES simply has no season_awards rows at all (that
-// filter runs upstream, inside gatherAchievementContext, before minting
-// ever sees their name) -- their case renders as all-locked with no
-// extra filtering needed here.
+// signed-in player can already see anyone's numbers. A player with no
+// linked playgroup.gg account simply has no season_awards rows at all
+// (that filter runs upstream, inside gatherAchievementContext, before
+// minting ever sees their name) -- their case renders as all-locked with
+// no extra filtering needed here.
 //
 // Per slot, on top of won/count/latest*: category (shelf), history (every
 // season won), holders (distinct players who have ever won it -- rarity),
@@ -2946,14 +2946,14 @@ async function loadMintedAwards(env) {
   };
 }
 
-// GET /trophy-leaderboard -- "Most Decorated": every player (minus
-// EXCLUDED_FROM_TROPHIES) ranked by distinct current trophies held across
-// all minted seasons, then total wins (repeats count), then name. Equal
-// trophies and total wins share a rank (1, 2, 3, 3, 3, 6).
+// GET /trophy-leaderboard -- "Most Decorated": every playgroup-linked
+// player ranked by distinct current trophies held across all minted
+// seasons, then total wins (repeats count), then name. Equal trophies and
+// total wins share a rank (1, 2, 3, 3, 3, 6).
 async function handleTrophyLeaderboard(env) {
   const [minted, playersRes] = await Promise.all([
     loadMintedAwards(env),
-    env.DB.prepare("SELECT id, name FROM players ORDER BY id").all(),
+    env.DB.prepare("SELECT id, name FROM players WHERE playgroup_user_id IS NOT NULL ORDER BY id").all(),
   ]);
 
   const countsByPlayer = new Map();
@@ -2964,7 +2964,6 @@ async function handleTrophyLeaderboard(env) {
   }
 
   const rows = playersRes.results
-    .filter(p => !EXCLUDED_FROM_TROPHIES.includes(p.name))
     .map(p => {
       const counts = countsByPlayer.get(p.id) || new Map();
       return {

@@ -13,12 +13,12 @@ array (checked by hand), confirming live event tracking genuinely wasn't
 running yet, not just unsynced.
 
 Deliberately does NOT write anything for Kristy or Joseph -- they're
-excluded from ever winning a trophy (see EXCLUDED_FROM_TROPHIES in
-relay.js) and, unlike the other six players, were never linked to a
-playgroup_username in D1, so identifying their rows with confidence isn't
-worth doing for data that can never surface anyway. A game's OTHER known
-participants are still enriched normally regardless of who else was at
-the table.
+excluded from every relay read endpoint now (playgroup_user_id IS NOT
+NULL, see relay.js) and, unlike the other six players, were never linked
+to a playgroup_username in D1, so identifying their rows with confidence
+isn't worth doing for data that can never surface anyway. A game's OTHER
+known participants are still enriched normally regardless of who else was
+at the table.
 
 Matching a raw playgroup.gg game to one of the 25 already-imported D1
 games uses only the pod's *known* players (the 6 who have a
