@@ -144,6 +144,25 @@ order, contrast checks, chart choice), not to replace the palette,
 typography or component look. A wholesale restyle is a decision for the
 user, not something to infer from a generic design-system generator.
 
+The **ui-ux-pro-max** skill (vendored in `.claude/skills/ui-ux-pro-max/`)
+is exactly that kind of database. In this app:
+
+- **Do** use focused lookups: `--domain ux` (one outcome per query, e.g.
+  `"focus not obscured"`, `"inline validation error"`), `--domain chart`
+  for Win Rates or Trophies visuals, and the `references/pro-rules.md`
+  checklist for touch, safe-area and dark-mode checks.
+- **Don't** run `--design-system` to pick a palette, fonts or style for
+  existing screens. The design system already exists and is documented
+  above. **Never** use `--persist`, which writes a competing
+  `design-system/` folder into the repo, unless the user asks for a
+  restyle.
+- **Skip `--stack`.** This app is vanilla HTML/CSS/JS with no Tailwind,
+  so the nearest entry (`html-tailwind`) would route advice through
+  utility classes the app doesn't use.
+- Its `--domain gsap` presets are idea starters only. Adapt them to the
+  gsap skill's rules (`autoAlpha`, scoped `clearProps`, no
+  ScrollTrigger scroll-storytelling) before using any.
+
 ## Code style
 
 Match the existing CSS: one blank line between rule blocks, and a
