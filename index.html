@@ -17,7 +17,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="style.css?v=46">
+<link rel="stylesheet" href="style.css?v=47">
 
 <!-- Home-screen icon (iOS "Add to Home Screen" + Android/Chrome install).
      Generated from icon-source.png via scripts/generate_icons.py -- rerun
@@ -58,7 +58,7 @@
 <div id="signin-gate" class="signin-gate">
   <div class="signin-gate-card">
     <h1>Amass a Gathering - App Edition</h1>
-    <p class="hint">Sign in with Discord to use the app.</p>
+    <p class="hint" id="signin-gate-lead">Sign in with Discord to use the app.</p>
     <button id="signin-gate-btn" type="button" class="primary">Sign in with Discord</button>
     <p id="signin-gate-status" class="hint" hidden></p>
   </div>
@@ -258,6 +258,14 @@
   </div>
 </div>
 
+<!-- "Pod cleared · Undo" after a pull-to-refresh -- see showUndoToast in
+     app.js. role="status" so the message is announced without stealing
+     focus. -->
+<div id="undo-toast" class="undo-toast" role="status" hidden>
+  <span id="undo-toast-text"></span>
+  <button id="undo-toast-btn" type="button" class="undo-toast-btn">Undo</button>
+</div>
+
 <!-- Touch-only mirror of #main-tabs above (hidden there via (pointer:
      coarse), see style.css) -- same 4 data-tab destinations, so
      initTabs() in app.js can drive both bars with one shared handler.
@@ -377,6 +385,6 @@
   </div>
 </div>
 
-<script src="app.js?v=49"></script>
+<script src="app.js?v=50"></script>
 </body>
 </html>

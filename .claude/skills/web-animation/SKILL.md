@@ -14,9 +14,10 @@ Motion here has three jobs, in priority order:
    Closing Ceremony, prestige trophies. The app's signature here is the
    **foil sweep**, light catching a foil card.
 
-Motion is **not** used for routine navigation. Tab switches are instant
-on purpose (rule 3). If an animation doesn't do one of the three jobs,
-leave it out.
+Routine navigation gets only the lightest motion. A tab switch fades its
+content up over 0.2s and cross-fades the background art in a specific,
+constrained way (rule 3). Don't add more to it. If an animation doesn't
+do one of the three jobs, leave it out.
 
 ## CSS or GSAP?
 
@@ -70,11 +71,17 @@ These come from real bugs in this app. They apply to CSS and GSAP alike.
    Always pair the event with a `setTimeout` safety net calling an
    idempotent `finish()`, and never hide content in CSS waiting for JS to
    reveal it.
-3. **No full-viewport animated layers.** The `.tab-bg` crossfade between
-   tab artworks was removed after a visible rendering glitch in Brave.
-   Two fixed, full-screen, GPU-forced layers fading at once was too much
-   compositor work. Don't reintroduce background crossfades, parallax,
-   View Transitions on tab switch, or scroll-driven full-page effects.
+3. **Never animate two full-viewport layers at once.** The original
+   `.tab-bg` crossfade faded two fixed, full-screen, GPU-forced layers
+   simultaneously and caused a visible rendering glitch in Brave, so it
+   was removed. It's back in a constrained form: the incoming art appears
+   instantly underneath and only the outgoing layer fades out on top
+   (`.tab-bg-leaving`, 0.25s), so at most one full-screen layer is ever in
+   flux (`crossfadeTabBackground` in `app.js`). Keep it that way. Don't
+   add parallax, View Transitions on tab switch, scroll-driven full-page
+   effects, or anything else that animates a second full-viewport layer.
+   If the Brave glitch returns, drop the `.tab-bg-leaving` class from
+   `crossfadeTabBackground` to restore the instant switch.
 4. **Move things with `transform` and `opacity` only.** Never animate
    `width`, `height`, `top`, `left` or `margin` on anything sizeable.
 5. **Don't animate `.card`, or anything large behind one.** `.card` has

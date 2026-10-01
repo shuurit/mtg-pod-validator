@@ -25,7 +25,9 @@ Run `grep -n "@keyframes" style.css` to see the current set:
 | `power-chip-shine` | single sweep | `.power-chip::after` on `.power-cell` `:hover` **and** `:focus-within` |
 | `skeleton-shimmer` | loading sweep (not a pulse, so cards don't flash in sync) | `.skeleton-card::after` (1.6s) |
 | `global-refresh-spin` | 360° rotation | `.pull-refresh.refreshing` (0.8s linear; replaced by a static "Refreshing…" label under reduced motion) |
-| `recheck-glow` | breathing `box-shadow` call to action | `button.primary.glow` (1.4s). JS removes `.glow` once acted on. |
+| `recheck-glow` | breathing `box-shadow` call to action | `button.primary.glow` (1.4s), on Check Deck Power Spread and on Calculate once a Games to Update preview goes stale. JS removes `.glow` once acted on; a static warn ring replaces it under reduced motion. |
+| `tab-bg-leave` | outgoing tab artwork fades out over the already-visible incoming one | `.tab-bg.tab-bg-leaving` (0.25s, once). Only ever one layer; see web-animation rule 3. |
+| `tab-content-in` | 6px rise plus fade, `from` frame only | `.tab-panel.tab-entering > .card > *` and `#tonight-body > *` (0.2s). Animates content inside cards, never the `.card`. |
 
 Name new keyframes `<component>-<verb>` (e.g. `modal-card-in`), and put
 them directly under the rule that first uses them, with the

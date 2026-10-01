@@ -187,27 +187,20 @@ body {
 .tab-bg {
   position: fixed;
   inset: 0;
-  z-index: -1;
+  z-index: -2;
   background-size: cover;
   background-position: center;
   opacity: 0;
-  /* No transition, deliberately -- this used to cross-fade over 0.9s (then
-     0.25s in a first pass at this same bug), but reported live as a real,
-     visible glitch on a switch in Brave: two full-viewport,
-     translateZ(0)-forced-layer backgrounds animating opacity at once,
-     behind everything, is real sustained work for the compositor, and a
-     plausible trigger for a rendering hiccup in a specific browser
-     regardless of how short the window is (confirmed the app's own
-     DOM/tab state is never actually wrong during a switch -- this was
-     always a rendering-only symptom, not a state bug). Shortening the
-     duration wasn't enough to be confident it's actually gone rather than
-     just less likely -- removing the animation removes the mechanism
-     itself: two of these layers are never simultaneously mid-fade now, so
-     there's nothing left for a compositor to get out of sync on. The tab
-     switch itself is still instant either way; this only ever traded a
-     cosmetic crossfade for that risk, and it's not worth it.
-     prefers-reduced-motion below is redundant now (no transition to turn
-     off) but left in place as a harmless no-op rather than removed. */
+  /* History: this used to cross-fade both layers at once (0.9s, then
+     0.25s), and that was reported live as a visible glitch on tab switches
+     in Brave -- two full-viewport, translateZ(0)-forced layers animating
+     opacity simultaneously. It was then removed entirely. It's back by
+     request, but built so that mechanism can't recur: the incoming layer
+     appears instantly (no transition on .active), and only the outgoing
+     one fades, on top, via .tab-bg-leaving below. One layer in flux, never
+     two. See activateTab in app.js. If the Brave glitch ever reappears,
+     deleting the .tab-bg-leaving class from activateTab restores the
+     instant switch. */
   pointer-events: none;
   /* Forces its own GPU compositing layer -- the standard fix for iOS
      Safari/WebKit's position:fixed-detaches-on-scroll quirk (see html's
@@ -220,6 +213,18 @@ body {
   opacity: 1;
 }
 
+/* The outgoing tab's artwork, raised above the incoming one (z-index -1 vs
+   -2) and faded out over it. Only ever one layer at a time; activateTab
+   removes the class on animationend, with a timeout as a safety net. */
+.tab-bg.tab-bg-leaving {
+  z-index: -1;
+  animation: tab-bg-leave 0.25s ease-in forwards;
+}
+@keyframes tab-bg-leave {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
 #bg-pod { background-image: linear-gradient(var(--bg-scrim), var(--bg-scrim)), url('bg-validator.webp'); }
 #bg-games-to-update { background-image: linear-gradient(var(--bg-scrim), var(--bg-scrim)), url('bg-games-to-update.webp'); }
 #bg-update-app { background-image: linear-gradient(var(--bg-scrim), var(--bg-scrim)), url('bg-update-app.webp'); }
@@ -229,8 +234,28 @@ body {
 #bg-achievements { background-image: linear-gradient(var(--bg-scrim), var(--bg-scrim)), url('bg-winrates.webp'); }
 
 @media (prefers-reduced-motion: reduce) {
-  .tab-bg {
-    transition: none;
+  .tab-bg.tab-bg-leaving {
+    animation: none;
+    opacity: 0;
+  }
+}
+
+/* Tab content settling in on a switch (activateTab adds .tab-entering).
+   Animates what's inside each .card, never the .card itself -- its
+   backdrop blur would recompute every frame (web-animation rule 5). Only a
+   `from` frame, so if the animation never runs the content is simply
+   already in place. */
+.tab-panel.tab-entering > .card > *,
+.tab-panel.tab-entering #tonight-body > * {
+  animation: tab-content-in 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes tab-content-in {
+  from { opacity: 0; transform: translateY(6px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tab-panel.tab-entering > .card > *,
+  .tab-panel.tab-entering #tonight-body > * {
+    animation: none;
   }
 }
 
@@ -655,6 +680,45 @@ header h1 {
     transform: translateZ(0);
   }
 }
+
+/* "Pod cleared · Undo" (showUndoToast in app.js). Sits just above the
+   bottom tab bar on touch, bottom-centre otherwise. Inverted (ink on paper
+   / paper on ink) so it reads as a transient message, not page content. */
+.undo-toast {
+  position: fixed;
+  left: 50%;
+  bottom: max(20px, env(safe-area-inset-bottom));
+  z-index: 150;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: calc(100vw - 32px);
+  padding: 6px 6px 6px 16px;
+  border-radius: var(--radius-md);
+  background: var(--ink);
+  color: var(--bg);
+  box-shadow: var(--shadow-md);
+  font-size: 0.9rem;
+  /* Same WebKit fixed-layer fix as .bottom-tabs; the translateX centres it. */
+  -webkit-transform: translateX(-50%) translateZ(0);
+  transform: translateX(-50%) translateZ(0);
+}
+.undo-toast[hidden] { display: none; }
+@media (pointer: coarse) {
+  .undo-toast { bottom: calc(76px + env(safe-area-inset-bottom)); }
+}
+.undo-toast-btn {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.undo-toast-btn:hover { color: inherit; }
 
 .bottom-tab-btn {
   flex: 1 1 0;
@@ -1575,6 +1639,13 @@ button.primary:hover {
 }
 button.primary.glow {
   animation: recheck-glow 1.4s ease-in-out infinite;
+}
+/* No breathing loop, but keep the prompt: a static warn ring. */
+@media (prefers-reduced-motion: reduce) {
+  button.primary.glow {
+    animation: none;
+    box-shadow: 0 6px 16px -8px var(--accent), 0 0 0 3px var(--warn);
+  }
 }
 
 select, input[type="number"], input[type="text"] {
@@ -2869,7 +2940,8 @@ input.gtu-in-prefilled {
 }
 /* A settled item is a statement, not a control -- no border, no chevron,
    nothing to tap. */
-.tonight-item-done {
+.tonight-item-done,
+.tonight-item-loading {
   border-color: transparent;
   color: var(--muted);
 }
@@ -2885,6 +2957,7 @@ input.gtu-in-prefilled {
 .tonight-item-lead-accent { color: var(--accent); }
 .tonight-item-lead-warn { color: var(--warn); }
 .tonight-item-lead-bad { color: var(--bad); }
+.tonight-item-lead-muted { color: var(--muted); }
 .tonight-item-done .tonight-item-lead { color: var(--good); }
 .tonight-item-lead svg {
   width: 18px;
@@ -2959,6 +3032,11 @@ input.gtu-in-prefilled {
   align-items: center;
   justify-content: center;
 }
+/* The inline-flex above otherwise beats the hidden attribute -- New
+   Players/Decks hides the potential-Bracket-4 flame unless Bracket 3 is
+   picked (see buildUtaDeckCard), and without this it stayed
+   visible and settable on every bracket. */
+.deck-edit-btn[hidden] { display: none; }
 
 /* ---------- Set Up Pod: deal-in rows ---------- */
 /* One row per seat at every pod size (see renderPodDealIn in app.js).

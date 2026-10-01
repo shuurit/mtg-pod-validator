@@ -1,4 +1,7 @@
 const RANGE_TOLERANCE = 1; // max power spread allowed within a pod
+// The one shared reduced-motion check for JS-driven motion (CSS motion has
+// its own @media blocks). Read .matches at play time, never cached.
+const REDUCED_MOTION = window.matchMedia("(prefers-reduced-motion: reduce)");
 const PLAYGROUP_URL = "https://playgroup.gg/tracker";
 
 // Cloudflare Worker relay. Set once the Worker is deployed (see
@@ -149,11 +152,19 @@ let knownPlaygroupPlayers = new Set(PLAYERS_WITH_PLAYGROUP_ACCOUNT);
 // caught immediately rather than trusting a stale cached identity.
 let sessionToken = localStorage.getItem("sessionToken");
 let currentUser = null; // { playerId, username } once confirmed, else null
+// True when the last /auth/me check couldn't reach the relay at all (as
+// opposed to the relay saying the token is invalid) -- see checkAuthSession.
+let authUnreachable = false;
 
 let players = []; // everyone in Current Deck Strength, unfiltered
 let podPlayers = []; // players filtered to knownPlaygroupPlayers -- used by Deck Strength Validator and Player Win Rates
 let podCount = 4;
 let podSelections = []; // { playerId, deckId, outOfRange } per slot
+const POD_STATE_KEY = "podState"; // see savePodState/restorePodState
+const POD_STATE_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+// Saving stays off until restorePodState has run, so the empty pod rendered
+// at script load can't overwrite a saved one before it's read back.
+let podStateRestored = false;
 // The ceiling (floor + RANGE_TOLERANCE) from the last completed power-spread
 // check, used to filter an out-of-range slot's deck options down to ones
 // that would actually fix it -- see runValidation and refreshDeckOptions in
@@ -225,7 +236,19 @@ function rowsToPlayers(rows) {
 // never disagree about how much is outstanding. Standings come from
 // renderWinRatesTable (see latestStandings there) rather than a second
 // calculation of the same formula.
-const tonightCounts = { comboWatch: 0, gamesToLog: 0, newDecks: 0 };
+// gamesToLog/newDecks are null until their data has actually loaded and
+// "error" if the fetch behind them failed -- starting them at 0 made Tonight
+// say "Every game is logged" while it was still loading, and keep saying it
+// after a failed /playgroup-games or /roster-diff.
+const tonightCounts = { comboWatch: 0, gamesToLog: null, newDecks: null };
+
+function knownCount(value) {
+  return typeof value === "number" ? value : 0;
+}
+
+function updateTonightTabBadge() {
+  setTabBadge("tonight-tab-badge", knownCount(tonightCounts.gamesToLog) + knownCount(tonightCounts.newDecks));
+}
 let latestStandings = null;
 
 function tonightSvg(path) {
@@ -235,18 +258,21 @@ function tonightSvg(path) {
 // One actionable row on Tonight. `count` renders as the leading figure
 // when there's something outstanding; a settled item shows a check
 // instead and doesn't invite a tap.
-function buildTonightItem({ count, label, tab, tone, done }) {
-  const row = document.createElement(done ? "div" : "button");
-  row.className = `tonight-item${done ? " tonight-item-done" : ""}`;
-  if (!done) {
+function buildTonightItem({ count, label, tab, tone, done, loading, onRetry }) {
+  const inert = done || loading;
+  const row = document.createElement(inert ? "div" : "button");
+  row.className = `tonight-item${done ? " tonight-item-done" : ""}${loading ? " tonight-item-loading" : ""}`;
+  if (!inert) {
     row.type = "button";
-    row.addEventListener("click", () => activateTab(tab));
+    row.addEventListener("click", () => (onRetry ? onRetry() : activateTab(tab)));
   }
 
   const lead = document.createElement("span");
   lead.className = `tonight-item-lead tonight-item-lead-${tone || "accent"}`;
   if (done) {
     lead.innerHTML = tonightSvg('<path d="M20 6 9 17l-5-5"></path>');
+  } else if (loading) {
+    lead.textContent = "…";
   } else {
     lead.textContent = count;
   }
@@ -257,12 +283,43 @@ function buildTonightItem({ count, label, tab, tone, done }) {
   text.textContent = label;
   row.appendChild(text);
 
-  if (!done) {
+  if (!inert) {
     const chev = document.createElement("span");
     chev.className = "tonight-item-chevron";
     chev.innerHTML = tonightSvg('<path d="m9 18 6-6-6-6"></path>');
     row.appendChild(chev);
   }
+  return row;
+}
+
+// One of Tonight's counted items in whichever of its four states it's in:
+// still loading, couldn't be checked, nothing outstanding, or N to do. Only
+// the last two are claims about the data; the first two say so plainly.
+function buildTonightCountItem(value, labels) {
+  if (value === null) {
+    return buildTonightItem({ label: labels.loading, tone: "muted", loading: true });
+  }
+  if (value === "error") {
+    return buildTonightItem({
+      count: "!",
+      label: labels.error,
+      tone: "bad",
+      onRetry: () => {
+        if (tonightCounts.gamesToLog === "error") tonightCounts.gamesToLog = null;
+        if (tonightCounts.newDecks === "error") tonightCounts.newDecks = null;
+        renderTonight();
+        refreshEverything();
+      },
+    });
+  }
+  const row = buildTonightItem({
+    count: value,
+    label: value === 1 ? labels.one : labels.many,
+    tab: labels.tab,
+    tone: "warn",
+    done: value === 0,
+  });
+  if (value === 0) row.querySelector(".tonight-item-label").textContent = labels.done;
   return row;
 }
 
@@ -327,27 +384,22 @@ function renderTonight() {
   const list = document.createElement("div");
   list.className = "tonight-list";
 
-  list.appendChild(buildTonightItem({
-    count: tonightCounts.gamesToLog,
-    label: tonightCounts.gamesToLog === 1 ? "game to log" : "games to log",
+  list.appendChild(buildTonightCountItem(tonightCounts.gamesToLog, {
+    one: "game to log",
+    many: "games to log",
+    done: "Every game is logged",
+    loading: "Checking for unlogged games…",
+    error: "Couldn't check for unlogged games — tap to retry",
     tab: "games-to-update",
-    tone: "warn",
-    done: tonightCounts.gamesToLog === 0,
   }));
-  if (tonightCounts.gamesToLog === 0) {
-    list.lastChild.querySelector(".tonight-item-label").textContent = "Every game is logged";
-  }
-
-  list.appendChild(buildTonightItem({
-    count: tonightCounts.newDecks,
-    label: tonightCounts.newDecks === 1 ? "new deck needs a bracket" : "new decks need a bracket",
+  list.appendChild(buildTonightCountItem(tonightCounts.newDecks, {
+    one: "new deck needs a bracket",
+    many: "new decks need a bracket",
+    done: "No new players or decks",
+    loading: "Checking for new players and decks…",
+    error: "Couldn't check for new players or decks — tap to retry",
     tab: "update-app",
-    tone: "warn",
-    done: tonightCounts.newDecks === 0,
   }));
-  if (tonightCounts.newDecks === 0) {
-    list.lastChild.querySelector(".tonight-item-label").textContent = "No new players or decks";
-  }
 
   if (tonightCounts.comboWatch > 0) {
     list.appendChild(buildTonightItem({
@@ -537,6 +589,15 @@ async function syncFromD1() {
     }
     const gtuStatus = document.getElementById("gtu-status");
     if (gtuStatus) gtuStatus.textContent = `Couldn't load live data — Games to Update needs it to know what's already logged.`;
+    // Only when there's no earlier Game Log to fall back on: a failed
+    // refresh after a good load keeps the last known count instead.
+    if (gameLogSeason3Rows.length === 0) {
+      const gtuList = document.getElementById("gtu-game-list");
+      if (gtuList) gtuList.innerHTML = "";
+      tonightCounts.gamesToLog = "error";
+      updateTonightTabBadge();
+      renderTonight();
+    }
   }
 }
 
@@ -2144,6 +2205,80 @@ function resetPodSetup() {
   if (resultsSection) resultsSection.hidden = true;
 }
 
+// The pod survives a reload. It used to live only in memory, and "To the
+// Game!" sends people off to playgroup.gg in another tab -- long enough for
+// iOS to unload a home-screen app and hand back an empty pod. Saved on every
+// change (renderPodSlots is the one place every change funnels through) and
+// restored at startup; a pod older than a night of play is ignored. (Key and
+// max age are declared up with podCount -- restorePodState runs at load,
+// well above this point in the file.)
+function snapshotPodState() {
+  return { podCount, podSelections: podSelections.map(s => ({ ...s })), lastCeiling };
+}
+
+function applyPodState(state) {
+  podCount = state.podCount;
+  podSelections = state.podSelections.map(s => ({ ...s }));
+  lastCeiling = state.lastCeiling ?? null;
+  editingSeatIndex = null;
+  const sel = document.getElementById("player-count");
+  if (sel) sel.value = podCount;
+}
+
+function podHasPicks() {
+  return podSelections.some(s => s.playerId || s.deckId);
+}
+
+function savePodState() {
+  if (!podStateRestored) return;
+  try {
+    localStorage.setItem(POD_STATE_KEY, JSON.stringify({ ...snapshotPodState(), savedAt: Date.now() }));
+  } catch {
+    // Storage full or blocked (private mode) -- the pod still works, it
+    // just won't survive a reload.
+  }
+}
+
+// Runs once signed in (see the init section), not at script load: a restored
+// pod renders settled seats, whose lock icon needs UI_ICON_PATHS, which is
+// declared further down the file than the load-time render.
+function restorePodState() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(POD_STATE_KEY) || "null");
+    if (!saved || !(Date.now() - saved.savedAt < POD_STATE_MAX_AGE_MS)) return;
+    if (!Number.isInteger(saved.podCount) || saved.podCount < 1 || saved.podCount > 8) return;
+    if (!Array.isArray(saved.podSelections)) return;
+    applyPodState(saved);
+  } catch {
+    // Unreadable saved state -- start with an empty pod, as before.
+  } finally {
+    podStateRestored = true;
+  }
+}
+
+// A short-lived "X · Undo" bar above the bottom tabs. Only one at a time;
+// showing another replaces it.
+let undoToastTimer = null;
+function showUndoToast(message, onUndo) {
+  const toast = document.getElementById("undo-toast");
+  if (!toast) return;
+  document.getElementById("undo-toast-text").textContent = message;
+  const btn = document.getElementById("undo-toast-btn");
+  btn.onclick = () => {
+    hideUndoToast();
+    onUndo();
+  };
+  toast.hidden = false;
+  clearTimeout(undoToastTimer);
+  undoToastTimer = setTimeout(hideUndoToast, 8000);
+}
+
+function hideUndoToast() {
+  const toast = document.getElementById("undo-toast");
+  if (toast) toast.hidden = true;
+  clearTimeout(undoToastTimer);
+}
+
 // The player+deck picker for one slot -- shared by both the round-table
 // seat editor and the plain linear list past 6 seats (see renderPodSlots),
 // so the deck-masking/out-of-range-filtering logic that used to live
@@ -2422,6 +2557,7 @@ function renderPodSlots() {
   }
 
   renderPodDealIn(container);
+  savePodState();
 }
 
 // ---------- reveal modal (Scryfall commander art) ----------
@@ -3136,17 +3272,45 @@ document.getElementById("validate-btn").addEventListener("click", runValidation)
 function activateTab(tabName) {
   const panel = document.getElementById(`tab-${tabName}`);
   if (!panel) return;
+  const switching = panel.hidden;
   document.querySelectorAll(".tab-btn, .bottom-tab-btn").forEach(b => b.classList.remove("active"));
   document.querySelectorAll(`[data-tab="${tabName}"]`).forEach(b => b.classList.add("active"));
   document.querySelectorAll(".tab-panel").forEach(p => { p.hidden = true; });
   panel.hidden = false;
-  // Same id scheme as the tab panel (#bg-<tab> next to #tab-<tab>) --
-  // opacity-transitions to the new one via the .active class, see the
-  // .tab-bg rules in style.css for the actual crossfade.
-  document.querySelectorAll(".tab-bg").forEach(bg => { bg.classList.remove("active"); });
+  // Same id scheme as the tab panel (#bg-<tab> next to #tab-<tab>).
   const bgEl = document.getElementById(`bg-${tabName}`);
-  if (bgEl) bgEl.classList.add("active");
+  crossfadeTabBackground(bgEl);
   window.scrollTo({ top: 0 });
+  if (switching) playTabEnter(panel);
+}
+
+// Swaps the active .tab-bg. The new layer shows instantly underneath and
+// only the old one fades out on top -- never two layers fading at once,
+// which is what glitched in Brave (see the .tab-bg comment in style.css).
+// The end state never waits on the animation: the old layer is cleared on
+// animationend or after a timeout, whichever comes first.
+function crossfadeTabBackground(bgEl) {
+  const previous = document.querySelector(".tab-bg.active");
+  document.querySelectorAll(".tab-bg.tab-bg-leaving").forEach(bg => bg.classList.remove("tab-bg-leaving"));
+  document.querySelectorAll(".tab-bg").forEach(bg => bg.classList.remove("active"));
+  if (bgEl) bgEl.classList.add("active");
+  if (!previous || previous === bgEl || REDUCED_MOTION.matches) return;
+  previous.classList.add("tab-bg-leaving");
+  const finish = () => previous.classList.remove("tab-bg-leaving");
+  previous.addEventListener("animationend", finish, { once: true });
+  setTimeout(finish, 400);
+}
+
+// The new tab's content settles in (see .tab-entering in style.css). Only
+// on a real switch -- re-tapping the current tab, or a data refresh
+// re-rendering it, plays nothing (web-animation rule 7).
+function playTabEnter(panel) {
+  if (REDUCED_MOTION.matches) return;
+  panel.classList.remove("tab-entering");
+  void panel.offsetWidth; // restart the animation if switched back quickly
+  panel.classList.add("tab-entering");
+  clearTimeout(panel._enterTimer);
+  panel._enterTimer = setTimeout(() => panel.classList.remove("tab-entering"), 300);
 }
 
 function initTabs() {
@@ -3490,6 +3654,11 @@ async function refreshPlaygroupGames() {
   } catch (err) {
     if (gtuStatusEl) { gtuStatusEl.textContent = `Couldn't load live playgroup.gg data (${err.message}).`; document.getElementById("gtu-game-list").innerHTML = ""; }
     if (wrStatusEl) { wrStatusEl.textContent = `Couldn't load live win rates (${err.message}).`; document.getElementById("winrates-table").innerHTML = ""; }
+    if (!playgroupGamesData) {
+      tonightCounts.gamesToLog = "error";
+      updateTonightTabBadge();
+      renderTonight();
+    }
   }
 }
 
@@ -3686,7 +3855,7 @@ function findDeckPotentialBracket4(playerName, commanderName) {
 // loaded yet."
 function updateGamesToUpdateTabBadge(count) {
   tonightCounts.gamesToLog = count;
-  setTabBadge("tonight-tab-badge", tonightCounts.gamesToLog + tonightCounts.newDecks);
+  updateTonightTabBadge();
   renderTonight();
 }
 
@@ -3699,7 +3868,9 @@ function renderGamesToUpdate() {
     // reading from back when the D1 migration landed; the string just
     // never got updated to match.
     statusEl.textContent = "Still syncing the Game Log…";
-    updateGamesToUpdateTabBadge(0);
+    // Unknown, not zero -- and a Game Log load that already failed stays
+    // reported as failed rather than reverting to "checking".
+    if (tonightCounts.gamesToLog !== "error") updateGamesToUpdateTabBadge(null);
     return;
   }
 
@@ -3991,6 +4162,91 @@ function buildGtuParticipantCard(p, i, pgGame) {
   return card;
 }
 
+// Drafts of the Games to Update form, keyed per game, so a half-typed form
+// survives a reload or iOS unloading the app. Only fields someone actually
+// edited are stored (data-touched); prefills still come from live data.
+const GTU_DRAFTS_KEY = "gtuDrafts";
+const GTU_DRAFT_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+
+function gtuDraftKey(pgGame) {
+  return String(pgGame.playgroup_game_id ?? `${pgGame.date}|${pgGame.participants.map(p => p.player).join(",")}`);
+}
+
+function readGtuDrafts() {
+  try {
+    const all = JSON.parse(localStorage.getItem(GTU_DRAFTS_KEY) || "{}") || {};
+    const now = Date.now();
+    for (const key of Object.keys(all)) {
+      if (!all[key] || !(now - all[key].savedAt < GTU_DRAFT_MAX_AGE_MS)) delete all[key];
+    }
+    return all;
+  } catch {
+    return {};
+  }
+}
+
+function writeGtuDrafts(all) {
+  try {
+    localStorage.setItem(GTU_DRAFTS_KEY, JSON.stringify(all));
+  } catch {
+    // Storage full or blocked -- the form still works, it just won't survive a reload.
+  }
+}
+
+// The field's own class (e.g. "gtu-tov"), as set by makeGtuInput.
+function gtuFieldName(input) {
+  return [...input.classList].find(c => c.startsWith("gtu-") && c !== "gtu-in" && c !== "gtu-in-prefilled");
+}
+
+function saveGtuDraft(key, container) {
+  const values = {};
+  container.querySelectorAll(".gtu-in").forEach(input => {
+    if (input.dataset.touched !== "1") return;
+    values[`${gtuFieldName(input)}:${input.dataset.i}`] = input.type === "checkbox" ? input.checked : input.value;
+  });
+  const all = readGtuDrafts();
+  all[key] = { savedAt: Date.now(), values };
+  writeGtuDrafts(all);
+}
+
+function restoreGtuDraft(key, container) {
+  const draft = readGtuDrafts()[key];
+  if (!draft) return false;
+  let restored = 0;
+  for (const [id, value] of Object.entries(draft.values || {})) {
+    const [field, i] = id.split(":");
+    if (!/^gtu-[a-z0-9-]+$/.test(field) || !/^\d+$/.test(i)) continue;
+    const input = container.querySelector(`.${field}[data-i="${i}"]`);
+    if (!input) continue;
+    if (input.type === "checkbox") input.checked = !!value;
+    else input.value = value;
+    input.classList.remove("gtu-in-prefilled");
+    input.dataset.touched = "1";
+    restored++;
+  }
+  return restored > 0;
+}
+
+function clearGtuDraft(key) {
+  const all = readGtuDrafts();
+  delete all[key];
+  writeGtuDrafts(all);
+}
+
+// Called on any edit once a preview exists: Submit is disabled until
+// Calculate runs again, so what gets logged is always what was previewed.
+// calculateGameToUpdate rebuilds resultsEl from scratch, which clears this.
+function markGtuPreviewStale(resultsEl, calcBtn) {
+  const submitBtn = resultsEl.querySelector(".gtu-submit-btn");
+  if (!submitBtn || submitBtn.disabled || resultsEl.querySelector(".gtu-stale-note")) return;
+  submitBtn.disabled = true;
+  const note = document.createElement("p");
+  note.className = "hint gtu-stale-note";
+  note.textContent = "You've changed something since calculating — tap Calculate again to update the preview, then submit.";
+  resultsEl.prepend(note);
+  calcBtn.classList.add("glow");
+}
+
 function openGameForm(pgGame) {
   const areaEl = document.getElementById("gtu-form-area");
   areaEl.innerHTML = "";
@@ -4014,6 +4270,14 @@ function openGameForm(pgGame) {
   pgGame.participants.forEach((p, i) => cardList.appendChild(buildGtuParticipantCard(p, i, pgGame)));
   box.appendChild(cardList);
 
+  const draftKey = gtuDraftKey(pgGame);
+  if (restoreGtuDraft(draftKey, cardList)) {
+    const restoredHint = document.createElement("p");
+    restoredHint.className = "hint";
+    restoredHint.textContent = "Restored what you'd already entered for this game.";
+    box.insertBefore(restoredHint, cardList);
+  }
+
   // Fills in Place/KOs/TOV from playgroup.gg's raw per-game event log --
   // still fully editable, same as the Cmdr Strength/Bracket prefills
   // above. Fetched separately (not part of the regular /playgroup-games
@@ -4033,9 +4297,12 @@ function openGameForm(pgGame) {
           const placeInput = cardList.querySelector(`.gtu-place[data-i="${i}"]`);
           const kosInput = cardList.querySelector(`.gtu-knockouts[data-i="${i}"]`);
           const tovInput = cardList.querySelector(`.gtu-tov[data-i="${i}"]`);
-          if (placeInput) { placeInput.value = fields.place; markGtuPrefilled(placeInput); }
-          if (kosInput) { kosInput.value = fields.kos; markGtuPrefilled(kosInput); }
-          if (tovInput && fields.tov != null) { tovInput.value = fields.tov; markGtuPrefilled(tovInput); }
+          // Never over a field the person has already typed in (or that a
+          // saved draft restored) -- this lands whenever the fetch does.
+          const untouched = el => el && el.dataset.touched !== "1";
+          if (untouched(placeInput)) { placeInput.value = fields.place; markGtuPrefilled(placeInput); }
+          if (untouched(kosInput)) { kosInput.value = fields.kos; markGtuPrefilled(kosInput); }
+          if (untouched(tovInput) && fields.tov != null) { tovInput.value = fields.tov; markGtuPrefilled(tovInput); }
         });
         derivedHint.textContent = "Place/KOs/TOV pre-filled from playgroup.gg's game log — double check before submitting.";
       })
@@ -4050,7 +4317,10 @@ function openGameForm(pgGame) {
   const resultsEl = document.createElement("div");
   resultsEl.className = "gtu-results";
 
-  const runCalculation = () => calculateGameToUpdate(pgGame, box, resultsEl);
+  const runCalculation = () => {
+    calcBtn.classList.remove("glow");
+    calculateGameToUpdate(pgGame, box, resultsEl);
+  };
   calcBtn.addEventListener("click", runCalculation);
   box.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && e.target.classList.contains("gtu-in")) {
@@ -4058,6 +4328,17 @@ function openGameForm(pgGame) {
       runCalculation();
     }
   });
+  // Every edit is saved as a draft, and makes an existing preview stale:
+  // Submit sends the values Calculate captured, so letting it submit after
+  // an edit used to log the old numbers.
+  const onEdit = (e) => {
+    if (!e.target.classList.contains("gtu-in")) return;
+    e.target.dataset.touched = "1";
+    saveGtuDraft(draftKey, cardList);
+    markGtuPreviewStale(resultsEl, calcBtn);
+  };
+  box.addEventListener("input", onEdit);
+  box.addEventListener("change", onEdit);
 
   box.appendChild(calcBtn);
   box.appendChild(resultsEl);
@@ -4188,6 +4469,7 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
         const body = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
         submitBtn.textContent = "Submitted ✓";
+        clearGtuDraft(gtuDraftKey(pgGame));
         // D1 writes land in ~100-300ms (vs. the old GitHub Actions round
         // trip's 1-3 minutes), so this waits for a real refetch instead of
         // optimistically merging a guessed local copy -- the whole reason
@@ -4292,6 +4574,11 @@ async function loadRosterDiff() {
   } catch (err) {
     if (statusEl) statusEl.textContent = `Couldn't load live playgroup.gg data (${err.message}).`;
     document.getElementById("uta-list").innerHTML = "";
+    if (!rosterDiffData) {
+      tonightCounts.newDecks = "error";
+      updateTonightTabBadge();
+      renderTonight();
+    }
   }
 }
 
@@ -4505,6 +4792,8 @@ function wireRosterUpdateGroupInputs(container) {
   // hitting submit is already the deliberate, reviewed action here.
   container.querySelectorAll(".uta-deck-b4").forEach(el => {
     el.addEventListener("click", () => {
+      const bracketSel = el.closest(".uta-deck-card")?.querySelector(".uta-deck-bracket");
+      if (!bracketSel || bracketSel.value !== "3") return;
       const current = rosterUpdateDeckState.get(el.dataset.deckId);
       const next = !current?.potentialBracket4;
       rosterUpdateDeckState.set(el.dataset.deckId, { ...current, potentialBracket4: next });
@@ -4609,7 +4898,7 @@ function updateRosterUpdateTabBadge(newPlayers, newDecksForExisting) {
   const count = newPlayers.reduce((n, p) => n + p.decks.length, 0) +
     newDecksForExisting.reduce((n, g) => n + g.decks.length, 0);
   tonightCounts.newDecks = count;
-  setTabBadge("tonight-tab-badge", tonightCounts.gamesToLog + tonightCounts.newDecks);
+  updateTonightTabBadge();
   renderTonight();
 }
 
@@ -4800,7 +5089,9 @@ function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
           // number there as the decimal it replaces.
           const bracket = parseInt(state.bracket, 10);
           if (!Number.isInteger(bracket) || bracket < 1 || bracket > 5) return;
-          decks.push({ name: d.commander_name, power: bracket, playgroupDeckId: d.id, playgroupDeckName: d.name, potentialBracket4: !!state.potentialBracket4, colorIdentity: d.color_identity ?? null });
+          // The flag only means anything on a Bracket 3 deck -- never sent
+          // for any other bracket, whatever the button state says.
+          decks.push({ name: d.commander_name, power: bracket, playgroupDeckId: d.id, playgroupDeckName: d.name, potentialBracket4: bracket === 3 && !!state.potentialBracket4, colorIdentity: d.color_identity ?? null });
           submittedDeckIds.push(String(d.id));
         });
         if (displayName && decks.length > 0) {
@@ -4815,7 +5106,7 @@ function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
           if (!state || !state.checked) return;
           const bracket = parseInt(state.bracket, 10);
           if (!Number.isInteger(bracket) || bracket < 1 || bracket > 5) return;
-          payload.newDecksForExisting.push({ player: g.player, name: d.commander_name, power: bracket, playgroupDeckId: d.id, playgroupDeckName: d.name, potentialBracket4: !!state.potentialBracket4, colorIdentity: d.color_identity ?? null });
+          payload.newDecksForExisting.push({ player: g.player, name: d.commander_name, power: bracket, playgroupDeckId: d.id, playgroupDeckName: d.name, potentialBracket4: bracket === 3 && !!state.potentialBracket4, colorIdentity: d.color_identity ?? null });
           submittedDeckIds.push(String(d.id));
         });
       });
@@ -4944,14 +5235,26 @@ async function checkAuthSession() {
     renderAuthGate();
     return;
   }
+  authUnreachable = false;
   try {
     const res = await fetch(AUTH_ME_RELAY_URL, { headers: authHeaders() });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    currentUser = await res.json();
+    // Only a 401 means the relay looked this token up and it's gone. Any
+    // other failure (offline, a timeout, a relay 5xx) says nothing about the
+    // token -- forgetting it there used to send someone with one bad bar of
+    // signal at the table back through Discord sign-in.
+    if (res.status === 401) {
+      sessionToken = null;
+      currentUser = null;
+      localStorage.removeItem("sessionToken");
+    } else if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    } else {
+      currentUser = await res.json();
+    }
   } catch {
-    sessionToken = null;
     currentUser = null;
-    localStorage.removeItem("sessionToken");
+    authUnreachable = true;
+    showAuthStatusHint("Couldn't reach the server. You're still signed in — check your connection and try again.");
   }
   renderAuthControl();
   renderAuthGate();
@@ -4995,6 +5298,10 @@ function renderAuthGate() {
   if (gate) gate.hidden = signedIn;
   if (wrap) wrap.hidden = !signedIn;
   if (authControl) authControl.hidden = !signedIn;
+  const gateBtn = document.getElementById("signin-gate-btn");
+  if (gateBtn) gateBtn.textContent = authUnreachable ? "Try again" : "Sign in with Discord";
+  const gateLead = document.getElementById("signin-gate-lead");
+  if (gateLead) gateLead.hidden = authUnreachable;
 }
 
 function wireAuthControl() {
@@ -5004,7 +5311,13 @@ function wireAuthControl() {
   // needed just to send the browser there. See DISCORD_AUTHORIZE_URL.
   const gateSigninBtn = document.getElementById("signin-gate-btn");
   if (gateSigninBtn) {
-    gateSigninBtn.addEventListener("click", () => { window.location.href = DISCORD_AUTHORIZE_URL; });
+    gateSigninBtn.addEventListener("click", () => {
+      // The token is still stored when the server was merely unreachable,
+      // so a plain reload re-runs the session check rather than starting
+      // a fresh Discord sign-in.
+      if (authUnreachable) { location.reload(); return; }
+      window.location.href = DISCORD_AUTHORIZE_URL;
+    });
   }
 
   // Click the avatar to reveal "Sign out" -- click anywhere else (or the
@@ -5216,7 +5529,7 @@ function initPullToRefresh() {
     // (signed in -- refreshEverything no-ops otherwise anyway) and nothing
     // above to scroll past. Re-checked on every touchstart, not cached,
     // since sign-in state and scroll position both change between pulls.
-    if (refreshing || !currentUser || (window.scrollY || document.documentElement.scrollTop) > 0) {
+    if (refreshing || !currentUser || (window.scrollY || document.documentElement.scrollTop) > 0 || touchBelongsToInnerScroll(e.target)) {
       startY = null;
       return;
     }
@@ -5263,7 +5576,16 @@ function initPullToRefresh() {
       indicator.classList.add("refreshing");
       indicator.style.height = "48px";
       try {
+        // The reset is deliberate (see resetPodSetup), but one stray pull
+        // shouldn't cost a pod nobody meant to throw away.
+        const before = podHasPicks() ? snapshotPodState() : null;
         resetPodSetup();
+        if (before) {
+          showUndoToast("Pod cleared", () => {
+            applyPodState(before);
+            renderPodSlots();
+          });
+        }
         await refreshEverything();
       } finally {
         indicator.classList.remove("refreshing");
@@ -5274,6 +5596,23 @@ function initPullToRefresh() {
       indicator.style.height = "0px";
     }
   });
+}
+
+// A drag that starts inside something with its own scroll -- the deck list
+// in an open seat (.deal-decks), or any open modal -- belongs to that box,
+// not to the page. Checking only the page's scroll position treated
+// dragging a long deck list back up as a pull, which blocked the list from
+// scrolling and, past the threshold, cleared the pod.
+function touchBelongsToInnerScroll(target) {
+  if (!(target instanceof Element)) return false;
+  if (target.closest(".modal-overlay:not([hidden])")) return true;
+  for (let el = target; el && el !== document.body; el = el.parentElement) {
+    if (el.scrollTop > 0 && el.scrollHeight > el.clientHeight) {
+      const overflowY = getComputedStyle(el).overflowY;
+      if (overflowY === "auto" || overflowY === "scroll") return true;
+    }
+  }
+  return false;
 }
 
 // ---------- init ----------
@@ -5316,7 +5655,9 @@ if ("serviceWorker" in navigator) {
 checkAuthSession().then(() => {
   initTabs();
   if (currentUser) {
+    restorePodState();
     initPlayerCountSelect();
+    renderPodSlots();
     // Shaped placeholders instead of a status line over empty tabs, for
     // the moment between the gate opening and each fetch below actually
     // landing. See renderSkeletonCards for why Players & Decks isn't here.
