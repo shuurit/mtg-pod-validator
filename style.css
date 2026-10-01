@@ -348,6 +348,20 @@ body {
 .pull-refresh.refreshing .pull-refresh-icon {
   animation: global-refresh-spin 0.8s linear infinite;
 }
+/* Reduced motion still needs to show that a refresh is under way, just
+   not by spinning -- the icon holds still and a label says what's
+   happening instead. Visual only, same as the spin it replaces
+   (#pull-refresh is aria-hidden). */
+@media (prefers-reduced-motion: reduce) {
+  .pull-refresh.refreshing .pull-refresh-icon {
+    animation: none;
+  }
+  .pull-refresh.refreshing::after {
+    content: "Refreshing…";
+    margin-left: 8px;
+    font-size: 0.85rem;
+  }
+}
 
 .auth-avatar-wrap {
   position: relative;
