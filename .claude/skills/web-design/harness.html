@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<!-- Component harness for screenshot-checking UI without signing in.
+     Copy this file to a scratch directory (don't edit it in place), paste
+     the markup under test into <main>, serve the repo root with
+     `python3 -m http.server 8765`, then open/screenshot this file.
+     The URL hash picks the theme: #light, #dark, or nothing (follows the
+     OS / --color-scheme setting) -- same data-theme mechanism as
+     applyTheme() in app.js. -->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Component harness</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="http://localhost:8765/style.css">
+<!-- Testing GSAP motion? Load it the way the app does (see the gsap skill):
+     <script src="http://localhost:8765/vendor/gsap-3.15.0/gsap.min.js"></script> -->
+<!-- For motion-check, add a <button id="trigger"> that starts the
+     animation, and pass --click "#trigger". -->
+<script>
+  const t = location.hash.slice(1);
+  if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+</script>
+<style>
+  /* Harness only: a solid ground, since the real page's .tab-bg artwork
+     layers aren't here. */
+  html, body { background: var(--bg); }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <!-- Paste the component under test here. -->
+  <section class="card">
+    <h2>Harness</h2>
+    <p>Replace this with the markup you're checking.</p>
+    <button>Secondary</button>
+    <button class="primary">Primary</button>
+  </section>
+</main>
+</body>
+</html>
