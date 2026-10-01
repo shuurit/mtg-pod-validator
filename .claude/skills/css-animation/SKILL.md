@@ -24,7 +24,7 @@ Run `grep -n "@keyframes" style.css` to see the current set:
 | `reveal-foil-sweep` | light band crosses, then idles (`0%,40%` / `60%,100%`) | reveal art, fallback art, `.tc-prestige-3` (3–3.2s, infinite) |
 | `power-chip-shine` | single sweep | `.power-chip::after` on `.power-cell` `:hover` **and** `:focus-within` |
 | `skeleton-shimmer` | loading sweep (not a pulse, so cards don't flash in sync) | `.skeleton-card::after` (1.6s) |
-| `global-refresh-spin` | 360° rotation | `.pull-refresh.refreshing` (0.8s linear) |
+| `global-refresh-spin` | 360° rotation | `.pull-refresh.refreshing` (0.8s linear; replaced by a static "Refreshing…" label under reduced motion) |
 | `recheck-glow` | breathing `box-shadow` call to action | `button.primary.glow` (1.4s). JS removes `.glow` once acted on. |
 
 Name new keyframes `<component>-<verb>` (e.g. `modal-card-in`), and put
@@ -56,8 +56,9 @@ each animated rule, not collected at the end of the file:
 | spinner or progress | keep a signal without rotation: static icon plus text, or a slow opacity pulse |
 | hover colour or border transition | leave it; colour fades aren't vestibular motion |
 
-`.pull-refresh.refreshing`'s spin currently has no override. Treat it
-as a known gap, not a pattern to copy.
+For the spinner pattern, copy `.pull-refresh.refreshing`: under reduced
+motion the icon stops (`animation: none`) and an `::after` label
+("Refreshing…") takes over the signal.
 
 ## The `hidden` attribute and display: none
 
