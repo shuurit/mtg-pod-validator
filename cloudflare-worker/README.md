@@ -60,6 +60,11 @@ per-IP budget — 20 requests per 15 seconds, tracked via the Cache API
 budget it exists to protect. Past the budget, the Worker returns `429` with
 a `Retry-After` header instead of doing any work.
 
+The one exception is `/table` (the shared Set Up Pod, below): every phone at
+the table polls it every few seconds, all behind the venue's single Wi-Fi
+IP, so it's counted per signed-in person instead (a hash of the session
+token, 60 requests per 15 seconds) and never against the shared IP budget.
+
 This exists because a single client hitting `/playgroup-games` and
 `/roster-diff` many times per second — confirmed via Cloudflare's request
 log, one IP, sub-second bursts — is enough to blow the KV daily write cap
@@ -184,6 +189,18 @@ works without one.
   game submission itself.
 - `POST /roster` — adds a new player (with their starting decks) and/or
   new decks for existing players, in one combined write.
+- `GET /table[?v=<version>]` — the one shared Set Up Pod table, masked for
+  whoever's asking: a seat's deck is only included for that seat's own
+  player, whoever picked it, or everyone once the pod has passed. Answers
+  `204` when `v` already matches the current version, which is what each
+  phone's poll sends. A table untouched for 12 hours reads as empty.
+- `POST /table` — body `{op, ...}`, one change to the shared table:
+  `seat`/`unseat` `{playerId}`, `pick` `{playerId, deckId}`, `check` (runs
+  the power-spread check here, not on a phone, so no phone ever needs
+  anyone else's deck), `clear`, and `undo` `{token}` (for `unseat`/`clear`,
+  only while nothing else has changed since). Replies with the fresh masked
+  table. Stored as one JSON row in `live_table`, written under an
+  optimistic lock on its `version`.
 
 ## Updating an already-deployed Worker (new code only, no new bindings)
 

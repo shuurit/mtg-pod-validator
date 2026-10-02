@@ -17,7 +17,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="style.css?v=48">
+<link rel="stylesheet" href="style.css?v=49">
 
 <!-- Home-screen icon (iOS "Add to Home Screen" + Android/Chrome install).
      Generated from icon-source.png via scripts/generate_icons.py -- rerun
@@ -133,15 +133,16 @@
       <h2>Set Up Pod</h2>
 
       <!-- The gathering table: built once by buildPodTable and re-rendered
-           by renderPodSlots in app.js. No player-count control -- the pod
-           is however many members have been tapped up to the table. -->
+           by renderPodSlots in app.js. Shared through the relay's /table, so
+           every phone sees and edits the same one (see applyLiveTable). No
+           player-count control -- the pod is however many are seated. -->
       <div id="pod-slots"></div>
 
-      <!-- One button under the table whose label follows the pod (pick
-           decks, check the spread, clear the table) -- see renderPodCta and
-           handlePodCta. Hidden while a seat's deck panel is open. -->
+      <!-- One button under the table whose label follows the pod (take a
+           seat, pick your deck, check the spread, clear the table) -- see
+           renderPodCta. Hidden while a seat's deck panel is open. -->
       <div class="row" id="pod-validate-row">
-        <button id="validate-btn" class="primary" disabled>Seat someone to start</button>
+        <button id="validate-btn" class="primary" disabled>Finding the table…</button>
       </div>
     </section>
 
@@ -383,6 +384,6 @@
   </div>
 </div>
 
-<script src="app.js?v=51"></script>
+<script src="app.js?v=52"></script>
 </body>
 </html>

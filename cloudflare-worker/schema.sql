@@ -324,3 +324,19 @@ CREATE TABLE trophy_pins (
   PRIMARY KEY (player_id, achievement_id),
   UNIQUE (player_id, position)
 );
+
+-- The one shared Set Up Pod table everyone's phone reads and writes (see
+-- GET/POST /table in relay.js). A single row (id is always 1): the whole
+-- table is one JSON blob -- seats, who picked which deck, the last check --
+-- because it's small, always read and written whole, and never queried by
+-- field. `version` bumps on every write and doubles as the optimistic lock
+-- (a write only lands if the version it read is still current) and as the
+-- cheap "anything new?" check each phone polls with. updated_at is epoch
+-- milliseconds; a table untouched for a night (TABLE_TTL_MS) reads as empty.
+-- Deck picks stay in here only -- GET /table masks them per viewer.
+CREATE TABLE live_table (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  state TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
