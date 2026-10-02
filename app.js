@@ -2575,10 +2575,18 @@ function fitPodScene() {
 function buildPodChair(playerId) {
   const chair = document.createElement("div");
   chair.className = "pod-chair";
+  // Two throne carvings, spire and crest, alternating by player rather than
+  // seat so a throne keeps its look when the seats around it shift.
+  if (Number(playerId) % 2 === 0) chair.classList.add("crest");
   // Desyncs this seat's bob and flame from its neighbours'.
   chair.style.setProperty("--pod-d", `${(-Math.random() * 3.2).toFixed(2)}s`);
   chair.innerHTML =
-    '<div class="pod-chair-shadow"></div><div class="pod-chair-seat"></div><div class="pod-chair-back"><span class="pod-chair-gem"></span></div>' +
+    '<div class="pod-chair-shadow"></div>' +
+    '<div class="pod-chair-legs back"></div><div class="pod-chair-legs front"></div>' +
+    '<div class="pod-chair-side left"></div><div class="pod-chair-side right"></div>' +
+    '<div class="pod-chair-seat"></div>' +
+    '<div class="pod-chair-arm left"></div><div class="pod-chair-arm right"></div>' +
+    '<div class="pod-chair-back"><span class="pod-chair-gem"></span></div>' +
     `<div class="pod-bb"><span class="pod-orb-hit" aria-hidden="true">${POD_ORB_HTML}</span><span class="pod-plate-anchor"></span></div>`;
   // The orb is a pointer shortcut; the nameplate is the real (focusable) control.
   chair.querySelector(".pod-orb-hit").addEventListener("click", () => tapPodSeat(playerId));
@@ -2664,9 +2672,13 @@ function renderPodChairs() {
       if (entering) {
         chair.style.opacity = "0";
         plate.classList.add("entering");
+        // Pulled out at a slight angle (alternating sides so neighbours
+        // don't swing in lockstep), straightening as it reaches its seat.
+        chair.style.setProperty("--pod-sw", `${chair.classList.contains("crest") ? -16 : 16}deg`);
         // Commit the tucked start before moving to the seat, so it slides.
         getComputedStyle(chair).getPropertyValue("--pod-r");
         chair.style.setProperty("--pod-r", `${POD_SEAT_RADIUS}px`);
+        chair.style.setProperty("--pod-sw", "0deg");
         chair.style.opacity = "1";
         chair.classList.add("ignite");
         setTimeout(() => chair.classList.remove("ignite"), 700);
@@ -2687,6 +2699,7 @@ function removePodSeatEls(id, entry) {
   setTimeout(() => plate.remove(), 180);
   chair.classList.add("leaving");
   chair.style.setProperty("--pod-r", `${POD_SEAT_TUCKED}px`);
+  chair.style.setProperty("--pod-sw", `${chair.classList.contains("crest") ? 10 : -10}deg`);
   chair.style.opacity = "0";
   let done = false;
   const finish = () => { if (!done) { done = true; chair.remove(); } };
