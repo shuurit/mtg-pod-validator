@@ -61,6 +61,19 @@
   /* The Trophy Case's second prestige tier (won twice) -- see
      .tc-prestige-2. Same fixed-material reasoning as --foil above. */
   --silver: #aeb6c2;
+  /* The Set Up Pod table's materials -- see .pod-table and .pod-chair.
+     Same fixed-material reasoning as the pips and foil: ebony, brass,
+     slate and leather are the physical table, not this app's palette, so
+     they don't change with the theme. */
+  --ebony-hi: #3b2a20;
+  --ebony: #22170f;
+  --ebony-lo: #120b07;
+  --brass-hi: #e3c271;
+  --brass-lo: #7a5c22;
+  --slate-hi: #2b2642;
+  --slate-lo: #0e0c16;
+  --leather-hi: #4c3066;
+  --leather-lo: #1d1229;
 }
 
 /* :not([data-theme="light"]) so an explicit "Light" choice from the
@@ -3038,143 +3051,585 @@ input.gtu-in-prefilled {
    visible and settable on every bracket. */
 .deck-edit-btn[hidden] { display: none; }
 
-/* ---------- Set Up Pod: deal-in rows ---------- */
-/* One row per seat at every pod size (see renderPodDealIn in app.js).
-   Replaces the round table that used to sit here and the separate plain
-   list a 7-8 player pod fell back to -- one layout instead of two, and
-   the controls open inside the row you tapped rather than in a panel
-   below the table where your eye had to follow them. */
-.deal-progress {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 4px 0 14px;
+/* ---------- Set Up Pod: the gathering table ---------- */
+/* A wizard's table in CSS 3D (see renderPodSlots in app.js). Tapping a
+   member on the rail slides a throne out from under the table with a glass
+   orb of spellfire floating in it; the throne count IS the pod size. The
+   round table this replaces opened its controls in a panel below the
+   table, so your eye left the seat you tapped -- here the table turns that
+   seat to face you and the deck panel docks right under it.
+
+   No library: perspective + preserve-3d, and three registered properties
+   so the throne angles and the table's turn interpolate as real angles.
+   Without @property support everything still lands in place, it just
+   doesn't glide. */
+@property --pod-spin { syntax: "<angle>"; inherits: true; initial-value: 0deg; }
+@property --pod-a { syntax: "<angle>"; inherits: true; initial-value: 0deg; }
+@property --pod-r { syntax: "<length>"; inherits: false; initial-value: 0px; }
+
+/* Scales with --pod-fit (set by fitPodScene from the card's width) so a
+   narrow phone doesn't leave a band of empty space under a shrunk table. */
+.pod-scene {
+  position: relative;
+  height: calc(var(--pod-fit, 1) * 300px);
+  margin: 4px 0 2px;
+  perspective: 780px;
+  perspective-origin: 50% 30%;
+  --pod-tilt: 58deg;
 }
-.deal-progress-track {
-  flex: 1 1 auto;
-  display: flex;
-  gap: 3px;
+.pod-rig {
+  position: absolute;
+  left: 50%;
+  top: 54%;
+  width: 0;
+  height: 0;
+  transform-style: preserve-3d;
+  transform: scale3d(var(--pod-fit, 1), var(--pod-fit, 1), var(--pod-fit, 1)) rotateX(var(--pod-tilt)) rotateZ(var(--pod-spin));
+  /* The lazy-susan turn (see turnPodTable): fast off the mark, long settle. */
+  transition: --pod-spin 0.7s cubic-bezier(0.32, 0.72, 0, 1);
 }
-.deal-seg {
-  flex: 1 1 0;
-  height: 3px;
-  border-radius: 2px;
-  background: var(--border);
-  transition: background-color 0.2s ease;
-}
-.deal-seg-part { background: var(--accent); }
-.deal-seg-on { background: var(--good); }
-.deal-progress-label {
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
+@media (prefers-reduced-motion: reduce) {
+  .pod-rig { transition: none; }
 }
 
-.deal-rows {
+/* A faint summoning circle on the floor under everything. Static. */
+.pod-floor-sigil {
+  position: absolute;
+  width: 350px;
+  height: 350px;
+  left: -175px;
+  top: -175px;
+  transform: translateZ(-47px);
+}
+.pod-floor-sigil svg { width: 100%; height: 100%; overflow: visible; }
+.pod-floor-sigil * { fill: none; stroke: rgba(181, 156, 255, 0.3); stroke-width: 0.5; }
+.pod-floor-shadow {
+  position: absolute;
+  width: 300px;
+  height: 300px;
+  left: -150px;
+  top: -150px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0) 60%);
+  transform: translateZ(-46px);
+}
+
+.pod-table {
+  --pod-d: 196px;
+  position: absolute;
+  width: var(--pod-d);
+  height: var(--pod-d);
+  left: calc(var(--pod-d) / -2);
+  top: calc(var(--pod-d) / -2);
+  transform-style: preserve-3d;
+}
+/* Stacked discs under the top read as the table's thickness. */
+.pod-table-layer {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--ebony-lo);
+}
+.pod-table-layer.brass { background: var(--brass-lo); }
+.pod-table-top {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background:
+    conic-gradient(from 20deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0) 22%, rgba(255, 255, 255, 0.06) 48%, rgba(255, 255, 255, 0) 70%, rgba(255, 255, 255, 0.09)),
+    radial-gradient(circle, var(--ebony-hi) 0 calc(50% - 12px), var(--ebony) calc(50% - 5px), var(--ebony-lo) 50%);
+}
+.pod-rim-runes { position: absolute; inset: 0; width: 100%; height: 100%; }
+.pod-rim-runes circle { fill: none; }
+.pod-slate {
+  position: absolute;
+  inset: 15px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 42%, var(--slate-hi), #16132a 66%, var(--slate-lo));
+  box-shadow: inset 0 0 22px rgba(0, 0, 0, 0.75), 0 0 0 1.5px var(--brass-hi), 0 0 0 3.5px var(--ebony-lo);
+}
+/* Redrawn by renderPodSigil: a node under every throne, joined into a
+   line, triangle, square, pentagram... and an outer ring segment per seat
+   that turns gold once that seat's deck is in. */
+.pod-sigil {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  filter: drop-shadow(0 0 2px rgba(164, 139, 255, 0.75));
+  transition: filter 0.4s ease;
+}
+.pod-sigil .ring { fill: none; stroke: rgba(181, 156, 255, 0.38); stroke-width: 0.7; }
+.pod-sigil .ticks { fill: none; stroke: rgba(181, 156, 255, 0.5); stroke-width: 2.2; stroke-dasharray: 0.6 3.4; }
+.pod-sigil .line { fill: none; stroke: rgba(181, 156, 255, 0.75); stroke-width: 0.9; transition: stroke 0.4s ease; }
+.pod-sigil .seg { fill: none; stroke-width: 2.6; stroke-linecap: round; stroke: rgba(255, 255, 255, 0.1); transition: stroke 0.3s ease; }
+.pod-sigil .seg-part { stroke: rgba(164, 139, 255, 0.6); }
+.pod-sigil .seg-on { stroke: var(--foil); }
+.pod-sigil .seg-bad { stroke: #ff6b4a; }
+.pod-sigil .node { fill: var(--slate-lo); stroke: rgba(181, 156, 255, 0.85); stroke-width: 0.9; transition: fill 0.3s ease, stroke 0.3s ease; }
+.pod-sigil .node-on { fill: var(--foil); stroke: #ffe6a6; }
+.pod-sigil .node-bad { fill: #ff5a2a; stroke: #ffc2a8; }
+.pod-slate.is-ready .pod-sigil { filter: drop-shadow(0 0 3px rgba(201, 161, 63, 0.95)); }
+.pod-slate.is-ready .pod-sigil .line { stroke: var(--foil); }
+/* Counter-rotated by the table's turn so the count stays upright. */
+.pod-slate-label {
+  position: absolute;
+  inset: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-}
-
-.deal-row {
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-}
-.deal-row-settled { border-color: var(--good-border); }
-.deal-row-flagged { border-color: var(--bad-border); background: var(--bad-bg); }
-.deal-row-open {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-}
-
-/* The whole collapsed line is the control -- a row this size shouldn't
-   need you to find a smaller target inside it. */
-.deal-head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  padding: 12px 14px;
-  border: none;
-  border-radius: 0;
-  background: transparent;
-  color: var(--ink);
-  text-align: left;
-  min-height: 60px;
-}
-.deal-head:hover {
-  color: var(--ink);
-  border-color: transparent;
-}
-
-.deal-avatar {
-  flex: 0 0 auto;
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 0.95rem;
-  font-weight: 600;
-  background: var(--bg-accent);
-  border: 1.5px solid var(--border);
-}
-.deal-row-settled .deal-avatar { border-color: var(--good); }
-.deal-row-open .deal-avatar { border-color: var(--accent); }
-.deal-row-flagged .deal-avatar { border-color: var(--bad); }
-
-.deal-text {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.deal-name {
-  display: block;
+  color: rgba(242, 239, 233, 0.88);
   font-family: var(--font-display);
-  font-size: 1.15rem;
-  font-weight: 600;
-  letter-spacing: 0.03em;
   text-transform: uppercase;
-  line-height: 1.15;
+  line-height: 1;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95);
+  transform: rotateZ(calc(-1 * var(--pod-spin)));
 }
-.deal-state {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  margin-top: 1px;
-  font-size: 0.75rem;
-  color: var(--muted);
-}
-.deal-row-settled .deal-state { color: var(--good); }
-.deal-row-flagged .deal-state { color: var(--bad); }
-.deal-row-open .deal-state { color: var(--accent); }
+.pod-slate-count { font-size: 2.2rem; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
+.pod-slate-word { font-size: 0.7rem; font-weight: 600; letter-spacing: 0.14em; color: rgba(242, 239, 233, 0.6); margin-top: 3px; }
+.pod-slate.is-ready .pod-slate-word { color: var(--foil); }
 
-.deal-action {
-  flex: 0 0 auto;
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--muted);
+/* ---- thrones ---- */
+/* Must keep 3D: without it every throne, backrest and orb flattens onto
+   the table plane (confirmed in the concept build). */
+.pod-chairs { position: absolute; left: 0; top: 0; transform-style: preserve-3d; }
+.pod-chair {
+  /* Default fire: the violet pilot flame. The .is-* states below swap these. */
+  --e1: #4a2bd0;
+  --c1: #a48bff;
+  --e2: #7b5cff;
+  --c2: #d9ccff;
+  --c3: #efe8ff;
+  --ember: #c9b6ff;
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  transform-style: preserve-3d;
+  transform: rotateZ(var(--pod-a)) translateY(var(--pod-r));
+  transition: --pod-a 0.6s cubic-bezier(0.77, 0, 0.175, 1), --pod-r 0.45s cubic-bezier(0.23, 1, 0.32, 1), opacity 0.3s ease-out;
+}
+/* Leaving is quicker than arriving, and accelerates away. */
+.pod-chair.leaving {
+  transition: --pod-a 0.6s cubic-bezier(0.77, 0, 0.175, 1), --pod-r 0.28s cubic-bezier(0.5, 0, 0.75, 0), opacity 0.22s ease-in;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pod-chair, .pod-chair.leaving { transition: opacity 0.15s ease; }
+}
+.pod-chair-shadow {
+  position: absolute;
+  width: 58px;
+  height: 54px;
+  left: -29px;
+  top: -27px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(0, 0, 0, 0.4), rgba(0, 0, 0, 0) 68%);
+  transform: translateZ(-46px);
+}
+.pod-chair-seat {
+  position: absolute;
+  width: 46px;
+  height: 42px;
+  left: -23px;
+  top: -21px;
+  border-radius: 8px;
+  background: radial-gradient(ellipse at 50% 30%, var(--leather-hi), var(--leather-lo) 80%);
+  box-shadow: 0 0 0 2px var(--brass-lo), 0 0 0 5px var(--ebony), inset 0 -4px 7px rgba(0, 0, 0, 0.5);
+  transform: translateZ(-22px);
+}
+/* Throne back: a pointed gothic arch with a brass edge, a leather panel and
+   one rune gem. Hinged on the seat's outer edge and folded up 90deg. */
+.pod-chair-back {
+  --pod-arch: polygon(50% 0, 62% 5%, 74% 13%, 84% 24%, 92% 37%, 97% 50%, 100% 62%, 100% 100%, 0 100%, 0 62%, 3% 50%, 8% 37%, 16% 24%, 26% 13%, 38% 5%);
+  position: absolute;
+  width: 50px;
+  height: 54px;
+  left: -25px;
+  top: -33px;
+  clip-path: var(--pod-arch);
+  background: linear-gradient(180deg, var(--brass-hi), var(--brass-lo));
+  transform-origin: 50% 100%;
+  transform: translateZ(-22px) rotateX(-90deg);
+}
+.pod-chair-back::before {
+  content: "";
+  position: absolute;
+  inset: 2px 2px 0;
+  clip-path: var(--pod-arch);
+  background: linear-gradient(180deg, var(--ebony-hi), var(--ebony-lo));
+}
+.pod-chair-back::after {
+  content: "";
+  position: absolute;
+  inset: 9px 8px 5px;
+  clip-path: var(--pod-arch);
+  background: linear-gradient(180deg, var(--leather-hi), var(--leather-lo));
+}
+.pod-chair-gem {
+  position: absolute;
+  z-index: 1;
+  left: calc(50% - 3.5px);
+  top: 16px;
+  width: 7px;
+  height: 7px;
+  transform: rotate(45deg);
+  background: #b59cff;
+  box-shadow: 0 0 6px 2px rgba(181, 156, 255, 0.85);
+}
+.pod-chair.is-sealed .pod-chair-gem, .pod-chair.is-revealed .pod-chair-gem { background: #ffe6a6; box-shadow: 0 0 6px 2px rgba(201, 161, 63, 0.9); }
+.pod-chair.is-flagged .pod-chair-gem { background: #ff8a5c; box-shadow: 0 0 6px 2px rgba(255, 80, 40, 0.9); }
+
+/* The billboard: undoes the table's tilt and every turn so the orb always
+   faces you, floating inside the throne level with its arch. */
+.pod-bb {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  transform:
+    translateZ(48px)
+    rotateZ(calc(-1 * (var(--pod-a) + var(--pod-spin))))
+    rotateX(calc(-1 * var(--pod-tilt)))
+    translate(-50%, -50%);
+  transition: opacity 0.2s ease;
+}
+.pod-scene.has-focus .pod-chair:not(.is-focus) .pod-bb { opacity: 0.45; }
+/* The padding is room for the orb's halo, not just a bigger tap target:
+   the billboard renders as its own 3D layer, and with a tight box the
+   box-shadow glow came out clipped into a visible square (confirmed in
+   testing, in both themes). */
+.pod-orb-hit { display: block; padding: 20px; cursor: pointer; }
+/* What positionPodPlates reads to pin each nameplate under its orb. */
+.pod-plate-anchor { position: absolute; left: 50%; top: calc(100% - 16px); width: 2px; height: 2px; margin-left: -1px; }
+
+/* ---- spellfire orbs ---- */
+.pod-orb-float {
+  position: relative;
+  display: block;
+  animation: pod-orb-bob 3.2s ease-in-out infinite alternate;
+  animation-delay: var(--pod-d, 0s);
+}
+@keyframes pod-orb-bob {
+  from { transform: translateY(1px); }
+  to { transform: translateY(-4px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pod-orb-float { animation: none; }
+}
+/* Ignite flash: a ring that blooms off a newly lit orb, once. */
+.pod-orb-float::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  border: 2px solid var(--c1);
+  opacity: 0;
+  pointer-events: none;
+}
+.pod-chair.ignite .pod-orb-float::after { animation: pod-orb-ring 0.6s cubic-bezier(0.23, 1, 0.32, 1); }
+@keyframes pod-orb-ring {
+  from { transform: scale(0.7); opacity: 0.9; }
+  to { transform: scale(2); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pod-chair.ignite .pod-orb-float::after { animation: none; }
 }
 
-.deal-body {
-  padding: 2px 14px 14px;
+/* A dark glass sphere in a thin brass setting, so the fire is the light. */
+.pod-orb {
+  --halo: rgba(164, 139, 255, 0.45);
+  position: relative;
+  display: block;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: radial-gradient(circle at 50% 64%, rgba(40, 20, 60, 0.6), rgba(8, 6, 14, 0.94) 72%);
+  box-shadow:
+    inset 0 -6px 10px rgba(0, 0, 0, 0.55),
+    inset 0 2px 4px rgba(255, 255, 255, 0.2),
+    0 0 0 1px rgba(255, 255, 255, 0.26),
+    0 0 0 2.5px rgba(201, 161, 63, 0.4),
+    0 0 22px 3px var(--halo);
+  transition: box-shadow 0.35s ease;
+}
+.pod-chair.ignite .pod-orb { animation: pod-orb-ignite 0.5s cubic-bezier(0.23, 1, 0.32, 1); }
+@keyframes pod-orb-ignite {
+  from { transform: scale(0.6); opacity: 0; filter: blur(3px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pod-chair.ignite .pod-orb { animation: pod-fade-in 0.2s ease; }
+}
+@keyframes pod-fade-in { from { opacity: 0; } }
+
+/* Fire: five teardrop tongues over a hot core, each flickering on its own
+   clock so the flame never visibly repeats. Each tongue is hot at the base
+   and fades to its edge colour at the tip. The flames are the one
+   deliberate loop on this screen: scoped to the orbs, desynced per seat
+   (--pod-d), and frozen under reduced motion. */
+.pod-fire {
+  position: absolute;
+  inset: 0;
+  filter: blur(0.5px);
+  transform-origin: 50% 90%;
+  transition: transform 0.45s cubic-bezier(0.23, 1, 0.32, 1);
+}
+.pod-fire-core {
+  position: absolute;
+  left: 50%;
+  bottom: 3px;
+  width: 20px;
+  height: 7px;
+  margin-left: -10px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse, var(--c2), rgba(0, 0, 0, 0) 72%);
+  opacity: 0.9;
+}
+.pod-tw {
+  position: absolute;
+  left: 50%;
+  transform-origin: 50% 100%;
+  animation: pod-flame-flick 1.2s ease-in-out infinite;
+}
+.pod-tw > i {
+  position: absolute;
+  inset: 0;
+  border-radius: 50% 0 50% 50%;
+  transform: rotate(-45deg);
+}
+.pod-tw1 { width: 25px; height: 25px; margin-left: -12.5px; bottom: 5px; animation-duration: 1.3s; animation-delay: var(--pod-d, 0s); }
+.pod-tw2 { width: 18px; height: 18px; margin-left: -9px; bottom: 4px; animation-duration: 0.95s; animation-delay: calc(var(--pod-d, 0s) - 0.35s); }
+.pod-tw3 { width: 11px; height: 11px; margin-left: -5.5px; bottom: 4px; animation-duration: 0.7s; animation-delay: calc(var(--pod-d, 0s) - 0.2s); }
+.pod-tw4 { width: 13px; height: 13px; margin-left: -14px; bottom: 4px; rotate: -16deg; animation-duration: 0.85s; animation-delay: calc(var(--pod-d, 0s) - 0.5s); }
+.pod-tw5 { width: 12px; height: 12px; margin-left: 2px; bottom: 4px; rotate: 18deg; animation-duration: 1.05s; animation-delay: calc(var(--pod-d, 0s) - 0.15s); }
+.pod-tw1 > i { background: linear-gradient(45deg, var(--c1) 8%, var(--e1) 55%, rgba(0, 0, 0, 0) 100%); opacity: 0.95; }
+.pod-tw2 > i { background: linear-gradient(45deg, var(--c2) 10%, var(--e2) 60%, rgba(0, 0, 0, 0) 100%); }
+.pod-tw3 > i { background: linear-gradient(45deg, #ffffff 10%, var(--c3) 55%, rgba(0, 0, 0, 0) 100%); }
+.pod-tw4 > i, .pod-tw5 > i { background: linear-gradient(45deg, var(--c1) 5%, var(--e1) 55%, rgba(0, 0, 0, 0) 100%); opacity: 0.85; }
+@keyframes pod-flame-flick {
+  0%, 100% { transform: scale(1, 1) skewX(0deg); }
+  22% { transform: scale(0.92, 1.14) skewX(5deg); }
+  45% { transform: scale(1.06, 0.9) skewX(-4deg); }
+  68% { transform: scale(0.96, 1.08) skewX(3deg); }
+  85% { transform: scale(1.03, 0.94) skewX(-5deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pod-tw { animation: none; }
+}
+
+/* Embers drift up out of the glass once a deck is in. */
+.pod-ember {
+  position: absolute;
+  left: 50%;
+  top: 10px;
+  width: 3px;
+  height: 3px;
+  margin-left: -1.5px;
+  border-radius: 50%;
+  background: var(--ember);
+  box-shadow: 0 0 4px 1px var(--ember);
+  opacity: 0;
+  display: none;
+  pointer-events: none;
+}
+.pod-chair.is-sealed .pod-ember, .pod-chair.is-flagged .pod-ember, .pod-chair.is-revealed .pod-ember {
+  display: block;
+  animation: pod-ember-rise 2s ease-out infinite;
+}
+/* !important: the state rule's animation shorthand above resets the delay. */
+.pod-ember.e1 { --dx: -7px; animation-delay: calc(var(--pod-d, 0s) - 0.2s) !important; }
+.pod-ember.e2 { --dx: 6px; animation-delay: calc(var(--pod-d, 0s) - 0.9s) !important; }
+.pod-ember.e3 { --dx: -1px; animation-duration: 2.5s !important; animation-delay: calc(var(--pod-d, 0s) - 1.6s) !important; }
+@keyframes pod-ember-rise {
+  0% { transform: translate(0, 0) scale(1); opacity: 0; }
+  15% { opacity: 1; }
+  100% { transform: translate(var(--dx), -32px) scale(0.3); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pod-chair.is-sealed .pod-ember, .pod-chair.is-flagged .pod-ember, .pod-chair.is-revealed .pod-ember { display: none; }
+}
+
+/* Waiting: a low violet pilot flame. Sealed: the flame rises to full
+   spellfire, violet with a gold heart, identical for every deck so it never
+   hints at one. */
+.pod-chair.is-waiting .pod-fire { transform: scale(0.5); }
+.pod-chair.is-sealed { --e1: #5a2ee0; --c1: #e7a8ff; --e2: #b86bff; --c2: #ffe1a0; --c3: #fff2c8; --ember: #ffd27a; }
+.pod-chair.is-sealed .pod-orb { --halo: rgba(176, 110, 255, 0.6); }
+/* Over range: hellfire, faster and wilder, behind cracked glass. */
+.pod-chair.is-flagged { --e1: #a3140a; --c1: #ff6a2a; --e2: #ff4a12; --c2: #ffc061; --c3: #fff0b0; --ember: #ffb347; }
+.pod-chair.is-flagged .pod-orb { --halo: rgba(255, 80, 40, 0.7); }
+.pod-chair.is-flagged .pod-tw1 { animation-duration: 0.55s; }
+.pod-chair.is-flagged .pod-tw2 { animation-duration: 0.45s; }
+.pod-chair.is-flagged .pod-tw3 { animation-duration: 0.35s; }
+.pod-chair.is-flagged .pod-tw4 { animation-duration: 0.4s; }
+.pod-chair.is-flagged .pod-tw5 { animation-duration: 0.5s; }
+/* Revealed: each tongue burns in one of the deck's colours (setPodRevealFire
+   writes the --r-* values), flaring once, front seat first. */
+.pod-chair.is-revealed { --e1: var(--r-e1); --c1: var(--r-c1); --e2: var(--r-e2); --c2: var(--r-c2); --c3: var(--r-c3); --ember: var(--r-c1); }
+.pod-chair.is-revealed .pod-orb { --halo: var(--r-glow, rgba(201, 161, 63, 0.55)); }
+.pod-chair.is-revealed .pod-fire {
+  animation: pod-fire-flare 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) backwards;
+  animation-delay: calc(var(--pod-i, 0) * 90ms);
+}
+@keyframes pod-fire-flare {
+  from { transform: scale(1.7); filter: blur(2px) brightness(2.2); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pod-chair.is-revealed .pod-fire { animation: pod-fade-in 0.3s ease backwards; animation-delay: 0s; }
+}
+/* A re-render after a data refresh rebuilds nothing, but a restored pod
+   that's already revealed shouldn't replay the flare on load either. */
+.pod-chair.no-enter .pod-fire, .pod-chair.no-enter .pod-orb-sweep { animation: none; }
+
+.pod-orb-crack {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+.pod-chair.is-flagged .pod-orb-crack { opacity: 1; }
+/* Glass shading over every state, so the orb always reads as a sphere. */
+.pod-orb-gloss {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background:
+    radial-gradient(ellipse 24% 13% at 36% 18%, rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0) 100%),
+    radial-gradient(circle at 50% 120%, rgba(0, 0, 0, 0) 45%, rgba(0, 0, 0, 0.3) 78%);
+  pointer-events: none;
+}
+/* The foil sweep, once per orb at the reveal -- the app's signature moment. */
+.pod-orb-sweep {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(115deg, transparent 40%, rgba(255, 255, 255, 0.55) 50%, transparent 60%);
+  transform: translateX(-160%);
+  pointer-events: none;
+}
+.pod-chair.is-revealed .pod-orb-sweep {
+  animation: pod-orb-sweep 0.9s ease-in-out both;
+  animation-delay: calc(var(--pod-i, 0) * 90ms + 300ms);
+}
+@keyframes pod-orb-sweep {
+  from { transform: translateX(-160%); }
+  to { transform: translateX(160%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pod-orb-sweep { display: none; }
+}
+
+/* ---- nameplates ---- */
+/* Flat, on top of the scene, pinned under each orb by projecting its
+   anchor (positionPodPlates). Keeps names readable over the tall throne
+   backs and makes each seat a real, undistorted button. The transform is
+   set inline every frame, which also beats the generic button:active
+   nudge that once knocked the old round-table seats off their spots. */
+.pod-plates { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+.pod-plate {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: auto;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  align-items: center;
+  min-width: 66px;
+  max-width: 112px;
+  padding: 4px 9px 5px;
+  border-radius: var(--radius-sm);
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  color: var(--ink);
+  font-size: inherit;
+  transition: opacity 0.25s ease, border-color 0.15s ease, box-shadow 0.15s ease;
 }
+.pod-plate:hover { color: var(--ink); }
+.pod-plate.entering, .pod-plate.leaving { opacity: 0; }
+.pod-plate.leaving { pointer-events: none; transition-duration: 0.15s; }
+.pod-scene.has-focus .pod-plate:not(.is-focus) { opacity: 0.45; }
+.pod-plate-name {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.92rem;
+  line-height: 1.05;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.pod-plate-state {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 1px;
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--accent);
+}
+.pod-plate-state .ui-icon { width: 10px; height: 10px; }
+.pod-plate.is-sealed .pod-plate-state { color: var(--good); }
+.pod-plate.is-flagged { border-color: var(--bad-border); background: var(--bad-bg); }
+.pod-plate.is-flagged .pod-plate-state { color: var(--bad); }
+.pod-plate.is-revealed .pod-plate-state {
+  display: block;
+  max-width: 94px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--ink);
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 0.66rem;
+  font-weight: 500;
+}
+.pod-plate.is-focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 
-.deal-chips {
+.pod-scene-empty {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 8px;
+  margin: 0;
+  text-align: center;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+.pod-scene-empty[hidden] { display: none; }
+
+/* One atomic status line (role=status) rather than a live region per seat. */
+.pod-status {
+  margin: 0 0 12px;
+  min-height: 2.6em;
+  font-size: 0.86rem;
+  line-height: 1.4;
+  color: var(--muted);
+}
+.pod-status strong { color: var(--ink); font-weight: 600; }
+
+/* ---- member rail ---- */
+.pod-rail-label {
+  margin: 0 0 8px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.pod-rail-label[hidden], .pod-roster[hidden] { display: none; }
+/* Wraps, never scrolls sideways; chips stay put as seats fill. */
+.pod-roster {
   display: flex;
   flex-wrap: wrap;
   gap: 7px;
 }
-.deal-chip {
+.pod-chip {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -3187,45 +3642,85 @@ input.gtu-in-prefilled {
   font-weight: 600;
   min-height: 44px;
 }
-.deal-chip-avatar {
-  width: 26px;
-  height: 26px;
+.pod-chip-avatar {
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   background: var(--bg-accent);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
-/* Already sitting somewhere else at this table -- shown rather than
-   hidden, so the roster doesn't reshuffle as seats fill. */
-.deal-chip-taken {
-  opacity: 0.45;
-  cursor: default;
-}
-.deal-chip-taken:hover {
-  border-color: var(--border);
-  color: var(--ink);
-}
-.deal-chip-tag {
-  font-size: 0.62rem;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
+.pod-chip[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.pod-chip[aria-pressed="true"] .pod-chip-avatar { background: var(--accent); color: var(--accent-ink); }
+.pod-chip:disabled { opacity: 0.45; cursor: default; }
+.pod-chip:disabled:hover { border-color: var(--border); color: var(--ink); }
 
+/* ---- deck panel ---- */
+/* Docks in the page flow right under the table, in place of the rail and
+   the button, rather than as a fixed sheet: nothing to fight the bottom tab
+   bar or iOS's fixed-position quirks, and the seat it belongs to is turned
+   to face it directly above. */
+.pod-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+}
+.pod-panel[hidden] { display: none; }
+.pod-panel.opening { animation: pod-panel-in 0.24s cubic-bezier(0.23, 1, 0.32, 1); }
+@keyframes pod-panel-in {
+  from { opacity: 0; transform: translateY(10px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pod-panel.opening { animation: pod-fade-in 0.15s ease; }
+}
+.pod-panel-head { display: flex; align-items: center; gap: 11px; }
+.pod-panel-avatar {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.pod-panel-titles { flex: 1 1 auto; min-width: 0; }
+.pod-panel-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.2rem;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.pod-panel-sub { margin: 3px 0 0; font-size: 0.75rem; color: var(--muted); }
+.pod-panel-done { flex: 0 0 auto; min-height: 40px; }
+.pod-panel-range {
+  margin: 0;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  color: var(--warn);
+  font-size: 0.75rem;
+}
 /* Bounded and independently scrollable -- a player with a lot of decks
    (17, in the case that surfaced this) used to grow the WHOLE page, which
-   meant scrolling through the list also scrolled decks in and out from
-   under the fixed bottom nav (it's opaque and always covers the same
-   ~60px strip of the viewport, no matter where the page itself is
-   scrolled to) -- confirmed the reported bug matches exactly: whichever
-   deck happened to land under that strip while scrolling was genuinely
-   hard to tap. A capped height with its own scroll keeps the entire list
-   above the nav at all times; only picking a deck this long ever needs
-   to scroll internally rather than the page around it. */
-.deal-decks {
+   scrolled decks in and out from under the fixed bottom nav and made
+   whichever one landed under that strip hard to tap. A capped height with
+   its own scroll keeps the entire list above the nav. */
+.pod-decks {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -3233,7 +3728,7 @@ input.gtu-in-prefilled {
   overflow-y: auto;
   padding-right: 2px;
 }
-.deal-deck {
+.pod-deck {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -3246,17 +3741,17 @@ input.gtu-in-prefilled {
   text-align: left;
   min-height: 46px;
 }
-.deal-deck-current {
+.pod-deck-current {
   border-color: var(--accent);
   background: var(--accent-soft);
 }
-.deal-deck-name {
+.pod-deck-name {
   flex: 1 1 auto;
   min-width: 0;
   font-size: 0.88rem;
   line-height: 1.3;
 }
-.deal-deck-games {
+.pod-deck-games {
   flex: 0 0 auto;
   font-size: 0.68rem;
   font-weight: 600;
@@ -3265,15 +3760,14 @@ input.gtu-in-prefilled {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
-
-.deal-body-footer {
+.pod-panel-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
   flex-wrap: wrap;
 }
-.deal-swap {
+.pod-leave {
   padding: 6px 0;
   border: none;
   background: transparent;
@@ -3281,9 +3775,10 @@ input.gtu-in-prefilled {
   font-size: 0.75rem;
   text-decoration: underline;
   text-underline-offset: 3px;
-  min-height: 34px;
+  min-height: 36px;
 }
-.deal-note {
+.pod-leave:hover { color: var(--bad); }
+.pod-note {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -3291,12 +3786,14 @@ input.gtu-in-prefilled {
   color: var(--muted);
 }
 
-/* The check anchors the seats it belongs to. It used to sit in the round
-   table's felt centre; with the table gone it reads as a stray small
-   button unless it spans the rows above it. */
+/* The one button under the table. Its label follows the pod: pick decks,
+   pick a new deck, check the spread, or clear the table (renderPodCta). */
 #pod-validate-row {
   margin-top: 14px;
 }
+#pod-validate-row[hidden] { display: none; }
 #pod-validate-row #validate-btn {
   width: 100%;
+  min-height: 48px;
 }
+#validate-btn:disabled { opacity: 0.5; cursor: default; box-shadow: none; }
