@@ -163,6 +163,16 @@ is exactly that kind of database. In this app:
   gsap skill's rules (`autoAlpha`, scoped `clearProps`, no
   ScrollTrigger scroll-storytelling) before using any.
 
+The same goes for **impeccable**, **taste-skill** and **emil-design-eng**
+(vendored next to it). Use their judgement on hierarchy, polish, motion
+and critique, but never their stack or setup defaults:
+
+- No React, Tailwind, shadcn, npm UI packages or build step.
+- No new fonts or palettes that replace the tokens above.
+- Impeccable may offer to write PRODUCT.md or DESIGN.md, or turn on its
+  detector hook. Do that only when the user asks: this file is the
+  design record.
+
 ## Code style
 
 Match the existing CSS: one blank line between rule blocks, and a
