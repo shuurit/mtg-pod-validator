@@ -199,7 +199,8 @@ works without one.
   the power-spread check here, not on a phone, so no phone ever needs
   anyone else's deck), `clear`, and `undo` `{token}` (for `unseat`/`clear`,
   only while nothing else has changed since). Replies with the fresh masked
-  table. Stored as one JSON row in `live_table`, written under an
+  table. A seat whose player picked their own deck is theirs: `pick` and
+  `unseat` on it from anyone else answer `403` (fill-ins stay open). Stored as one JSON row in `live_table`, written under an
   optimistic lock on its `version`.
 
 ## Updating an already-deployed Worker (new code only, no new bindings)

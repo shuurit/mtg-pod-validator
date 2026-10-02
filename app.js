@@ -2421,6 +2421,13 @@ function podDeckOf(slot) {
   return player && slot.deckId ? player.decks.find(d => String(d.id) === slot.deckId) || null : null;
 }
 
+// A seat its own player picked for, on their own phone, is theirs: this
+// phone can't open, re-pick or unseat it (the relay refuses too -- see
+// isSelfSealed in relay.js). Waiting seats and fill-ins stay open.
+function podSeatLocked(slot) {
+  return slot.sealed && !!slot.pickedBy && slot.pickedBy === slot.playerId && slot.playerId !== myPodPlayerId();
+}
+
 // sealed (not deckId) decides it: this phone often isn't told which deck a
 // seat holds, only that one is in.
 function podSeatState(slot) {
@@ -2599,11 +2606,14 @@ function updatePodSeat(entry, slot, i, n) {
   chair.style.setProperty("--pod-a", `${podAngle(i, n)}deg`);
   chair.style.setProperty("--pod-i", i);
   if (state !== "revealed") chair.classList.remove("no-enter");
+  const locked = podSeatLocked(slot);
   for (const el of [chair, plate]) {
     el.classList.remove("is-waiting", "is-sealed", "is-flagged", "is-revealed");
     el.classList.add(`is-${state}`);
     el.classList.toggle("is-focus", editingSeatIndex === i);
+    el.classList.toggle("is-locked", locked);
   }
+  plate.disabled = locked;
 
   const name = player ? player.name : "…";
   plate.querySelector(".pod-plate-name").textContent = name;
@@ -2625,7 +2635,7 @@ function updatePodSeat(entry, slot, i, n) {
     setPodRevealFire(chair, deck ? deck.colorIdentity : null);
     spoken = deck ? deck.name : "deck revealed";
   }
-  plate.setAttribute("aria-label", `Seat ${i + 1}, ${name}, ${spoken}`);
+  plate.setAttribute("aria-label", `Seat ${i + 1}, ${name}, ${spoken}${locked ? `. Only ${name} can change this seat.` : ""}`);
 }
 
 function renderPodChairs() {
@@ -2779,8 +2789,11 @@ function renderPodRoster() {
     chip.type = "button";
     chip.className = "pod-chip";
     chip.setAttribute("aria-pressed", seated ? "true" : "false");
-    chip.disabled = !seated && full;
-    if (chip.disabled) chip.title = `The table seats ${POD_MAX_SEATS}`;
+    const locked = seated && podSeatLocked(podSelections[idx]);
+    chip.disabled = (!seated && full) || locked;
+    chip.classList.toggle("is-locked", locked);
+    if (locked) chip.title = `${p.name} locked in their own deck. Only they can leave the table.`;
+    else if (chip.disabled) chip.title = `The table seats ${POD_MAX_SEATS}`;
 
     // A seated member's avatar shows their seat number instead of their
     // initial. Deliberately not an extra "Seat 2" tag: that widened the
@@ -2794,7 +2807,8 @@ function renderPodRoster() {
     const nameEl = document.createElement("span");
     nameEl.textContent = p.name;
     chip.appendChild(nameEl);
-    if (seated) chip.setAttribute("aria-label", `${p.name}, seat ${idx + 1}. Tap to leave the table.`);
+    if (locked) chip.setAttribute("aria-label", `${p.name}, seat ${idx + 1}. Locked in their own deck.`);
+    else if (seated) chip.setAttribute("aria-label", `${p.name}, seat ${idx + 1}. Tap to leave the table.`);
     chip.addEventListener("click", () => (seated ? removePodSeat(String(p.id)) : addPodSeat(String(p.id))));
     roster.appendChild(chip);
   }
@@ -3026,13 +3040,15 @@ function turnPodTable(i) {
 }
 
 function tapPodSeat(playerId) {
+  const slot = podSelections.find(s => s.playerId === playerId);
+  if (!slot || podSeatLocked(slot)) return;
   if (podEditingPlayerId === playerId) closePodPanel();
   else openPodSeat(playerId);
 }
 
 function openPodSeat(playerId) {
   const i = podSelections.findIndex(s => s.playerId === playerId);
-  if (i < 0) return;
+  if (i < 0 || podSeatLocked(podSelections[i])) return;
   const wasOpen = podEditingPlayerId !== null;
   podEditingPlayerId = playerId;
   turnPodTable(i);
@@ -3090,9 +3106,10 @@ function renderPodSlots() {
 
   podCount = podSelections.length;
   const editIdx = podEditingPlayerId === null ? -1 : podSelections.findIndex(s => s.playerId === podEditingPlayerId);
-  // The seat whose panel was open left the table (maybe from another phone).
-  if (editIdx < 0) podEditingPlayerId = null;
-  editingSeatIndex = editIdx < 0 ? null : editIdx;
+  // The seat whose panel was open left the table, or its player just locked
+  // in their own deck on their phone -- either way it's not ours to edit.
+  if (editIdx < 0 || podSeatLocked(podSelections[editIdx])) podEditingPlayerId = null;
+  editingSeatIndex = podEditingPlayerId === null ? null : editIdx;
 
   renderPodChairs();
   renderPodSigil();

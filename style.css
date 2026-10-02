@@ -3639,6 +3639,10 @@ input.gtu-in-prefilled {
   font-weight: 500;
 }
 .pod-plate.is-focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+/* Someone else's self-picked seat (podSeatLocked): disabled, but it should
+   still read as a settled seat, not a greyed-out broken one. */
+.pod-plate:disabled { cursor: default; }
+.pod-chair.is-locked .pod-orb-hit { cursor: default; }
 
 .pod-scene-empty {
   position: absolute;
@@ -3709,6 +3713,10 @@ input.gtu-in-prefilled {
 .pod-chip[aria-pressed="true"] .pod-chip-avatar { background: var(--accent); color: var(--accent-ink); }
 .pod-chip:disabled { opacity: 0.45; cursor: default; }
 .pod-chip:disabled:hover { border-color: var(--border); color: var(--ink); }
+/* Seated and locked in by its own player: keeps the seated look, just
+   can't be tapped (the dimmed look above is for a full table). */
+.pod-chip.is-locked:disabled { opacity: 1; }
+.pod-chip.is-locked:disabled:hover { border-color: var(--accent); }
 
 /* ---- deck panel ---- */
 /* Docks in the page flow right under the table, in place of the rail and
