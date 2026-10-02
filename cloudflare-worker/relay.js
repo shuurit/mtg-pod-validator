@@ -259,12 +259,16 @@ function pgFetch(path, env) {
 // broken or unsupported limiter should never take real traffic down with
 // it, it should just stop limiting until a custom domain (or another
 // mechanism) restores it.
-async function isRateLimited(request, ctx) {
+//
+// `opts.key`/`opts.max` let a route count something other than the IP --
+// the live table counts per signed-in person (see the router).
+async function isRateLimited(request, ctx, opts = {}) {
   try {
-    const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+    const id = opts.key || request.headers.get("CF-Connecting-IP") || "unknown";
+    const max = opts.max || RATE_LIMIT_MAX_REQUESTS;
     const bucket = Math.floor(Date.now() / 1000 / RATE_LIMIT_WINDOW_SECONDS);
     const cache = caches.default;
-    const cacheKey = new Request(`https://rate-limit.internal/${ip}/${bucket}`);
+    const cacheKey = new Request(`https://rate-limit.internal/${id}/${bucket}`);
 
     const cached = await cache.match(cacheKey);
     const count = cached ? (await cached.json()).count : 0;
@@ -278,10 +282,22 @@ async function isRateLimited(request, ctx) {
       ).catch(() => {})
     );
 
-    return count + 1 > RATE_LIMIT_MAX_REQUESTS;
+    return count + 1 > max;
   } catch {
     return false;
   }
+}
+
+// The live table's rate-limit key: a short hash of the bearer token, so the
+// token itself never ends up in a cache key. Falls back to the IP when
+// there's no token (the request is about to 401 anyway).
+async function tableRateLimitKey(request) {
+  const auth = request.headers.get("Authorization") || "";
+  const match = auth.match(/^Bearer\s+(.+)$/);
+  if (!match) return null;
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(match[1]));
+  const hex = [...new Uint8Array(digest)].slice(0, 12).map(b => b.toString(16).padStart(2, "0")).join("");
+  return `table-${hex}`;
 }
 
 async function kvGetJson(env, key, fallback) {
@@ -1628,6 +1644,17 @@ async function handleRosterDiff(env, ctx) {
 // here by a manual declaration instead of a new game. The moment a real
 // game gets logged at that bracket, the two agree and the override quietly
 // stops mattering -- real game data always wins over a manual guess.
+// A newly declared bracket (decks.bracket) that no logged game has played
+// at yet stands in for the deck's power until one does. Shared by /players
+// and the live table's check so both always agree on a deck's power.
+function isBracketPending(d) {
+  return d.bracket_override != null && d.bracket_override !== d.last_logged_bracket;
+}
+
+function effectiveDeckPower(d) {
+  return isBracketPending(d) ? d.bracket_override : d.computed_power;
+}
+
 async function computePlayersData(env) {
   const { results: playerRows } = await env.DB.prepare(
     "SELECT id, name, playgroup_username FROM players WHERE playgroup_user_id IS NOT NULL ORDER BY id"
@@ -1665,11 +1692,11 @@ async function computePlayersData(env) {
 
   const decksByPlayer = {};
   for (const d of deckRows) {
-    const bracketPending = d.bracket_override != null && d.bracket_override !== d.last_logged_bracket;
+    const bracketPending = isBracketPending(d);
     (decksByPlayer[d.player_id] ||= []).push({
       id: d.id,
       name: d.name,
-      power: bracketPending ? d.bracket_override : d.computed_power,
+      power: effectiveDeckPower(d),
       bracket: d.bracket_override,
       bracketPending,
       // Explicitly maintained (decks.new_deck), not inferred from
@@ -3156,6 +3183,294 @@ async function backfillMissingEventStats(env, seasonId) {
   }
 }
 
+// ---------- live table (the shared Set Up Pod) ----------
+// One table for the whole playgroup that every signed-in phone reads and
+// writes, so people seat themselves and pick their own decks on their own
+// phones (see the gathering table in app.js). The server holds the deck
+// picks and is the only place they're all visible: GET /table masks every
+// seat per viewer (maskTable), and the power-spread check runs here
+// (applyTableOp's "check") rather than on a phone, so no phone ever needs
+// to be told anyone else's deck before the pod passes. Phones poll GET
+// /table?v=<version> every few seconds; an unchanged table answers 204.
+
+const TABLE_MAX_SEATS = 8;
+// A table untouched this long reads as empty -- last night's pod shouldn't
+// greet tonight's players. Same span as the app's old local pod save.
+const TABLE_TTL_MS = 12 * 60 * 60 * 1000;
+// Must match RANGE_TOLERANCE in app.js -- the max power spread in a pod.
+const TABLE_RANGE_TOLERANCE = 1;
+// Optimistic-lock retries when two phones write at the same moment.
+const TABLE_WRITE_ATTEMPTS = 5;
+// Per signed-in person rather than per IP (see the router): everyone at the
+// table shares the venue's one Wi-Fi IP, and each phone polls every ~3s.
+const TABLE_RATE_LIMIT_MAX_REQUESTS = 60;
+const TABLE_OPS = new Set(["seat", "unseat", "pick", "check", "clear", "undo"]);
+
+function emptyTableState() {
+  return { seats: [], ceiling: null, revealed: false, stale: false, check: null, undo: null };
+}
+
+async function readTable(env) {
+  const row = await env.DB.prepare("SELECT state, version, updated_at FROM live_table WHERE id = 1").first();
+  if (!row) return { state: emptyTableState(), version: 0, exists: false };
+  if (Date.now() - row.updated_at > TABLE_TTL_MS) {
+    return { state: emptyTableState(), version: row.version, exists: true };
+  }
+  let state;
+  try {
+    state = { ...emptyTableState(), ...JSON.parse(row.state) };
+  } catch {
+    state = emptyTableState();
+  }
+  return { state, version: row.version, exists: true };
+}
+
+// Lands only if nobody else wrote since `read` -- returns the new version,
+// or null on a lost race (the caller re-reads and re-applies its op).
+async function writeTable(env, state, read) {
+  const json = JSON.stringify(state);
+  const now = Date.now();
+  if (!read.exists) {
+    const r = await env.DB.prepare(
+      "INSERT OR IGNORE INTO live_table (id, state, version, updated_at) VALUES (1, ?, 1, ?)"
+    ).bind(json, now).run();
+    return r.meta.changes === 1 ? 1 : null;
+  }
+  const r = await env.DB.prepare(
+    "UPDATE live_table SET state = ?, version = version + 1, updated_at = ? WHERE id = 1 AND version = ?"
+  ).bind(json, now, read.version).run();
+  return r.meta.changes === 1 ? read.version + 1 : null;
+}
+
+// A deck is visible to the seat's own player, to whoever picked it (filling
+// in for someone without their phone), and to everyone once the pod has
+// passed -- the same moment the single-phone flow revealed decks.
+function maskTable(state, version, viewerId) {
+  return {
+    version,
+    seats: state.seats.map(s => {
+      const visible = state.revealed || s.playerId === viewerId || s.pickedBy === viewerId;
+      return {
+        playerId: s.playerId,
+        sealed: s.deckId != null,
+        deckId: visible ? s.deckId : null,
+        pickedBy: s.pickedBy ?? null,
+        outOfRange: !!s.outOfRange,
+        repicked: !!s.repicked,
+      };
+    }),
+    ceiling: state.ceiling,
+    revealed: !!state.revealed,
+    stale: !!state.stale,
+    check: state.check,
+  };
+}
+
+// The decks a table check or pick needs, with power worked out exactly the
+// way /players does (effectiveDeckPower) so the server's verdict always
+// matches what the app would have computed. `where` is a fixed fragment,
+// never user input; only the bound values vary.
+async function fetchTableDecks(env, where, binds) {
+  const { results } = await env.DB.prepare(`
+    SELECT d.id, d.player_id, d.archived, d.new_deck, d.bracket AS bracket_override,
+           (SELECT gr.bracket FROM game_results gr JOIN games g ON g.id = gr.game_id
+            WHERE gr.deck_id = d.id ORDER BY g.id DESC LIMIT 1) AS last_logged_bracket,
+           COALESCE(
+             (SELECT gr.game_calculated_deck_strength
+              FROM game_results gr JOIN games g ON g.id = gr.game_id
+              WHERE gr.deck_id = d.id
+              ORDER BY g.id DESC LIMIT 1),
+             d.baseline_power
+           ) AS computed_power
+    FROM decks d WHERE ${where}
+  `).bind(...binds).all();
+  return results.map(d => ({
+    id: d.id,
+    playerId: d.player_id,
+    archived: !!d.archived,
+    newDeck: !!d.new_deck,
+    power: effectiveDeckPower(d),
+  }));
+}
+
+// Applies one operation to a copy of the table. Returns { error, status }
+// for a refused op, { changed: false } for a no-op (seating someone already
+// seated), or { changed: true, state, undoable }.
+async function applyTableOp(env, read, body, viewerId) {
+  const { state } = read;
+  const next = structuredClone(state);
+  next.undo = null;
+  const nextVersion = read.exists ? read.version + 1 : 1;
+  // A pod that changes after a check: hide the reveal again and flag the
+  // old verdict as stale until someone re-checks.
+  const podChanged = () => {
+    if (next.check) next.stale = true;
+    next.revealed = false;
+  };
+  const withUndo = () => {
+    next.undo = { token: nextVersion, state: { ...state, undo: null } };
+  };
+  const seatIndex = Number.isInteger(body.playerId) ? next.seats.findIndex(s => s.playerId === body.playerId) : -1;
+
+  switch (body.op) {
+    case "seat": {
+      if (!Number.isInteger(body.playerId)) return { error: "Missing player.", status: 400 };
+      if (seatIndex >= 0) return { changed: false };
+      if (next.seats.length >= TABLE_MAX_SEATS) return { error: `The table seats ${TABLE_MAX_SEATS}.`, status: 409 };
+      // Same population as /players (computePlayersData): tracked players
+      // with a playgroup.gg account.
+      const player = await env.DB.prepare(
+        "SELECT id FROM players WHERE id = ? AND playgroup_user_id IS NOT NULL"
+      ).bind(body.playerId).first();
+      if (!player) return { error: "That player isn't in the playgroup.", status: 400 };
+      next.seats.push({ playerId: body.playerId, deckId: null, pickedBy: null, outOfRange: false, repicked: false });
+      podChanged();
+      return { changed: true, state: next };
+    }
+
+    case "unseat": {
+      if (seatIndex < 0) return { changed: false };
+      next.seats.splice(seatIndex, 1);
+      podChanged();
+      withUndo();
+      return { changed: true, state: next, undoable: true };
+    }
+
+    case "pick": {
+      if (seatIndex < 0) return { error: "That player isn't at the table.", status: 409 };
+      if (!Number.isInteger(body.deckId)) return { error: "Missing deck.", status: 400 };
+      const seat = next.seats[seatIndex];
+      const decks = (await fetchTableDecks(env, "d.player_id = ?", [seat.playerId])).filter(d => !d.archived);
+      const deck = decks.find(d => d.id === body.deckId);
+      if (!deck) return { error: "That deck isn't available.", status: 400 };
+      // Same rule as decksAvailableForSlot in app.js: a seat flagged over
+      // the range may only re-pick a deck that fits, unless it has none.
+      if (seat.outOfRange && state.ceiling != null) {
+        const fits = decks.filter(d => d.power <= state.ceiling);
+        if (fits.length > 0 && !fits.some(d => d.id === deck.id)) {
+          return { error: "That deck is over this pod's range.", status: 400 };
+        }
+      }
+      if (seat.deckId === deck.id && seat.pickedBy === viewerId) return { changed: false };
+      const deckChanged = seat.deckId !== deck.id;
+      seat.deckId = deck.id;
+      seat.pickedBy = viewerId;
+      if (deckChanged) {
+        if (seat.outOfRange) seat.repicked = true;
+        podChanged();
+      }
+      return { changed: true, state: next };
+    }
+
+    case "check": {
+      if (next.seats.length === 0 || next.seats.some(s => s.deckId == null)) {
+        return { error: "Every seat needs a deck before checking.", status: 409 };
+      }
+      const ids = next.seats.map(s => s.deckId);
+      const decks = await fetchTableDecks(env, `d.id IN (${ids.map(() => "?").join(",")})`, ids);
+      const byId = new Map(decks.map(d => [d.id, d]));
+      if (ids.some(id => !byId.has(id))) return { error: "A picked deck no longer exists. Pick again.", status: 409 };
+
+      // Mirrors evaluatePod in app.js: new decks are exempt (their power is
+      // an unconfirmed estimate), the weakest judged deck sets the floor,
+      // and anything more than the tolerance above it is out of range.
+      const judged = next.seats.map(s => byId.get(s.deckId)).filter(d => !d.newDeck);
+      let floor = null;
+      let ceiling = null;
+      let spread = 0;
+      if (judged.length > 0) {
+        const powers = judged.map(d => d.power);
+        floor = Math.min(...powers);
+        ceiling = floor + TABLE_RANGE_TOLERANCE;
+        spread = +(Math.max(...powers) - floor).toFixed(2);
+      }
+      const entries = next.seats.map(s => {
+        const d = byId.get(s.deckId);
+        const exempt = d.newDeck || floor === null;
+        const compatible = exempt || d.power <= ceiling;
+        s.outOfRange = !compatible;
+        s.repicked = false;
+        return {
+          playerId: s.playerId,
+          compatible,
+          exempt,
+          overBy: exempt ? 0 : +Math.max(0, d.power - ceiling).toFixed(2),
+          // Distance above the floor, for the results gauge -- never the
+          // raw power, the same thing the gauge already shows.
+          rel: exempt ? null : +(d.power - floor).toFixed(2),
+        };
+      });
+      const passed = spread <= TABLE_RANGE_TOLERANCE;
+      next.ceiling = ceiling;
+      next.revealed = passed;
+      next.stale = false;
+      next.check = {
+        id: crypto.randomUUID(),
+        passed,
+        allExempt: judged.length === 0,
+        spread,
+        tolerance: TABLE_RANGE_TOLERANCE,
+        exemptCount: next.seats.length - judged.length,
+        entries,
+      };
+      return { changed: true, state: next };
+    }
+
+    case "clear": {
+      if (next.seats.length === 0 && !next.check) return { changed: false };
+      const cleared = emptyTableState();
+      Object.keys(next).forEach(k => delete next[k]);
+      Object.assign(next, cleared);
+      withUndo();
+      return { changed: true, state: next, undoable: true };
+    }
+
+    case "undo": {
+      // Only while nothing else has happened since the op being undone --
+      // otherwise restoring the snapshot would wipe someone else's change.
+      if (!state.undo || state.undo.token !== read.version || body.token !== read.version) {
+        return { error: "Too late to undo. The table has changed since.", status: 409 };
+      }
+      const restored = { ...emptyTableState(), ...state.undo.state, undo: null };
+      return { changed: true, state: restored };
+    }
+  }
+  return { error: "Unknown table action.", status: 400 };
+}
+
+async function handleTableRead(request, env, session) {
+  const url = new URL(request.url);
+  const read = await readTable(env);
+  if (url.searchParams.get("v") === String(read.version)) {
+    return new Response(null, { status: 204, headers: { ...corsHeaders(), "Cache-Control": "no-store" } });
+  }
+  return jsonResponse(maskTable(read.state, read.version, session.playerId), 200, { "Cache-Control": "no-store" });
+}
+
+async function handleTableWrite(request, env, session) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: "Invalid JSON." }, 400);
+  }
+  if (!body || !TABLE_OPS.has(body.op)) return jsonResponse({ error: "Unknown table action." }, 400);
+
+  for (let attempt = 0; attempt < TABLE_WRITE_ATTEMPTS; attempt++) {
+    const read = await readTable(env);
+    const result = await applyTableOp(env, read, body, session.playerId);
+    if (result.error) return jsonResponse({ error: result.error }, result.status || 400);
+    if (!result.changed) return jsonResponse(maskTable(read.state, read.version, session.playerId), 200);
+    const version = await writeTable(env, result.state, read);
+    if (version !== null) {
+      const view = maskTable(result.state, version, session.playerId);
+      if (result.undoable) view.undoToken = version;
+      return jsonResponse(view, 200);
+    }
+  }
+  return jsonResponse({ error: "The table was busy. Try again." }, 409);
+}
+
 // ---------- router ----------
 
 export default {
@@ -3164,15 +3479,22 @@ export default {
       return new Response(null, { headers: corsHeaders() });
     }
 
-    if (await isRateLimited(request, ctx)) {
+    const url = new URL(request.url);
+
+    // The live table is polled every few seconds by every phone at the
+    // table -- all behind the venue's one Wi-Fi IP -- so it's counted per
+    // signed-in person with a higher ceiling, not against the shared IP.
+    const isTableRoute = url.pathname === "/table";
+    const rateLimitOpts = isTableRoute
+      ? { key: await tableRateLimitKey(request), max: TABLE_RATE_LIMIT_MAX_REQUESTS }
+      : {};
+    if (await isRateLimited(request, ctx, rateLimitOpts)) {
       return jsonResponse(
         { error: "Too many requests, slow down." },
         429,
         { "Retry-After": String(RATE_LIMIT_WINDOW_SECONDS) }
       );
     }
-
-    const url = new URL(request.url);
 
     if (request.method === "GET" && url.pathname === "/auth/discord/callback") {
       return handleDiscordCallback(request, env);
@@ -3214,6 +3536,14 @@ export default {
       if (!session) {
         return jsonResponse({ error: "Sign in required" }, 401);
       }
+    }
+
+    if (isTableRoute && request.method === "GET") {
+      return handleTableRead(request, env, session);
+    }
+
+    if (isTableRoute && request.method === "POST") {
+      return handleTableWrite(request, env, session);
     }
 
     if (request.method === "GET" && url.pathname === "/playgroup-games") {

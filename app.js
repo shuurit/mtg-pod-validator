@@ -32,6 +32,8 @@ const TROPHY_CASE_RELAY_URL = RELAY_BASE_URL + "/trophy-case";
 const TROPHY_PINS_RELAY_URL = RELAY_BASE_URL + "/trophy-case/pins";
 const TROPHY_LEADERBOARD_RELAY_URL = RELAY_BASE_URL + "/trophy-leaderboard";
 const SEASON_CLOSE_RELAY_URL = RELAY_BASE_URL + "/seasons/close";
+// The shared Set Up Pod table -- see applyLiveTable.
+const TABLE_RELAY_URL = RELAY_BASE_URL + "/table";
 
 // Discord OAuth sign-in. Client ID is public (it's part of the login URL
 // below), matches the constant of the same name in relay.js -- the Client
@@ -158,34 +160,34 @@ let authUnreachable = false;
 
 let players = []; // everyone in Current Deck Strength, unfiltered
 let podPlayers = []; // players filtered to knownPlaygroupPlayers -- used by Deck Strength Validator and Player Win Rates
-// One entry per seat at the table, in seat order -- the gathering table
-// (see renderPodSlots) only ever holds seated players, so the pod's size
-// is just how many chairs are pulled up. podCount mirrors that length for
-// savePodState and anything else that reads it.
+// One entry per seat at the table, in seat order, as last read from the
+// relay's shared table (see applyLiveTable) -- every phone at the table
+// sees and edits the same one. deckId is only filled in where this phone is
+// allowed to know it (its own seat, a seat it picked for, or everyone's
+// once the pod passes); sealed says a deck is in either way.
 let podCount = 0;
-let podSelections = []; // { playerId, deckId, outOfRange, repicked } per seat
-const POD_STATE_KEY = "podState"; // see savePodState/restorePodState
-const POD_STATE_MAX_AGE_MS = 12 * 60 * 60 * 1000;
-// Saving stays off until restorePodState has run, so the empty pod rendered
-// at script load can't overwrite a saved one before it's read back.
-let podStateRestored = false;
-// The ceiling (floor + RANGE_TOLERANCE) from the last completed power-spread
-// check, used to filter an out-of-range seat's deck options down to ones
-// that would actually fix it -- see runValidation and decksAvailableForSlot.
-// Deliberately not reset when renderPodSlots re-renders -- that also
-// happens on every background data refresh, and a seat's outOfRange flag
-// would be meaningless without it.
+let podSelections = []; // { playerId, deckId, sealed, pickedBy, outOfRange, repicked } per seat
+// The table renders nothing until the signed-in init has run (see
+// initLiveTable) -- the load-time render setPlayers triggers comes before
+// the consts the table code needs, and before there's a session to ask with.
+let podTableReady = false;
+// The ceiling (floor + RANGE_TOLERANCE) from the table's last check, used to
+// narrow an out-of-range seat's deck options to ones that would fix it --
+// see decksAvailableForSlot. Comes from the relay with everything else.
 let lastCeiling = null;
-// Which seat's deck panel is open under the table -- only one at a time.
-// null means no panel, just the member rail. Reset when that seat leaves
-// the table or the pod itself resets.
+// Whose deck panel is open under the table on THIS phone -- tracked by
+// player rather than seat number, since another phone can add or remove a
+// seat and shift the numbers while it's open. editingSeatIndex is that
+// player's current seat, recomputed on every render. null = no panel.
+let podEditingPlayerId = null;
 let editingSeatIndex = null;
 // True once the last check passed and nothing has changed since: the orbs
 // show each deck's colours and the nameplates its name. Any change to the
-// pod (a seat added, removed or re-decked) masks it all again.
+// pod (a seat added, removed or re-decked, on any phone) masks it again.
 let podRevealed = false;
-// The table's current turn in degrees (see turnPodTable). Accumulates
-// rather than wrapping, so each turn takes the short way round.
+// The table's current turn in degrees (see turnPodTable). Local to this
+// phone -- everyone turns their own view. Accumulates rather than wrapping,
+// so each turn takes the short way round.
 let podSpin = 0;
 // The table's DOM, built once by buildPodTable and reused on every render so
 // thrones can glide between positions instead of being rebuilt.
@@ -2180,76 +2182,135 @@ function renderPlayersTable() {
 
 // ---------- pod setup UI ----------
 
-// Pull-to-refresh's own reset, on top of the usual data refetch -- a pull
-// signals "we're done with this pod, starting fresh" (unlike the desktop
-// refresh button, a background visibility-change refresh, or the refresh
-// that follows a submission, none of which should blow away a pod someone's
-// still setting up), so it also clears the table and any stale pass/fail
-// results from the last check. Also what "Clear the table" does once a pod
-// has passed (see handlePodCta).
-function resetPodSetup() {
-  podSelections = [];
-  podCount = 0;
-  lastCeiling = null;
-  editingSeatIndex = null;
-  podRevealed = false;
+// ---------- Set Up Pod: the shared live table ----------
+// The pod lives on the relay (GET/POST /table), not on one phone: people
+// seat themselves and pick their own decks on their own phones, and every
+// phone shows the same table. Each phone polls every few seconds while the
+// Pod tab is open; an unchanged table answers 204, so a quiet poll is
+// nearly free. The relay masks other people's decks and runs the power
+// check itself, so no phone is ever told a deck it isn't allowed to see.
+
+const TABLE_POLL_MS = 3000;
+let liveTableVersion = null; // last version applied, for ?v= and ordering
+let liveTableLoaded = false; // false until the first read lands
+let liveTableCheck = null; // the relay's last check (see renderPodCheckResults)
+let liveTableStale = false; // the pod changed after that check
+let liveTableSeenCheckId = null; // the check whose reveal this phone already played
+let podPollInFlight = false;
+let podStatusError = null;
+let podStatusErrorTimer = null;
+
+function myPodPlayerId() {
+  return currentUser ? String(currentUser.playerId) : null;
+}
+
+async function tableRequest(method, body, query = "") {
+  const res = await fetch(`${TABLE_RELAY_URL}${query}`, {
+    method,
+    cache: "no-store",
+    headers: authHeaders(),
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (res.status === 204) return null;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `The table didn't answer (HTTP ${res.status}).`);
+  return data;
+}
+
+// Takes a table view from the relay (a poll or a write's reply) and renders
+// it. Views carry a version; an older one than what's on screen -- a poll
+// that left before this phone's own write but landed after it -- is dropped.
+function applyLiveTable(view) {
+  if (!view) return;
+  if (liveTableVersion !== null && view.version < liveTableVersion) return;
+  const firstLoad = !liveTableLoaded;
+  const seatedBefore = new Set(podSelections.map(s => s.playerId));
+  const prevCheckId = liveTableCheck ? liveTableCheck.id : null;
+
+  liveTableVersion = view.version;
+  podSelections = view.seats.map(s => ({
+    playerId: String(s.playerId),
+    deckId: s.deckId != null ? String(s.deckId) : "",
+    sealed: !!s.sealed,
+    pickedBy: s.pickedBy != null ? String(s.pickedBy) : "",
+    outOfRange: !!s.outOfRange,
+    repicked: !!s.repicked,
+  }));
+  podRevealed = !!view.revealed;
+  lastCeiling = view.ceiling ?? null;
+  liveTableStale = !!view.stale;
+  liveTableCheck = view.check || null;
+  liveTableLoaded = true;
+
+  // Someone joining on any phone pulls a throne up on every phone -- but
+  // opening the app onto a table that's already seated shouldn't replay it.
+  if (!firstLoad) {
+    for (const s of podSelections) if (!seatedBefore.has(s.playerId)) podSeatsEntering.add(s.playerId);
+  }
   renderPodSlots();
-  const resultsSection = document.getElementById("results-section");
-  if (resultsSection) resultsSection.hidden = true;
-}
+  renderPodCheckResults();
 
-// The pod survives a reload. It used to live only in memory, and "To the
-// Game!" sends people off to playgroup.gg in another tab -- long enough for
-// iOS to unload a home-screen app and hand back an empty pod. Saved on every
-// change (renderPodSlots is the one place every change funnels through) and
-// restored at startup; a pod older than a night of play is ignored. (Key and
-// max age are declared up with podCount -- restorePodState runs at load,
-// well above this point in the file.)
-function snapshotPodState() {
-  return { podCount, podSelections: podSelections.map(s => ({ ...s })), lastCeiling, podRevealed };
-}
-
-// Saves from before the table could hold empty slots (a seat with no player
-// yet) -- those are dropped, since a chair only exists once someone's in it.
-function applyPodState(state) {
-  podSelections = state.podSelections
-    .filter(s => s && s.playerId)
-    .slice(0, POD_MAX_SEATS)
-    .map(s => ({ playerId: String(s.playerId), deckId: s.deckId ? String(s.deckId) : "", outOfRange: !!s.outOfRange, repicked: !!s.repicked }));
-  podCount = podSelections.length;
-  lastCeiling = state.lastCeiling ?? null;
-  podRevealed = !!state.podRevealed && podSelections.length > 0 && podSelections.every(s => s.deckId);
-  editingSeatIndex = null;
-}
-
-function podHasPicks() {
-  return podSelections.length > 0;
-}
-
-function savePodState() {
-  if (!podStateRestored) return;
-  try {
-    localStorage.setItem(POD_STATE_KEY, JSON.stringify({ ...snapshotPodState(), savedAt: Date.now() }));
-  } catch {
-    // Storage full or blocked (private mode) -- the pod still works, it
-    // just won't survive a reload.
+  const check = liveTableCheck;
+  if (firstLoad) {
+    liveTableSeenCheckId = check ? check.id : null;
+  } else if (check && check.id !== prevCheckId && check.id !== liveTableSeenCheckId) {
+    liveTableSeenCheckId = check.id;
+    if (check.passed && podRevealed) schedulePodReveal(check.id);
+    else shakeFlaggedOrbs();
   }
 }
 
-// Runs once signed in (see the init section), not at script load: a restored
-// pod renders settled seats, whose lock icon needs UI_ICON_PATHS, which is
-// declared further down the file than the load-time render.
-function restorePodState() {
+async function pollLiveTable(force) {
+  if (!podTableReady || !currentUser || podPollInFlight) return;
+  if (!force && (document.hidden || document.getElementById("tab-pod")?.hidden)) return;
+  podPollInFlight = true;
   try {
-    const saved = JSON.parse(localStorage.getItem(POD_STATE_KEY) || "null");
-    if (!saved || !(Date.now() - saved.savedAt < POD_STATE_MAX_AGE_MS)) return;
-    if (!Array.isArray(saved.podSelections)) return;
-    applyPodState(saved);
+    applyLiveTable(await tableRequest("GET", null, liveTableVersion !== null ? `?v=${liveTableVersion}` : ""));
   } catch {
-    // Unreadable saved state -- start with an empty pod, as before.
+    // A missed poll just waits for the next one; nothing to tell anyone.
   } finally {
-    podStateRestored = true;
+    podPollInFlight = false;
   }
+}
+
+// One table write. The reply is the fresh table, applied straight away so
+// the phone that acted never waits on a poll. undoMessage offers the relay's
+// undo (unseat, clear) in the usual toast.
+async function tableOp(body, undoMessage) {
+  try {
+    const view = await tableRequest("POST", body);
+    applyLiveTable(view);
+    if (undoMessage && view && view.undoToken) {
+      showUndoToast(undoMessage, () => tableOp({ op: "undo", token: view.undoToken }));
+    }
+    return view;
+  } catch (err) {
+    showPodError(err instanceof TypeError ? "Couldn't reach the table. Check your connection." : err.message);
+    pollLiveTable(true);
+    return null;
+  }
+}
+
+function showPodError(message) {
+  podStatusError = message;
+  clearTimeout(podStatusErrorTimer);
+  podStatusErrorTimer = setTimeout(() => {
+    podStatusError = null;
+    if (podUi) renderPodStatus();
+  }, 5000);
+  if (podUi) renderPodStatus();
+}
+
+// Signed-in start-up: first read of the table, then the poll. The poll only
+// does anything while the Pod tab is open and the app is in front.
+function initLiveTable() {
+  podTableReady = true;
+  // The pod used to be saved on the phone itself; the relay holds it now.
+  try { localStorage.removeItem("podState"); } catch { /* storage blocked -- nothing to clean */ }
+  renderPodSlots();
+  pollLiveTable(true);
+  setInterval(pollLiveTable, TABLE_POLL_MS);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) pollLiveTable(); });
 }
 
 // A short-lived "X · Undo" bar above the bottom tabs. Only one at a time;
@@ -2291,31 +2352,6 @@ function decksAvailableForSlot(slot) {
   return restricted && restricted.length > 0 ? restricted : activeDecks;
 }
 
-// Any change to the pod after a check leaves the results card showing a
-// verdict for a pod that no longer exists -- this flags the button (and the
-// affected row, when one seat's deck changed) rather than letting it go
-// quietly stale. Also masks a revealed table again.
-function markPodCheckStale(slot) {
-  podRevealed = false;
-  const resultsSection = document.getElementById("results-section");
-  if (!resultsSection || resultsSection.hidden) return;
-  document.getElementById("validate-btn").classList.add("glow");
-  if (!slot) return;
-  const staleRow = document.querySelector(`.result-row[data-player-id="${slot.playerId}"]`);
-  if (staleRow) staleRow.classList.add("pending-recheck");
-}
-
-// The first seat that still needs a deck -- none yet, or flagged by the last
-// check and not re-picked -- or null when every seat is set. Drives the deal
-// cadence: sealing one seat turns the table to the next.
-function nextIncompleteSeat() {
-  for (let i = 0; i < podSelections.length; i++) {
-    const s = podSelections[i];
-    if (!s.deckId || (s.outOfRange && !s.repicked)) return i;
-  }
-  return null;
-}
-
 // ---------- Set Up Pod: the gathering table ----------
 // A wizard's table in CSS 3D. Tapping a member on the rail pulls a throne
 // up with a glass orb of spellfire in it; tapping a nameplate (or the
@@ -2327,7 +2363,7 @@ function nextIncompleteSeat() {
 //   revealed -- the pod passed: each flame burns in its deck's colours
 // The deck stays masked exactly as before until the whole pod passes.
 //
-// Everything below runs only after restorePodState (renderPodSlots bails
+// Everything below runs only after initLiveTable (renderPodSlots bails
 // until then): these consts sit far below the load-time render that
 // setPlayers triggers, and the pod tab is behind the sign-in gate anyway.
 
@@ -2378,10 +2414,12 @@ function podDeckOf(slot) {
   return player && slot.deckId ? player.decks.find(d => String(d.id) === slot.deckId) || null : null;
 }
 
+// sealed (not deckId) decides it: this phone often isn't told which deck a
+// seat holds, only that one is in.
 function podSeatState(slot) {
-  if (podRevealed && slot.deckId) return "revealed";
+  if (podRevealed && slot.sealed) return "revealed";
   if (slot.outOfRange && !slot.repicked) return "flagged";
-  if (slot.deckId) return "sealed";
+  if (slot.sealed) return "sealed";
   return "waiting";
 }
 
@@ -2688,7 +2726,7 @@ function renderPodSigil() {
   });
   podUi.sigil.innerHTML = html;
 
-  const sealed = podSelections.filter(s => s.deckId && podSeatState(s) !== "flagged").length;
+  const sealed = podSelections.filter(s => s.sealed && podSeatState(s) !== "flagged").length;
   podUi.slate.classList.toggle("is-ready", podRevealed);
   podUi.count.textContent = n === 0 ? "0" : (podRevealed ? String(n) : `${sealed}/${n}`);
   podUi.word.textContent = n === 0 ? "Seats" : (podRevealed ? "Ready" : "Sealed");
@@ -2721,29 +2759,51 @@ function renderPodRoster() {
     nameEl.textContent = p.name;
     chip.appendChild(nameEl);
     if (seated) chip.setAttribute("aria-label", `${p.name}, seat ${idx + 1}. Tap to leave the table.`);
-    chip.addEventListener("click", () => (seated ? removePodSeat(idx) : addPodSeat(String(p.id))));
+    chip.addEventListener("click", () => (seated ? removePodSeat(String(p.id)) : addPodSeat(String(p.id))));
     roster.appendChild(chip);
   }
+}
+
+function podNameOf(slot) {
+  return podPlayerOf(slot)?.name || "Someone";
+}
+
+// "Becca", "Becca and Ryan", "Becca, Ryan and 2 more".
+function podNameList(slots) {
+  const names = slots.map(podNameOf);
+  if (names.length <= 2) return names.join(" and ");
+  return `${names.slice(0, 2).join(", ")} and ${names.length - 2} more`;
 }
 
 function renderPodStatus() {
   const el = podUi.status;
   const n = podSelections.length;
-  podUi.empty.hidden = n > 0;
+  podUi.empty.hidden = n > 0 || !liveTableLoaded;
+  el.classList.toggle("pod-status-error", !!podStatusError);
+  if (podStatusError) { el.textContent = podStatusError; return; }
+  if (!liveTableLoaded) { el.textContent = "Finding the table…"; return; }
   if (n === 0) { el.textContent = "No one at the table yet."; return; }
   if (podRevealed) { el.innerHTML = `<strong>Pod passes.</strong> ${n} ${n === 1 ? "deck" : "decks"} revealed. Ready to play.`; return; }
-  const flagged = podSelections.filter(s => podSeatState(s) === "flagged");
-  if (flagged.length) {
-    const names = flagged.map(s => podPlayerOf(s)?.name || "A seat");
+
+  const strongThen = (lead, rest) => {
     const strong = document.createElement("strong");
-    strong.textContent = `${names.join(" and ")} ${flagged.length > 1 ? "are" : "is"} over this pod's range.`;
+    strong.textContent = lead;
     el.textContent = "";
     el.appendChild(strong);
-    el.appendChild(document.createTextNode(" Pick a lower deck, then check again."));
+    if (rest) el.appendChild(document.createTextNode(` ${rest}`));
+  };
+  const flagged = podSelections.filter(s => podSeatState(s) === "flagged");
+  if (flagged.length) {
+    strongThen(`${podNameList(flagged)} ${flagged.length > 1 ? "are" : "is"} over this pod's range.`, "Pick a lower deck, then check again.");
     return;
   }
-  const sealed = podSelections.filter(s => s.deckId).length;
-  if (sealed < n) { el.textContent = `${n} at the table. ${sealed} of ${n} decks sealed.`; return; }
+  const waiting = podSelections.filter(s => !s.sealed);
+  if (waiting.length) {
+    el.textContent = `${n - waiting.length} of ${n} decks sealed. Waiting on ${podNameList(waiting)}. ` +
+      "Tap a seat to pick for someone without their phone.";
+    return;
+  }
+  if (liveTableStale) { strongThen("The pod changed after the check.", "Check the spread again."); return; }
   el.textContent = `All ${n} decks sealed. Ready to check the spread.`;
 }
 
@@ -2755,11 +2815,24 @@ function renderPodPanel() {
   podUi.roster.hidden = open;
   const validateRow = document.getElementById("pod-validate-row");
   if (validateRow) validateRow.hidden = open;
-  if (!open) { podPanelWasOpen = false; return; }
+  if (!open) {
+    podPanelWasOpen = false;
+    delete panel.dataset.signature;
+    return;
+  }
 
   const i = editingSeatIndex;
   const slot = podSelections[i];
   const player = podPlayerOf(slot);
+  const decks = decksAvailableForSlot(slot);
+  const me = myPodPlayerId();
+  const mine = slot.playerId === me;
+  // Another phone's change re-renders this one; rebuilding an unchanged
+  // panel would reset the deck list's scroll and focus under someone's
+  // finger, so only rebuild when something in it actually changed.
+  const signature = JSON.stringify([slot.playerId, i, podSelections.length, slot.deckId, slot.sealed, slot.outOfRange, lastCeiling, decks.map(d => d.id), !!player]);
+  if (panel.dataset.signature === signature) return;
+  panel.dataset.signature = signature;
   panel.innerHTML = "";
 
   const head = document.createElement("div");
@@ -2773,11 +2846,14 @@ function renderPodPanel() {
   titles.className = "pod-panel-titles";
   const title = document.createElement("h3");
   title.className = "pod-panel-title";
-  title.textContent = player ? player.name : "…";
+  title.textContent = mine ? "Your deck" : (player ? player.name : "…");
   titles.appendChild(title);
   const sub = document.createElement("p");
   sub.className = "pod-panel-sub";
-  sub.textContent = `Seat ${i + 1} of ${podSelections.length}. ${slot.deckId ? "Tap to change the sealed deck." : "Pick a deck."}`;
+  const name = player ? player.name : "this player";
+  if (mine) sub.textContent = `Seat ${i + 1} of ${podSelections.length}. Only you will see it until the pod passes.`;
+  else if (slot.sealed && !slot.deckId) sub.textContent = `${name}'s deck is already sealed. Picking replaces it.`;
+  else sub.textContent = `Picking for ${name}. Only you and ${name} will see it until the pod passes.`;
   titles.appendChild(sub);
   head.appendChild(titles);
   const done = document.createElement("button");
@@ -2788,7 +2864,6 @@ function renderPodPanel() {
   head.appendChild(done);
   panel.appendChild(head);
 
-  const decks = decksAvailableForSlot(slot);
   if (slot.outOfRange && lastCeiling !== null && player && decks.length < player.decks.filter(d => !d.archived).length) {
     const range = document.createElement("p");
     range.className = "pod-panel-range";
@@ -2802,10 +2877,10 @@ function renderPodPanel() {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "pod-deck" + (String(d.id) === slot.deckId ? " pod-deck-current" : "");
-    const name = document.createElement("span");
-    name.className = "pod-deck-name";
-    name.textContent = d.name;
-    btn.appendChild(name);
+    const deckName = document.createElement("span");
+    deckName.className = "pod-deck-name";
+    deckName.textContent = d.name;
+    btn.appendChild(deckName);
     // Games logged, not power -- power is the thing this screen keeps
     // hidden, and how often a deck gets played is the one hint that
     // helps you find it in a 17-deck list without leaking anything.
@@ -2813,7 +2888,7 @@ function renderPodPanel() {
     games.className = "pod-deck-games";
     games.textContent = d.gamesLogged === 1 ? "1 game" : `${d.gamesLogged || 0} games`;
     btn.appendChild(games);
-    btn.addEventListener("click", () => pickPodDeck(i, String(d.id)));
+    btn.addEventListener("click", () => pickPodDeck(slot.playerId, String(d.id)));
     list.appendChild(btn);
   }
   panel.appendChild(list);
@@ -2823,17 +2898,16 @@ function renderPodPanel() {
   const leave = document.createElement("button");
   leave.type = "button";
   leave.className = "pod-leave";
-  leave.textContent = "Leave the table";
-  leave.addEventListener("click", () => removePodSeat(i));
+  leave.textContent = mine ? "Leave the table" : `Take ${name} off the table`;
+  leave.addEventListener("click", () => removePodSeat(slot.playerId));
   footer.appendChild(leave);
   const note = document.createElement("span");
   note.className = "pod-note";
-  note.innerHTML = `${uiIcon("lock")}<span>Hidden once you pick</span>`;
+  note.innerHTML = `${uiIcon("lock")}<span>Hidden from the table once picked</span>`;
   footer.appendChild(note);
   panel.appendChild(footer);
 
-  // Entrance only when the panel opens, not on every re-render (a data
-  // refresh re-renders it too, and must not replay anything).
+  // Entrance only when the panel opens, not on every re-render.
   if (!podPanelWasOpen) {
     panel.classList.remove("opening");
     void panel.offsetWidth;
@@ -2843,65 +2917,70 @@ function renderPodPanel() {
   podPanelWasOpen = true;
 }
 
-// The one button under the table: its label is whatever the pod needs next.
+// The one button under the table, self-serve first: take your seat, pick
+// your deck, then check once everyone's in. What it does is whatever its
+// label says (podCtaAction).
+let podCtaAction = null;
 function renderPodCta() {
   const btn = document.getElementById("validate-btn");
   if (!btn) return;
   const n = podSelections.length;
-  btn.disabled = n === 0;
-  btn.classList.toggle("primary", !podRevealed);
-  if (n === 0) { btn.textContent = "Seat someone to start"; return; }
-  if (podRevealed) { btn.textContent = "Clear the table"; return; }
-  const flagged = podSelections.find(s => podSeatState(s) === "flagged");
-  if (flagged) { btn.textContent = `Pick a new deck for ${podPlayerOf(flagged)?.name || "this seat"}`; return; }
-  const missing = podSelections.filter(s => !s.deckId).length;
-  if (missing) { btn.textContent = missing === n ? "Pick decks" : `Pick decks (${missing} to go)`; return; }
-  btn.textContent = "Check Deck Power Spread";
+  const me = myPodPlayerId();
+  const mineIdx = podSelections.findIndex(s => s.playerId === me);
+  const canSit = !!me && podPlayers.some(p => String(p.id) === me);
+  const set = (label, action, { primary = true, glow = false } = {}) => {
+    btn.textContent = label;
+    btn.disabled = !action;
+    btn.classList.toggle("primary", primary);
+    btn.classList.toggle("glow", glow);
+    podCtaAction = action;
+  };
+
+  if (!liveTableLoaded) return set("Finding the table…", null);
+  if (podRevealed) return set("Clear the table", clearPodTable, { primary: false });
+  if (mineIdx < 0 && canSit) {
+    return n >= POD_MAX_SEATS ? set("The table is full", null) : set("Take a seat", () => addPodSeat(me));
+  }
+  if (mineIdx >= 0) {
+    const state = podSeatState(podSelections[mineIdx]);
+    if (state === "waiting") return set("Pick your deck", () => openPodSeat(me));
+    if (state === "flagged") return set("Pick a new deck", () => openPodSeat(me));
+  }
+  if (n === 0) return set("Seat someone to start", null);
+  const needs = podSelections.filter(s => !s.sealed || podSeatState(s) === "flagged");
+  if (needs.length) return set(`Waiting on ${podNameList(needs)}`, null);
+  set("Check Deck Power Spread", runPodCheck, { glow: liveTableStale && !!liveTableCheck });
 }
 
 function handlePodCta() {
-  if (podSelections.length === 0) return;
-  if (podRevealed) {
-    // Same reset (and the same undo) as pulling to refresh.
-    const before = snapshotPodState();
-    resetPodSetup();
-    showUndoToast("Table cleared", () => {
-      applyPodState(before);
-      renderPodSlots();
-    });
-    return;
-  }
-  const next = nextIncompleteSeat();
-  if (next !== null) openPodSeat(next);
-  else runValidation();
+  if (podCtaAction) podCtaAction();
 }
 
 function addPodSeat(playerId) {
-  if (podSelections.length >= POD_MAX_SEATS || podSelections.some(s => s.playerId === playerId)) return;
-  podSelections.push({ playerId, deckId: "", outOfRange: false, repicked: false });
-  podSeatsEntering.add(playerId);
-  markPodCheckStale(null);
-  renderPodSlots();
+  if (podSelections.some(s => s.playerId === playerId)) return;
+  tableOp({ op: "seat", playerId: Number(playerId) });
 }
 
-function removePodSeat(i) {
-  const [slot] = podSelections.splice(i, 1);
+function removePodSeat(playerId) {
+  const slot = podSelections.find(s => s.playerId === playerId);
   if (!slot) return;
-  if (editingSeatIndex === i) editingSeatIndex = null;
-  else if (editingSeatIndex !== null && editingSeatIndex > i) editingSeatIndex--;
-  markPodCheckStale(null);
-  renderPodSlots();
-  const name = podPlayerOf(slot)?.name || "A player";
-  showUndoToast(`${name} left the table`, () => {
-    if (podSelections.some(s => s.playerId === slot.playerId) || podSelections.length >= POD_MAX_SEATS) return;
-    podSelections.splice(Math.min(i, podSelections.length), 0, slot);
-    podSeatsEntering.add(slot.playerId);
-    markPodCheckStale(null);
-    renderPodSlots();
-  });
+  const name = podNameOf(slot);
+  if (podEditingPlayerId === playerId) podEditingPlayerId = null;
+  const leaving = playerId === myPodPlayerId() ? "You left the table" : `${name} left the table`;
+  tableOp({ op: "unseat", playerId: Number(playerId) }, leaving);
 }
 
-// Turns the table so seat i faces you, the short way round.
+function clearPodTable() {
+  podEditingPlayerId = null;
+  tableOp({ op: "clear" }, "Table cleared");
+}
+
+function runPodCheck() {
+  tableOp({ op: "check" });
+}
+
+// Turns the table so seat i faces you, the short way round. Only this
+// phone's view turns.
 function turnPodTable(i) {
   if (!podUi) return;
   const target = -podAngle(i, podSelections.length);
@@ -2911,16 +2990,15 @@ function turnPodTable(i) {
 }
 
 function tapPodSeat(playerId) {
-  const i = podSelections.findIndex(s => s.playerId === playerId);
-  if (i < 0) return;
-  if (editingSeatIndex === i) closePodPanel();
-  else openPodSeat(i);
+  if (podEditingPlayerId === playerId) closePodPanel();
+  else openPodSeat(playerId);
 }
 
-function openPodSeat(i) {
-  if (i < 0 || i >= podSelections.length) return;
-  const wasOpen = editingSeatIndex !== null;
-  editingSeatIndex = i;
+function openPodSeat(playerId) {
+  const i = podSelections.findIndex(s => s.playerId === playerId);
+  if (i < 0) return;
+  const wasOpen = podEditingPlayerId !== null;
+  podEditingPlayerId = playerId;
   turnPodTable(i);
   renderPodSlots();
   if (wasOpen && !REDUCED_MOTION.matches) {
@@ -2933,50 +3011,52 @@ function openPodSeat(i) {
 }
 
 function closePodPanel() {
-  if (editingSeatIndex === null) return;
-  const slot = podSelections[editingSeatIndex];
-  editingSeatIndex = null;
+  if (podEditingPlayerId === null) return;
+  const playerId = podEditingPlayerId;
+  podEditingPlayerId = null;
   renderPodSlots();
-  if (slot) podSeatEls.get(slot.playerId)?.plate.focus({ preventScroll: true });
+  podSeatEls.get(playerId)?.plate.focus({ preventScroll: true });
 }
 
-function pickPodDeck(i, deckId) {
-  const slot = podSelections[i];
+// Seals a deck on the shared table. Closes the panel straight away -- the
+// pick lands on every phone within a poll -- and flares this seat's orb
+// once the relay confirms it.
+async function pickPodDeck(playerId, deckId) {
+  const slot = podSelections.find(s => s.playerId === playerId);
   if (!slot) return;
-  const changed = slot.deckId !== deckId;
-  slot.deckId = deckId;
-  if (changed) {
-    if (slot.outOfRange) slot.repicked = true;
-    markPodCheckStale(slot);
-    const orb = podSeatEls.get(slot.playerId)?.chair.querySelector(".pod-orb");
-    if (orb && !REDUCED_MOTION.matches) {
-      orb.animate([{ transform: "scale(1)" }, { transform: "scale(1.16)" }, { transform: "scale(1)" }],
-        { duration: 420, easing: "cubic-bezier(0.23, 1, 0.32, 1)" });
-    }
+  if (podEditingPlayerId === playerId) podEditingPlayerId = null;
+  renderPodSlots();
+  const view = await tableOp({ op: "pick", playerId: Number(playerId), deckId: Number(deckId) });
+  const orb = view ? podSeatEls.get(playerId)?.chair.querySelector(".pod-orb") : null;
+  if (orb && !REDUCED_MOTION.matches) {
+    orb.animate([{ transform: "scale(1)" }, { transform: "scale(1.16)" }, { transform: "scale(1)" }],
+      { duration: 420, easing: "cubic-bezier(0.23, 1, 0.32, 1)" });
   }
-  // Sealing a seat turns the table to the next one that still needs a deck,
-  // and closes up once every seat is set.
-  const next = nextIncompleteSeat();
-  if (next !== null) openPodSeat(next);
-  else {
-    editingSeatIndex = null;
-    renderPodSlots();
-  }
+}
+
+function shakeFlaggedOrbs() {
+  if (REDUCED_MOTION.matches) return;
+  podSelections.forEach(slot => {
+    if (podSeatState(slot) !== "flagged") return;
+    podSeatEls.get(slot.playerId)?.chair.querySelector(".pod-orb")?.animate(
+      [{ transform: "translateX(0)" }, { transform: "translateX(-3px)" }, { transform: "translateX(3px)" }, { transform: "translateX(-2px)" }, { transform: "translateX(0)" }],
+      { duration: 360, easing: "ease-out" }
+    );
+  });
 }
 
 function renderPodSlots() {
-  // Not before restorePodState: see the note above POD_MAX_SEATS.
-  if (!podStateRestored) return;
+  // Not before initLiveTable: see the note above POD_MAX_SEATS.
+  if (!podTableReady) return;
   const container = document.getElementById("pod-slots");
   if (!container) return;
   if (!podUi) podUi = buildPodTable(container);
 
-  // Belt and braces: one seat per player, capped at the table's size.
-  const seen = new Set();
-  podSelections = podSelections.filter(s => s.playerId && !seen.has(s.playerId) && seen.add(s.playerId)).slice(0, POD_MAX_SEATS);
   podCount = podSelections.length;
-  if (editingSeatIndex !== null && editingSeatIndex >= podCount) editingSeatIndex = null;
-  if (podRevealed && !podSelections.every(s => s.deckId)) podRevealed = false;
+  const editIdx = podEditingPlayerId === null ? -1 : podSelections.findIndex(s => s.playerId === podEditingPlayerId);
+  // The seat whose panel was open left the table (maybe from another phone).
+  if (editIdx < 0) podEditingPlayerId = null;
+  editingSeatIndex = editIdx < 0 ? null : editIdx;
 
   renderPodChairs();
   renderPodSigil();
@@ -2984,7 +3064,6 @@ function renderPodSlots() {
   renderPodStatus();
   renderPodPanel();
   renderPodCta();
-  savePodState();
 }
 
 // ---------- reveal modal (Scryfall commander art) ----------
@@ -3031,7 +3110,7 @@ async function fetchCommanderArt(cardName) {
   return result;
 }
 
-// Popped open automatically once runValidation finds the whole pod in
+// Popped open automatically once the table's check finds the whole pod in
 // range. Each tile's art loads independently (no shared loading gate) so
 // one slow or failed lookup never holds up the rest of the reveal.
 function showRevealModal(evaluated) {
@@ -3541,128 +3620,59 @@ function buildPowerGauge(judgedEntries, floor, ceiling) {
   return wrap;
 }
 
-function runValidation() {
+// The results card under the table, drawn from the relay's last check so
+// every phone shows the same verdict. Same masking as ever: until the pod
+// passes it names players and whether they're in range, never their decks
+// or raw power -- the gauge plots each deck's distance above the floor
+// (the relay's `rel`), which is all the gauge ever showed.
+function renderPodCheckResults() {
   const resultsSection = document.getElementById("results-section");
   const resultsDiv = document.getElementById("results");
-  document.getElementById("validate-btn").classList.remove("glow");
+  if (!resultsSection || !resultsDiv) return;
+  const check = liveTableCheck;
   resultsDiv.innerHTML = "";
-  resultsSection.hidden = false;
-  // No scroll down to the results card any more: the verdict now shows on
-  // the table itself (cracked orbs, or every flame turning to its deck's
-  // colours) plus the status line under it, and scrolling the card into
-  // view would carry the table -- and the reveal -- off screen. The card
-  // stays below as the detailed breakdown.
+  resultsSection.hidden = !check;
+  if (!check) return;
 
-  const incomplete = podSelections.length === 0 || podSelections.some(s => !podDeckOf(s));
-  if (incomplete) {
-    const banner = document.createElement("div");
-    banner.className = "banner bad";
-    banner.textContent = "Pick a deck for every seat before checking.";
-    resultsDiv.appendChild(banner);
-    return;
-  }
-
-  const entries = podSelections.map(s => {
-    const player = podPlayers.find(p => String(p.id) === s.playerId);
-    const deck = player.decks.find(d => String(d.id) === s.deckId);
-    return {
-      playerId: player.id,
-      playerName: player.name,
-      deckId: deck.id,
-      deckName: deck.name,
-      power: deck.power,
-      newDeck: !!deck.newDeck,
-      colorIdentity: deck.colorIdentity,
-    };
-  });
-
-  // Decks flagged newDeck are exempt from the power-spread check -- see
-  // evaluatePod. The spread/floor/ceiling banner below is scoped to
-  // "judged" (non-exempt) entries only; exempt ones are reported on
-  // separately and never affect whether the pod passes.
-  const judged = entries.filter(e => !e.newDeck);
-  const exemptCount = entries.length - judged.length;
-  const exemptNote = exemptCount > 0
-    ? ` (${exemptCount} new deck${exemptCount === 1 ? "" : "s"} exempt — no games logged yet.)`
-    : "";
-
-  let allInRange;
-  let gaugeFloor = null;
-  if (judged.length === 0) {
-    allInRange = true;
-    lastCeiling = null;
-    const banner = document.createElement("div");
+  const banner = document.createElement("div");
+  if (check.allExempt) {
     banner.className = "banner warn";
     banner.textContent = "Every deck here is new — nothing to validate yet. Go ahead and play!";
-    resultsDiv.appendChild(banner);
   } else {
-    const powers = judged.map(e => e.power);
-    const max = Math.max(...powers);
-    const min = Math.min(...powers);
-    const spread = +(max - min).toFixed(2);
-    allInRange = spread <= RANGE_TOLERANCE;
-
-    const banner = document.createElement("div");
-    banner.className = "banner " + (allInRange ? "good" : "bad");
-    banner.textContent = (allInRange
-      ? `All decks are within range (spread: ${formatPower(spread)}).`
-      : `Spread is ${formatPower(spread)} — outside the ±${RANGE_TOLERANCE} target. Some decks need to change.`) + exemptNote;
-    resultsDiv.appendChild(banner);
-
-    // Feeds refreshDeckOptions in renderPodSlots: a slot flagged here only
-    // offers decks at or under this ceiling the next time its picker reopens.
-    lastCeiling = min + RANGE_TOLERANCE;
-    gaugeFloor = min;
+    const exemptNote = check.exemptCount > 0
+      ? ` (${check.exemptCount} new deck${check.exemptCount === 1 ? "" : "s"} exempt — no games logged yet.)`
+      : "";
+    banner.className = "banner " + (check.passed ? "good" : "bad");
+    banner.textContent = (check.passed
+      ? `All decks are within range (spread: ${formatPower(check.spread)}).`
+      : `Spread is ${formatPower(check.spread)} — outside the ±${check.tolerance} target. Some decks need to change.`) + exemptNote;
   }
+  resultsDiv.appendChild(banner);
 
-  const evaluated = evaluatePod(entries);
-  evaluated.forEach((entry, i) => {
-    podSelections[i].outOfRange = !entry.compatible;
-    // Every seat's verdict is fresh as of this check, so nothing is
-    // "already re-picked" any more.
-    podSelections[i].repicked = false;
-  });
-  // A pass reveals the table: every orb's flame turns to its deck's colours
-  // and the nameplates show the decks. A fail cracks the flagged orbs.
-  podRevealed = allInRange;
-  if (allInRange) editingSeatIndex = null;
+  const nameOf = id => podPlayers.find(p => String(p.id) === String(id))?.name || "A player";
+  const entries = check.entries.map(e => ({ ...e, playerName: nameOf(e.playerId) }));
+  const judged = entries.filter(e => !e.exempt).map(e => ({ ...e, power: e.rel }));
+  if (judged.length > 0) resultsDiv.appendChild(buildPowerGauge(judged, 0, check.tolerance));
 
-  // Re-render the table against the outOfRange flags just set above, so a
-  // rejected seat reads as over range and its deck list narrows to what
-  // actually fits (see decksAvailableForSlot).
-  renderPodSlots();
-  if (!allInRange && !REDUCED_MOTION.matches) {
-    podSelections.forEach(slot => {
-      if (!slot.outOfRange) return;
-      podSeatEls.get(slot.playerId)?.chair.querySelector(".pod-orb")?.animate(
-        [{ transform: "translateX(0)" }, { transform: "translateX(-3px)" }, { transform: "translateX(3px)" }, { transform: "translateX(-2px)" }, { transform: "translateX(0)" }],
-        { duration: 360, easing: "ease-out" }
-      );
-    });
-  }
-
-  // Drawn from the exact same evaluated data as the rows below -- see
-  // buildPowerGauge for why this never shows more than the rows already do.
-  if (gaugeFloor !== null) {
-    resultsDiv.appendChild(buildPowerGauge(evaluated.filter(e => !e.exempt), gaugeFloor, gaugeFloor + RANGE_TOLERANCE));
-  }
-
-  for (const entry of evaluated) {
+  for (const entry of entries) {
     const row = document.createElement("div");
     row.className = "result-row " + (entry.exempt ? "exempt" : (entry.compatible ? "ok" : "out"));
     row.dataset.playerId = entry.playerId;
+    // A check the pod has since moved on from (someone joined, left or
+    // re-picked) reads as pending until someone checks again.
+    if (liveTableStale) row.classList.add("pending-recheck");
 
-    // Deck identity stays hidden while the pod might still change -- only
-    // who it belongs to and whether their (unnamed) pick is in range. Once
-    // the whole pod passes (allInRange), there's nothing left to hide:
-    // everyone's committed, so the actual matchup is revealed here.
     const name = document.createElement("span");
     name.className = "name";
     name.textContent = entry.playerName;
-    if (allInRange) {
+    // Decks are only named once the whole pod has passed -- the same moment
+    // the relay starts telling every phone which deck each seat holds.
+    const slot = podSelections.find(s => s.playerId === String(entry.playerId));
+    const deck = podRevealed && slot ? podDeckOf(slot) : null;
+    if (deck) {
       const deckNameSpan = document.createElement("span");
       deckNameSpan.className = "result-deck-name";
-      deckNameSpan.textContent = ` — ${entry.deckName}`;
+      deckNameSpan.textContent = ` — ${deck.name}`;
       name.appendChild(deckNameSpan);
     }
 
@@ -3681,24 +3691,35 @@ function runValidation() {
     if (!entry.compatible && !entry.exempt) {
       const box = document.createElement("div");
       box.className = "suggestions";
-      box.textContent = `Select a new deck for ${entry.playerName} above, then check the spread again.`;
+      box.textContent = `${entry.playerName} needs a new deck, then check the spread again.`;
       resultsDiv.appendChild(box);
     }
   }
-
-  if (allInRange) {
-    // "To the Game!" lives only in the reveal popup now, not duplicated
-    // here inline -- see showRevealModal. It waits for the table's own
-    // reveal (each flame flaring in turn, 90ms apart) to finish first; a
-    // timer, not an animation event, so it opens even if the animation is
-    // skipped. Skipped if the pod changes in the meantime.
-    const delay = REDUCED_MOTION.matches ? 0 : Math.min(1500, 800 + podSelections.length * 90);
-    setTimeout(() => { if (podRevealed) showRevealModal(evaluated); }, delay);
-  }
 }
 
-// The button under the table does whatever the pod needs next -- open the
-// next seat's deck panel, check the spread, or clear the table. See
+// A pass on any phone plays the reveal on every phone: the table's flames
+// flare first (90ms apart), then "To the Game!" opens over it. A timer, not
+// an animation event, so it opens even if the animation is skipped; dropped
+// if the pod changes before it fires.
+function schedulePodReveal(checkId) {
+  const delay = REDUCED_MOTION.matches ? 0 : Math.min(1500, 800 + podSelections.length * 90);
+  setTimeout(() => {
+    if (!podRevealed || !liveTableCheck || liveTableCheck.id !== checkId) return;
+    const evaluated = podSelections.map(slot => {
+      const player = podPlayerOf(slot);
+      const deck = podDeckOf(slot);
+      if (!player || !deck) return null;
+      return {
+        playerId: player.id, playerName: player.name, deckId: deck.id, deckName: deck.name,
+        power: deck.power, newDeck: !!deck.newDeck, colorIdentity: deck.colorIdentity,
+      };
+    }).filter(Boolean);
+    if (evaluated.length > 0) showRevealModal(evaluated);
+  }, delay);
+}
+
+// The button under the table does whatever the pod needs next -- take a
+// seat, pick your deck, check the spread, or clear the table. See
 // renderPodCta for its label.
 document.getElementById("validate-btn").addEventListener("click", handlePodCta);
 
@@ -3727,7 +3748,10 @@ function activateTab(tabName) {
   if (switching) playTabEnter(panel);
   // Nameplates are pinned by measuring the 3D scene, which measures as
   // nothing while its tab is hidden.
-  if (tabName === "pod") trackPodPlates(400);
+  if (tabName === "pod") {
+    trackPodPlates(400);
+    pollLiveTable(true);
+  }
 }
 
 // Swaps the active .tab-bg. The new layer shows instantly underneath and
@@ -6022,17 +6046,10 @@ function initPullToRefresh() {
       indicator.classList.add("refreshing");
       indicator.style.height = "48px";
       try {
-        // The reset is deliberate (see resetPodSetup), but one stray pull
-        // shouldn't cost a pod nobody meant to throw away.
-        const before = podHasPicks() ? snapshotPodState() : null;
-        resetPodSetup();
-        if (before) {
-          showUndoToast("Pod cleared", () => {
-            applyPodState(before);
-            renderPodSlots();
-          });
-        }
-        await refreshEverything();
+        // A pull used to clear the pod as well. Not any more: the table is
+        // shared now, and one person's pull would empty it for everyone.
+        // "Clear the table" (with Undo) is how a pod starts fresh.
+        await Promise.all([refreshEverything(), pollLiveTable(true)]);
       } finally {
         indicator.classList.remove("refreshing");
         indicator.style.height = "0px";
@@ -6101,8 +6118,7 @@ if ("serviceWorker" in navigator) {
 checkAuthSession().then(() => {
   initTabs();
   if (currentUser) {
-    restorePodState();
-    renderPodSlots();
+    initLiveTable();
     // Shaped placeholders instead of a status line over empty tabs, for
     // the moment between the gate opening and each fetch below actually
     // landing. See renderSkeletonCards for why Players & Decks isn't here.

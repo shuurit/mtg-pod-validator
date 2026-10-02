@@ -3612,6 +3612,8 @@ input.gtu-in-prefilled {
   color: var(--muted);
 }
 .pod-status strong { color: var(--ink); font-weight: 600; }
+/* A table write the relay refused or couldn't receive (see showPodError). */
+.pod-status.pod-status-error { color: var(--bad); }
 
 /* ---- member rail ---- */
 .pod-rail-label {
