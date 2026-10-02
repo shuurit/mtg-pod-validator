@@ -3063,6 +3063,8 @@ input.gtu-in-prefilled {
    doesn't glide. */
 @property --pod-spin { syntax: "<angle>"; inherits: true; initial-value: 0deg; }
 @property --pod-a { syntax: "<angle>"; inherits: true; initial-value: 0deg; }
+/* A throne's swivel as it's pulled out or pushed in (see renderPodChairs). */
+@property --pod-sw { syntax: "<angle>"; inherits: true; initial-value: 0deg; }
 @property --pod-r { syntax: "<length>"; inherits: false; initial-value: 0px; }
 
 /* Scales with --pod-fit (set by fitPodScene from the card's width) so a
@@ -3257,12 +3259,15 @@ input.gtu-in-prefilled {
   width: 0;
   height: 0;
   transform-style: preserve-3d;
-  transform: rotateZ(var(--pod-a)) translateY(var(--pod-r));
-  transition: --pod-a 0.6s cubic-bezier(0.77, 0, 0.175, 1), --pod-r 0.45s cubic-bezier(0.23, 1, 0.32, 1), opacity 0.3s ease-out;
+  /* --pod-sw: pulled out at a slight angle, it straightens as it reaches
+     its place, the way a chair does when someone draws it back to sit. */
+  transform: rotateZ(var(--pod-a)) translateY(var(--pod-r)) rotateZ(var(--pod-sw, 0deg));
+  transition: --pod-a 0.6s cubic-bezier(0.77, 0, 0.175, 1), --pod-r 0.5s cubic-bezier(0.23, 1, 0.32, 1), --pod-sw 0.6s cubic-bezier(0.23, 1, 0.32, 1), opacity 0.3s ease-out;
 }
-/* Leaving is quicker than arriving, and accelerates away. */
+/* Leaving is quicker than arriving, and accelerates away: pushed in under
+   the table, turning a little as it goes. */
 .pod-chair.leaving {
-  transition: --pod-a 0.6s cubic-bezier(0.77, 0, 0.175, 1), --pod-r 0.28s cubic-bezier(0.5, 0, 0.75, 0), opacity 0.22s ease-in;
+  transition: --pod-a 0.6s cubic-bezier(0.77, 0, 0.175, 1), --pod-r 0.3s cubic-bezier(0.5, 0, 0.75, 0), --pod-sw 0.3s cubic-bezier(0.5, 0, 0.75, 0), opacity 0.24s ease-in;
   pointer-events: none;
 }
 @media (prefers-reduced-motion: reduce) {
@@ -3289,16 +3294,17 @@ input.gtu-in-prefilled {
   box-shadow: 0 0 0 2px var(--oak-lo), 0 0 0 5px var(--oak), inset 0 -4px 7px rgba(0, 0, 0, 0.5);
   transform: translateZ(-22px);
 }
-/* Throne back: a pointed gothic arch in the table's oak, a dark edge, a
-   leather panel and one rune gem. Hinged on the seat's outer edge and
-   folded up 90deg. */
+/* Throne back: a tall back in the table's oak with a dark edge, a leather
+   panel and one rune gem. Two carvings, alternating by player
+   (buildPodChair): a pointed arch rising to a spire, or a rounded,
+   scalloped crest. Hinged on the seat's outer edge and folded up 90deg. */
 .pod-chair-back {
-  --pod-arch: polygon(50% 0, 62% 5%, 74% 13%, 84% 24%, 92% 37%, 97% 50%, 100% 62%, 100% 100%, 0 100%, 0 62%, 3% 50%, 8% 37%, 16% 24%, 26% 13%, 38% 5%);
+  --pod-arch: polygon(50% 0, 53% 6%, 57% 8%, 65% 12%, 75% 19%, 85% 29%, 92% 40%, 97% 52%, 100% 63%, 100% 100%, 0 100%, 0 63%, 3% 52%, 8% 40%, 15% 29%, 25% 19%, 35% 12%, 43% 8%, 47% 6%);
   position: absolute;
   width: 50px;
-  height: 54px;
+  height: 60px;
   left: -25px;
-  top: -33px;
+  top: -39px;
   clip-path: var(--pod-arch);
   background: linear-gradient(180deg, var(--oak-lo), var(--oak-deep));
   transform-origin: 50% 100%;
@@ -3329,6 +3335,34 @@ input.gtu-in-prefilled {
   background: #b59cff;
   box-shadow: 0 0 6px 2px rgba(181, 156, 255, 0.85);
 }
+.pod-chair.crest .pod-chair-back {
+  --pod-arch: polygon(0 100%, 0 30%, 4% 24%, 12% 22%, 16% 15%, 26% 11%, 34% 6%, 42% 3%, 50% 0, 58% 3%, 66% 6%, 74% 11%, 84% 15%, 88% 22%, 96% 24%, 100% 30%, 100% 100%);
+}
+/* Legs to the floor and open armrests, each a frame-shaped panel folded up
+   off the floor or seat. The back and front pairs face out and in; the
+   side panels are also turned 90deg to run along the seat's sides. */
+.pod-chair-legs, .pod-chair-side, .pod-chair-arm {
+  position: absolute;
+  transform-origin: 50% 100%;
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 84% 100%, 84% 24%, 16% 24%, 16% 100%, 0 100%);
+  background: linear-gradient(180deg, var(--oak), var(--oak-lo));
+}
+.pod-chair-legs { width: 44px; height: 24px; left: -22px; }
+.pod-chair-legs.back { top: -5px; transform: translateZ(-46px) rotateX(-90deg); }
+.pod-chair-legs.front { top: -43px; transform: translateZ(-46px) rotateX(-90deg); }
+.pod-chair-side { width: 38px; height: 24px; left: -19px; top: -24px; }
+.pod-chair-side.left { transform: translate3d(-21px, 0, -46px) rotateZ(90deg) rotateX(-90deg); }
+.pod-chair-side.right { transform: translate3d(21px, 0, -46px) rotateZ(90deg) rotateX(-90deg); }
+.pod-chair-arm {
+  width: 38px;
+  height: 15px;
+  left: -19px;
+  top: -15px;
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 88% 100%, 88% 30%, 12% 30%, 12% 100%, 0 100%);
+  background: linear-gradient(180deg, var(--oak-hi), var(--oak) 40%, var(--oak-lo));
+}
+.pod-chair-arm.left { transform: translate3d(-22px, 0, -22px) rotateZ(90deg) rotateX(-90deg); }
+.pod-chair-arm.right { transform: translate3d(22px, 0, -22px) rotateZ(90deg) rotateX(-90deg); }
 .pod-chair.is-sealed .pod-chair-gem, .pod-chair.is-revealed .pod-chair-gem { background: #ffe6a6; box-shadow: 0 0 6px 2px rgba(201, 161, 63, 0.9); }
 .pod-chair.is-flagged .pod-chair-gem { background: #ff8a5c; box-shadow: 0 0 6px 2px rgba(255, 80, 40, 0.9); }
 
@@ -3340,8 +3374,8 @@ input.gtu-in-prefilled {
   top: 0;
   transform-origin: 0 0;
   transform:
-    translateZ(48px)
-    rotateZ(calc(-1 * (var(--pod-a) + var(--pod-spin))))
+    translateZ(52px)
+    rotateZ(calc(-1 * (var(--pod-a) + var(--pod-spin) + var(--pod-sw, 0deg))))
     rotateX(calc(-1 * var(--pod-tilt)))
     translate(-50%, -50%);
   transition: opacity 0.2s ease;
