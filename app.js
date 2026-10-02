@@ -2370,6 +2370,13 @@ function decksAvailableForSlot(slot) {
 const POD_MAX_SEATS = 8;
 const POD_SEAT_RADIUS = 132; // px, table centre to each throne
 const POD_SEAT_TUCKED = 72; // px, under the table's edge: where thrones slide from/to
+// The ring-shaped top, in the 0-100 sigil/carving space (table radius 50):
+// the open well, the groove between the two plank bands, and the inner
+// band's middle where each seat's sigil node sits. POD_HOLE_R must match
+// the 34% in .pod-table's --pod-hole mask.
+const POD_HOLE_R = 17;
+const POD_GROOVE_R = 27;
+const POD_NODE_R = 22;
 // Flame colours per mana colour, outer edge and hot centre. Fixed material,
 // like the pips: black burns as dark violet smoke-fire so it still reads as
 // fire in dark glass, colorless as pale silver.
@@ -2453,25 +2460,54 @@ function buildPodTable(container) {
 
   const scene = document.createElement("div");
   scene.className = "pod-scene";
-  // Floor circle and rim marks are static decoration, drawn once.
+  // Static decoration, drawn once: the floor circle, and the table's
+  // carving -- two bands of eight planks with staggered seams, grooves at
+  // the well's lip, between the bands and at the bevel, and a scroll
+  // carved into each outer plank. Our own drawing, in the spirit of a
+  // carved round table, not a copy of any one.
   const marks = Array.from({ length: 12 }, (_, i) => {
     const t = (i * Math.PI) / 6;
     return `M${(50 + 45 * Math.sin(t)).toFixed(2)} ${(50 + 45 * Math.cos(t)).toFixed(2)}L${(50 + 48 * Math.sin(t)).toFixed(2)} ${(50 + 48 * Math.cos(t)).toFixed(2)}`;
   }).join("");
+  const scroll =
+    "M-8 0.6C-8.6-1.8-5.6-2.8-4.6-0.9C-3.9 0.5-5.4 1.4-6.1 0.4" +
+    "M-4.6-0.9C-2.4 2.6 2.4 2.6 4.6-0.9" +
+    "M8 0.6C8.6-1.8 5.6-2.8 4.6-0.9C3.9 0.5 5.4 1.4 6.1 0.4" +
+    "M0 1.7C-0.6 0 0.4-1.6 1.8-1.9M0 1.7C0.6 0-0.4-1.6-1.8-1.9";
+  let carving = [POD_HOLE_R + 0.6, POD_GROOVE_R, 44.3].map(r => `<circle class="groove" cx="50" cy="50" r="${r}"/>`).join("");
+  for (let k = 0; k < 8; k++) {
+    const seam = (deg, r1, r2) => {
+      const [x1, y1] = podSigilPoint(r1, deg);
+      const [x2, y2] = podSigilPoint(r2, deg);
+      return `<line class="seam" x1="${x1.toFixed(2)}" y1="${y1.toFixed(2)}" x2="${x2.toFixed(2)}" y2="${y2.toFixed(2)}"/>`;
+    };
+    carving += seam(22.5 + k * 45, POD_HOLE_R + 0.6, POD_GROOVE_R) + seam(k * 45, POD_GROOVE_R, 44.3);
+    const deg = 22.5 + k * 45;
+    const [sx, sy] = podSigilPoint(35.6, deg);
+    carving += `<g transform="translate(${sx.toFixed(2)} ${sy.toFixed(2)}) rotate(${deg})"><path class="scroll-hi" transform="translate(0.3 0.4)" d="${scroll}"/><path class="scroll" d="${scroll}"/></g>`;
+  }
+  const apron = [43, 39, 35, 31, 27, 23, 19]
+    .map(z => `<div class="pod-table-apron" style="transform: translateZ(-${z}px)"></div>`)
+    .join("");
+  const legs = [30, 90, 150, 210, 270, 330]
+    .map(a => `<div class="pod-table-leg" style="--leg-a: ${a}deg"></div>`)
+    .join("");
   const layers = [12, 10, 8, 6, 4, 2]
-    .map(z => `<div class="pod-table-layer${z === 2 ? " brass" : ""}" style="transform: translateZ(-${z}px)"></div>`)
+    .map(z => `<div class="pod-table-layer${z === 2 ? " edge" : ""}" style="transform: translateZ(-${z}px)"></div>`)
     .join("");
   scene.innerHTML = `
     <div class="pod-rig">
       <div class="pod-floor-sigil" aria-hidden="true"><svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="48"/><circle cx="50" cy="50" r="45" stroke-dasharray="0.8 2.2"/><circle cx="50" cy="50" r="40"/><path d="${marks}"/></svg></div>
       <div class="pod-floor-shadow"></div>
-      <div class="pod-table" aria-hidden="true">${layers}
-        <div class="pod-table-top">
-          <svg class="pod-rim-runes" viewBox="0 0 100 100"><circle cx="50" cy="50" r="49.2" stroke="#7a5c22" stroke-width="0.6"/><circle cx="50" cy="50" r="46.8" stroke="#e3c271" stroke-opacity="0.6" stroke-width="1.5" stroke-dasharray="0.6 1.4 2.4 1.4 1 1.4"/></svg>
-          <div class="pod-slate">
-            <svg class="pod-sigil" viewBox="0 0 100 100"></svg>
-            <div class="pod-slate-label"><span class="pod-slate-count">0</span><span class="pod-slate-word">Seats</span></div>
-          </div>
+      <div class="pod-table" aria-hidden="true">
+        <div class="pod-table-legs">${legs}</div>
+        ${apron}
+        <div class="pod-table-apron pod-table-well" style="transform: translateZ(-15px)"></div>
+        ${layers}
+        <div class="pod-table-top"><svg class="pod-table-carving" viewBox="0 0 100 100">${carving}</svg></div>
+        <div class="pod-slate">
+          <svg class="pod-sigil" viewBox="0 0 100 100"></svg>
+          <div class="pod-slate-label"><span class="pod-slate-count">0</span><span class="pod-slate-word">Seats</span></div>
         </div>
       </div>
       <div class="pod-chairs"></div>
@@ -2486,7 +2522,7 @@ function buildPodTable(container) {
   document.addEventListener("visibilitychange", () => { if (!document.hidden) trackPodPlates(900); });
   ui.chairs = scene.querySelector(".pod-chairs");
   ui.plates = scene.querySelector(".pod-plates");
-  ui.slate = scene.querySelector(".pod-slate");
+  ui.table = scene.querySelector(".pod-table");
   ui.sigil = scene.querySelector(".pod-sigil");
   ui.count = scene.querySelector(".pod-slate-count");
   ui.word = scene.querySelector(".pod-slate-word");
@@ -2691,19 +2727,19 @@ function renderPodSigil() {
     const state = podSeatState(slot);
     return state === "flagged" ? `${prefix}-bad` : state === "waiting" ? `${prefix}-part` : `${prefix}-on`;
   };
-  let html = '<circle class="ring" cx="50" cy="50" r="36"/><circle class="ticks" cx="50" cy="50" r="41"/>';
+  let html = "";
   if (n === 0) {
-    html += '<circle class="seg" cx="50" cy="50" r="46" stroke-dasharray="2 6"/>';
+    html += `<circle class="seg" cx="50" cy="50" r="${POD_GROOVE_R}" stroke-dasharray="1.5 3"/>`;
   } else if (n === 1) {
-    html += `<circle class="seg ${cls(podSelections[0], "seg")}" cx="50" cy="50" r="46"/>`;
+    html += `<circle class="seg ${cls(podSelections[0], "seg")}" cx="50" cy="50" r="${POD_GROOVE_R}"/>`;
   } else {
     const step = 360 / n;
     const gap = 8;
     podSelections.forEach((slot, i) => {
       const c = podAngle(i, n);
-      const [x1, y1] = podSigilPoint(46, c - step / 2 + gap / 2);
-      const [x2, y2] = podSigilPoint(46, c + step / 2 - gap / 2);
-      html += `<path class="seg ${cls(slot, "seg")}" d="M${x1.toFixed(2)} ${y1.toFixed(2)} A46 46 0 0 1 ${x2.toFixed(2)} ${y2.toFixed(2)}"/>`;
+      const [x1, y1] = podSigilPoint(POD_GROOVE_R, c - step / 2 + gap / 2);
+      const [x2, y2] = podSigilPoint(POD_GROOVE_R, c + step / 2 - gap / 2);
+      html += `<path class="seg ${cls(slot, "seg")}" d="M${x1.toFixed(2)} ${y1.toFixed(2)} A${POD_GROOVE_R} ${POD_GROOVE_R} 0 0 1 ${x2.toFixed(2)} ${y2.toFixed(2)}"/>`;
     });
     // Join the seats: a line, a triangle, a square with its cross, then stars.
     const skips = n <= 3 ? [1] : n === 4 ? [1, 2] : n <= 6 ? [2] : [3];
@@ -2714,20 +2750,20 @@ function renderPodSigil() {
         const key = `${Math.min(i, j)}-${Math.max(i, j)}`;
         if (drawn.has(key)) continue;
         drawn.add(key);
-        const [x1, y1] = podSigilPoint(36, podAngle(i, n));
-        const [x2, y2] = podSigilPoint(36, podAngle(j, n));
+        const [x1, y1] = podSigilPoint(POD_NODE_R, podAngle(i, n));
+        const [x2, y2] = podSigilPoint(POD_NODE_R, podAngle(j, n));
         html += `<line class="line" x1="${x1.toFixed(2)}" y1="${y1.toFixed(2)}" x2="${x2.toFixed(2)}" y2="${y2.toFixed(2)}"/>`;
       }
     }
   }
   podSelections.forEach((slot, i) => {
-    const [x, y] = podSigilPoint(36, podAngle(i, n));
-    html += `<circle class="node ${cls(slot, "node")}" cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="2.8"/>`;
+    const [x, y] = podSigilPoint(POD_NODE_R, podAngle(i, n));
+    html += `<circle class="node ${cls(slot, "node")}" cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="2.2"/>`;
   });
   podUi.sigil.innerHTML = html;
 
   const sealed = podSelections.filter(s => s.sealed && podSeatState(s) !== "flagged").length;
-  podUi.slate.classList.toggle("is-ready", podRevealed);
+  podUi.table.classList.toggle("is-ready", podRevealed);
   podUi.count.textContent = n === 0 ? "0" : (podRevealed ? String(n) : `${sealed}/${n}`);
   podUi.word.textContent = n === 0 ? "Seats" : (podRevealed ? "Ready" : "Sealed");
 }

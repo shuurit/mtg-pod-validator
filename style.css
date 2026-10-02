@@ -62,16 +62,14 @@
      .tc-prestige-2. Same fixed-material reasoning as --foil above. */
   --silver: #aeb6c2;
   /* The Set Up Pod table's materials -- see .pod-table and .pod-chair.
-     Same fixed-material reasoning as the pips and foil: ebony, brass,
-     slate and leather are the physical table, not this app's palette, so
-     they don't change with the theme. */
-  --ebony-hi: #3b2a20;
-  --ebony: #22170f;
-  --ebony-lo: #120b07;
-  --brass-hi: #e3c271;
-  --brass-lo: #7a5c22;
-  --slate-hi: #2b2642;
-  --slate-lo: #0e0c16;
+     Same fixed-material reasoning as the pips and foil: carved oak and
+     leather are the physical table, not this app's palette, so they don't
+     change with the theme. */
+  --oak-hi: #bb8f6c;
+  --oak: #976b4c;
+  --oak-lo: #5e3d2a;
+  --oak-deep: #2f1d13;
+  --oak-inlay: #64402c;
   --leather-hi: #4c3066;
   --leather-lo: #1d1229;
 }
@@ -3116,6 +3114,10 @@ input.gtu-in-prefilled {
 
 .pod-table {
   --pod-d: 196px;
+  /* The open centre: 34% of the radius. The mask on the top and every
+     thickness layer, and the sigil's geometry in renderPodSigil (r 17 of
+     50), all key off this same ratio. */
+  --pod-hole: radial-gradient(circle closest-side, transparent 33.6%, #000 34.4%);
   position: absolute;
   width: var(--pod-d);
   height: var(--pod-d);
@@ -3123,56 +3125,102 @@ input.gtu-in-prefilled {
   top: calc(var(--pod-d) / -2);
   transform-style: preserve-3d;
 }
-/* Stacked discs under the top read as the table's thickness. */
+/* The round pedestal: stacked discs read as a cylinder below the top. Its
+   top disc is the floor of the centre well, seen through the hole -- a
+   scrying pool that glows violet, and gold once the pod passes. */
+.pod-table-apron {
+  position: absolute;
+  left: 17%;
+  top: 17%;
+  width: 66%;
+  height: 66%;
+  border-radius: 50%;
+  background: radial-gradient(circle closest-side, #3a2418, var(--oak-deep) 80%, #21140d);
+}
+.pod-table-well {
+  background: radial-gradient(circle closest-side, rgba(196, 176, 255, 0.95), rgba(107, 70, 240, 0.55) 30%, rgba(40, 22, 60, 0.9) 48%, var(--oak-deep) 62%);
+  transition: background 0.4s ease;
+}
+.pod-table.is-ready .pod-table-well {
+  background: radial-gradient(circle closest-side, rgba(255, 236, 170, 0.98), rgba(201, 161, 63, 0.65) 30%, rgba(70, 45, 15, 0.9) 48%, var(--oak-deep) 62%);
+}
+/* Six legs standing on the floor, carved wider at the foot like the paws
+   on a claw-footed table. Hinged on their bottom edge and folded up, the
+   same way the throne backs are. */
+.pod-table-legs { position: absolute; left: 50%; top: 50%; width: 0; height: 0; transform-style: preserve-3d; }
+.pod-table-leg {
+  position: absolute;
+  width: 20px;
+  height: 34px;
+  left: -10px;
+  top: -34px;
+  transform-origin: 50% 100%;
+  transform: rotateZ(var(--leg-a)) translateY(76px) translateZ(-46px) rotateX(-90deg);
+  clip-path: polygon(18% 0, 82% 0, 76% 62%, 100% 80%, 100% 100%, 0 100%, 0 80%, 24% 62%);
+  background: linear-gradient(180deg, var(--oak-lo), var(--oak) 55%, var(--oak-lo) 82%, #4a2f20);
+}
+/* Stacked rings under the top read as its thickness -- and, through the
+   hole, as the inner wall of the well. */
 .pod-table-layer {
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  background: var(--ebony-lo);
+  background: var(--oak-deep);
+  -webkit-mask: var(--pod-hole);
+  mask: var(--pod-hole);
 }
-.pod-table-layer.brass { background: var(--brass-lo); }
+.pod-table-layer.edge { background: var(--oak-lo); }
+/* The top: oak with a fine ring grain and a soft sheen, a lighter band on
+   the beveled edge, and the centre cut away. */
 .pod-table-top {
   position: absolute;
   inset: 0;
   border-radius: 50%;
   background:
-    conic-gradient(from 20deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0) 22%, rgba(255, 255, 255, 0.06) 48%, rgba(255, 255, 255, 0) 70%, rgba(255, 255, 255, 0.09)),
-    radial-gradient(circle, var(--ebony-hi) 0 calc(50% - 12px), var(--ebony) calc(50% - 5px), var(--ebony-lo) 50%);
+    repeating-radial-gradient(circle closest-side, rgba(70, 35, 15, 0.06) 0 1.5px, rgba(70, 35, 15, 0) 1.5px 4px),
+    conic-gradient(from 10deg, rgba(255, 240, 220, 0.12), rgba(255, 240, 220, 0) 25%, rgba(255, 240, 220, 0.08) 50%, rgba(255, 240, 220, 0) 75%, rgba(255, 240, 220, 0.12)),
+    radial-gradient(circle closest-side, var(--oak-lo) 0 34%, var(--oak) 37%, var(--oak-hi) 60%, var(--oak) 85%, var(--oak-hi) 89%, var(--oak) 94%, var(--oak-lo) 99%);
+  -webkit-mask: var(--pod-hole);
+  mask: var(--pod-hole);
 }
-.pod-rim-runes { position: absolute; inset: 0; width: 100%; height: 100%; }
-.pod-rim-runes circle { fill: none; }
+/* Plank seams, grooves and the scrollwork, drawn once by buildPodTable. */
+.pod-table-carving { position: absolute; inset: 0; width: 100%; height: 100%; }
+.pod-table-carving .groove { fill: none; stroke: rgba(60, 32, 18, 0.55); stroke-width: 0.55; }
+.pod-table-carving .seam { stroke: rgba(60, 32, 18, 0.5); stroke-width: 0.5; }
+.pod-table-carving .scroll, .pod-table-carving .scroll-hi { fill: none; stroke-width: 1.25; stroke-linecap: round; stroke-linejoin: round; }
+.pod-table-carving .scroll { stroke: var(--oak-inlay); }
+.pod-table-carving .scroll-hi { stroke: rgba(255, 232, 205, 0.32); }
+
+/* The sigil and the count float just above the wood, unmasked, so the
+   sigil's lines cross the open well like light. */
 .pod-slate {
   position: absolute;
-  inset: 15px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 50% 42%, var(--slate-hi), #16132a 66%, var(--slate-lo));
-  box-shadow: inset 0 0 22px rgba(0, 0, 0, 0.75), 0 0 0 1.5px var(--brass-hi), 0 0 0 3.5px var(--ebony-lo);
+  inset: 0;
+  transform: translateZ(1px);
 }
-/* Redrawn by renderPodSigil: a node under every throne, joined into a
-   line, triangle, square, pentagram... and an outer ring segment per seat
-   that turns gold once that seat's deck is in. */
+/* Redrawn by renderPodSigil: a node on the inner band under every throne,
+   joined into a line, triangle, square, pentagram... across the well, and
+   a segment of the groove per seat that lights once that seat's deck is in. */
 .pod-sigil {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   overflow: visible;
-  filter: drop-shadow(0 0 2px rgba(164, 139, 255, 0.75));
+  filter: drop-shadow(0 0 1.5px rgba(90, 50, 230, 0.95)) drop-shadow(0 0 3px rgba(164, 139, 255, 0.6));
   transition: filter 0.4s ease;
 }
-.pod-sigil .ring { fill: none; stroke: rgba(181, 156, 255, 0.38); stroke-width: 0.7; }
-.pod-sigil .ticks { fill: none; stroke: rgba(181, 156, 255, 0.5); stroke-width: 2.2; stroke-dasharray: 0.6 3.4; }
-.pod-sigil .line { fill: none; stroke: rgba(181, 156, 255, 0.75); stroke-width: 0.9; transition: stroke 0.4s ease; }
-.pod-sigil .seg { fill: none; stroke-width: 2.6; stroke-linecap: round; stroke: rgba(255, 255, 255, 0.1); transition: stroke 0.3s ease; }
-.pod-sigil .seg-part { stroke: rgba(164, 139, 255, 0.6); }
-.pod-sigil .seg-on { stroke: var(--foil); }
+.pod-sigil .line { fill: none; stroke: #d8caff; stroke-width: 0.9; transition: stroke 0.4s ease; }
+.pod-sigil .seg { fill: none; stroke-width: 1.8; stroke-linecap: round; stroke: rgba(50, 26, 14, 0.35); transition: stroke 0.3s ease; }
+.pod-sigil .seg-part { stroke: #b9a4ff; }
+.pod-sigil .seg-on { stroke: #ffd36b; }
 .pod-sigil .seg-bad { stroke: #ff6b4a; }
-.pod-sigil .node { fill: var(--slate-lo); stroke: rgba(181, 156, 255, 0.85); stroke-width: 0.9; transition: fill 0.3s ease, stroke 0.3s ease; }
-.pod-sigil .node-on { fill: var(--foil); stroke: #ffe6a6; }
+.pod-sigil .node { fill: var(--oak-deep); stroke: #d8caff; stroke-width: 0.9; transition: fill 0.3s ease, stroke 0.3s ease; }
+.pod-sigil .node-on { fill: #ffd36b; stroke: #fff1c4; }
 .pod-sigil .node-bad { fill: #ff5a2a; stroke: #ffc2a8; }
-.pod-slate.is-ready .pod-sigil { filter: drop-shadow(0 0 3px rgba(201, 161, 63, 0.95)); }
-.pod-slate.is-ready .pod-sigil .line { stroke: var(--foil); }
-/* Counter-rotated by the table's turn so the count stays upright. */
+.pod-table.is-ready .pod-sigil { filter: drop-shadow(0 0 1.5px rgba(120, 70, 10, 0.95)) drop-shadow(0 0 3px rgba(255, 211, 107, 0.8)); }
+.pod-table.is-ready .pod-sigil .line { stroke: #ffd36b; }
+/* Sits in the well, counter-rotated by the table's turn so it stays upright. */
 .pod-slate-label {
   position: absolute;
   inset: 0;
@@ -3180,16 +3228,16 @@ input.gtu-in-prefilled {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  color: rgba(242, 239, 233, 0.88);
+  color: #fbf6ff;
   font-family: var(--font-display);
   text-transform: uppercase;
   line-height: 1;
-  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95);
+  text-shadow: 0 0 6px rgba(40, 20, 80, 0.95), 0 1px 2px rgba(0, 0, 0, 0.9);
   transform: rotateZ(calc(-1 * var(--pod-spin)));
 }
-.pod-slate-count { font-size: 2.2rem; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
-.pod-slate-word { font-size: 0.7rem; font-weight: 600; letter-spacing: 0.14em; color: rgba(242, 239, 233, 0.6); margin-top: 3px; }
-.pod-slate.is-ready .pod-slate-word { color: var(--foil); }
+.pod-slate-count { font-size: 1.45rem; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
+.pod-slate-word { font-size: 0.5rem; font-weight: 600; letter-spacing: 0.14em; color: rgba(251, 246, 255, 0.8); margin-top: 1px; }
+.pod-table.is-ready .pod-slate-word { color: #ffe6a6; }
 
 /* ---- thrones ---- */
 /* Must keep 3D: without it every throne, backrest and orb flattens onto
@@ -3238,11 +3286,12 @@ input.gtu-in-prefilled {
   top: -21px;
   border-radius: 8px;
   background: radial-gradient(ellipse at 50% 30%, var(--leather-hi), var(--leather-lo) 80%);
-  box-shadow: 0 0 0 2px var(--brass-lo), 0 0 0 5px var(--ebony), inset 0 -4px 7px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 0 0 2px var(--oak-lo), 0 0 0 5px var(--oak), inset 0 -4px 7px rgba(0, 0, 0, 0.5);
   transform: translateZ(-22px);
 }
-/* Throne back: a pointed gothic arch with a brass edge, a leather panel and
-   one rune gem. Hinged on the seat's outer edge and folded up 90deg. */
+/* Throne back: a pointed gothic arch in the table's oak, a dark edge, a
+   leather panel and one rune gem. Hinged on the seat's outer edge and
+   folded up 90deg. */
 .pod-chair-back {
   --pod-arch: polygon(50% 0, 62% 5%, 74% 13%, 84% 24%, 92% 37%, 97% 50%, 100% 62%, 100% 100%, 0 100%, 0 62%, 3% 50%, 8% 37%, 16% 24%, 26% 13%, 38% 5%);
   position: absolute;
@@ -3251,7 +3300,7 @@ input.gtu-in-prefilled {
   left: -25px;
   top: -33px;
   clip-path: var(--pod-arch);
-  background: linear-gradient(180deg, var(--brass-hi), var(--brass-lo));
+  background: linear-gradient(180deg, var(--oak-lo), var(--oak-deep));
   transform-origin: 50% 100%;
   transform: translateZ(-22px) rotateX(-90deg);
 }
@@ -3260,7 +3309,7 @@ input.gtu-in-prefilled {
   position: absolute;
   inset: 2px 2px 0;
   clip-path: var(--pod-arch);
-  background: linear-gradient(180deg, var(--ebony-hi), var(--ebony-lo));
+  background: linear-gradient(180deg, var(--oak-hi), var(--oak) 45%, var(--oak-lo));
 }
 .pod-chair-back::after {
   content: "";
