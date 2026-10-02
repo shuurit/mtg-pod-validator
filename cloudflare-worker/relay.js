@@ -3206,6 +3206,14 @@ const TABLE_WRITE_ATTEMPTS = 5;
 const TABLE_RATE_LIMIT_MAX_REQUESTS = 60;
 const TABLE_OPS = new Set(["seat", "unseat", "pick", "check", "clear", "undo"]);
 
+// A seat whose player picked their own deck (on their own phone) belongs to
+// them: nobody else can re-pick it or take them off the table. A seat still
+// waiting, or one someone filled in for a player without their phone, stays
+// open -- and the seat's own player can always override a fill-in.
+function isSelfSealed(seat) {
+  return seat.deckId != null && seat.pickedBy === seat.playerId;
+}
+
 function emptyTableState() {
   return { seats: [], ceiling: null, revealed: false, stale: false, check: null, undo: null };
 }
@@ -3330,6 +3338,9 @@ async function applyTableOp(env, read, body, viewerId) {
 
     case "unseat": {
       if (seatIndex < 0) return { changed: false };
+      if (isSelfSealed(next.seats[seatIndex]) && viewerId !== next.seats[seatIndex].playerId) {
+        return { error: "They locked in their own deck, so only they can leave the table.", status: 403 };
+      }
       next.seats.splice(seatIndex, 1);
       podChanged();
       withUndo();
@@ -3340,6 +3351,9 @@ async function applyTableOp(env, read, body, viewerId) {
       if (seatIndex < 0) return { error: "That player isn't at the table.", status: 409 };
       if (!Number.isInteger(body.deckId)) return { error: "Missing deck.", status: 400 };
       const seat = next.seats[seatIndex];
+      if (isSelfSealed(seat) && viewerId !== seat.playerId) {
+        return { error: "They locked in their own deck, so only they can change it.", status: 403 };
+      }
       const decks = (await fetchTableDecks(env, "d.player_id = ?", [seat.playerId])).filter(d => !d.archived);
       const deck = decks.find(d => d.id === body.deckId);
       if (!deck) return { error: "That deck isn't available.", status: 400 };
