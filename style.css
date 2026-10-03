@@ -3971,7 +3971,7 @@ input.gtu-in-prefilled {
 .pod-plate.is-focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 /* Someone else's self-picked seat (podSeatLocked): disabled, but it should
    still read as a settled seat, not a greyed-out broken one. */
-.pod-plate:disabled { cursor: default; }
+.pod-plate[aria-disabled="true"] { cursor: default; }
 .pod-chair.is-locked .pod-orb-hit { cursor: default; }
 
 .pod-scene-empty {
@@ -3997,6 +3997,9 @@ input.gtu-in-prefilled {
 .pod-status strong { color: var(--ink); font-weight: 600; }
 /* A table write the relay refused or couldn't receive (see showPodError). */
 .pod-status.pod-status-error { color: var(--bad); }
+/* An explanation rather than a failure -- e.g. why a locked seat won't
+   open (see explainPodLock). */
+.pod-status.pod-status-note { color: var(--accent); }
 
 /* ---- member rail ---- */
 .pod-rail-label {
@@ -4045,12 +4048,11 @@ input.gtu-in-prefilled {
 @media (hover: hover) and (pointer: fine) {
   .pod-chip:disabled:hover { border-color: var(--border); color: var(--ink); }
 }
-/* Seated and locked in by its own player: keeps the seated look, just
-   can't be tapped (the dimmed look above is for a full table). */
-.pod-chip.is-locked:disabled { opacity: 1; }
-@media (hover: hover) and (pointer: fine) {
-  .pod-chip.is-locked:disabled:hover { border-color: var(--accent); }
-}
+/* Seated and locked in by its own player: keeps the seated look; a tap
+   explains the lock (explainPodLock) rather than doing nothing. */
+.pod-chip.is-locked { cursor: default; }
+/* Tapped, waiting on the relay (see addPodSeat). */
+.pod-chip[aria-busy="true"] { cursor: progress; }
 
 /* ---- deck panel ---- */
 /* Docks in the page flow right under the table, in place of the rail and
@@ -4192,3 +4194,21 @@ input.gtu-in-prefilled {
   min-height: 48px;
 }
 #validate-btn:disabled { opacity: 0.5; cursor: default; box-shadow: none; }
+/* In flight (see runPodCheck): stays at full strength with a small spinner,
+   so it reads as working rather than unavailable. */
+#validate-btn.is-busy:disabled { opacity: 1; cursor: progress; }
+#validate-btn.is-busy::before {
+  content: "";
+  display: inline-block;
+  width: 0.85em;
+  height: 0.85em;
+  margin-right: 8px;
+  vertical-align: -0.1em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: global-refresh-spin 0.8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  #validate-btn.is-busy::before { animation: none; border-right-color: currentColor; opacity: 0.6; }
+}
