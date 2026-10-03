@@ -2402,8 +2402,6 @@ const POD_ORB_HTML =
 
 // playerId -> { chair, plate } for every seat currently at the table.
 const podSeatEls = new Map();
-// The WebGL table (see initPod3D), or null while it loads / when it can't run.
-let pod3d = null;
 // Player ids whose throne should slide in on the next render. Only a member
 // tapped onto the table (or an undo) gets an entrance -- a restored pod or a
 // background data refresh just shows the thrones where they already are.
@@ -2462,11 +2460,6 @@ function setPodRevealFire(chair, colorIdentity) {
   chair.style.setProperty("--r-c2", pick(1).c);
   chair.style.setProperty("--r-c3", pick(2).c);
   chair.style.setProperty("--r-glow", keys ? POD_GLOW[keys[0]] : "rgba(201,161,63,.55)");
-  // The same palette for the 3D table's orbs (syncPod3DSeats reads it).
-  chair._podFire = {
-    e1: pick(0).e, c1: pick(0).c, e2: pick(1).e, c2: pick(1).c, c3: pick(2).c,
-    halo: keys ? POD_FIRE[keys[0]].e : "#c9a13f", ember: pick(0).c,
-  };
 }
 
 function buildPodTable(container) {
@@ -2655,7 +2648,6 @@ function updatePodSeat(entry, slot, i, n) {
 
 function renderPodChairs() {
   const n = podSelections.length;
-  const enteringIds = new Set();
   const seated = new Set(podSelections.map(s => s.playerId));
   for (const [id, entry] of podSeatEls) {
     if (!seated.has(id)) removePodSeatEls(id, entry);
@@ -2666,7 +2658,6 @@ function renderPodChairs() {
       const chair = buildPodChair(slot.playerId);
       const plate = buildPodPlate(slot.playerId);
       const entering = podSeatsEntering.has(slot.playerId) && !REDUCED_MOTION.matches;
-      if (entering) enteringIds.add(slot.playerId);
       chair.style.setProperty("--pod-a", `${podAngle(i, n)}deg`);
       chair.style.setProperty("--pod-r", `${entering ? POD_SEAT_TUCKED : POD_SEAT_RADIUS}px`);
       // A pod restored (or refreshed) already revealed shouldn't replay the
@@ -2698,7 +2689,6 @@ function renderPodChairs() {
   });
   podSeatsEntering.clear();
   podUi.scene.classList.toggle("has-focus", editingSeatIndex !== null);
-  syncPod3DSeats(enteringIds);
   trackPodPlates(900);
 }
 
@@ -2724,21 +2714,10 @@ function positionPodPlates() {
   if (!podUi) return;
   const sr = podUi.scene.getBoundingClientRect();
   if (sr.width === 0) return; // pod tab hidden; fitPodScene re-runs this on show
-  const live = pod3d && podUi.scene.classList.contains("is-3d");
-  for (const [id, { chair, plate }] of podSeatEls) {
-    let x, y;
-    const a3 = live ? pod3d.anchor(id) : null;
-    if (a3) {
-      x = a3.x;
-      y = a3.y + 2;
-    } else {
-      const a = chair.querySelector(".pod-plate-anchor").getBoundingClientRect();
-      x = a.left + a.width / 2 - sr.left;
-      y = a.top - sr.top + 2;
-    }
-    // Side seats sit near the scene's edge: keep the plate fully on the card.
-    const half = plate.offsetWidth / 2 + 2;
-    if (sr.width > half * 2) x = Math.min(sr.width - half, Math.max(half, x));
+  for (const { chair, plate } of podSeatEls.values()) {
+    const a = chair.querySelector(".pod-plate-anchor").getBoundingClientRect();
+    const x = a.left + a.width / 2 - sr.left;
+    const y = a.top - sr.top + 2;
     plate.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translateX(-50%)`;
   }
 }
@@ -2758,105 +2737,6 @@ function trackPodPlates(ms) {
     else podPlatesTracking = false;
   };
   requestAnimationFrame(tick);
-}
-
-// ---------- the 3D table (pod3d/) ----------
-// The table, thrones and orbs are modelled and baked in Blender (pod3d/
-// blender) and drawn live with three.js (pod3d/src, bundled to pod3d.js), so
-// thrones can slide and swivel, the table can turn to any seat, and every
-// orb can change state at any seat count -- none of which a pre-rendered
-// frame set could cover. Everything above stays the source of truth (seat
-// state, angles, nameplates); this only mirrors it into the canvas. The CSS
-// table is the fallback, and stays on screen until the 3D one is ready or
-// for good if WebGL, the models or the load itself fail.
-
-const POD3D_VERSION = 1; // bump with any change under pod3d/ (cache-bust)
-let pod3dStarted = false;
-
-function podWebGLAvailable() {
-  try {
-    const c = document.createElement("canvas");
-    return !!(window.WebGLRenderingContext && (c.getContext("webgl2") || c.getContext("webgl")));
-  } catch {
-    return false;
-  }
-}
-
-function dropPod3D() {
-  if (pod3d) pod3d.dispose();
-  pod3d = null;
-  if (!podUi) return;
-  podUi.scene.classList.remove("is-3d", "is-3d-done");
-  trackPodPlates(60);
-}
-
-// Starts on the first visit to the Pod tab (activateTab), not at sign-in:
-// the models and the renderer are ~3 MB nobody who never opens the tab
-// should pay for.
-async function initPod3D() {
-  if (pod3dStarted || !podUi || document.getElementById("tab-pod")?.hidden) return;
-  pod3dStarted = true;
-  if (new URLSearchParams(location.search).get("pod3d") === "0" || !podWebGLAvailable()) return;
-  try {
-    const mod = await import(`./pod3d/pod3d.js?v=${POD3D_VERSION}`);
-    const font = getComputedStyle(document.body).getPropertyValue("--font-display").trim() || "sans-serif";
-    const api = await mod.createPod3D({
-      host: podUi.scene,
-      base: "pod3d",
-      suffix: `?v=${POD3D_VERSION}`,
-      reducedMotion: () => REDUCED_MOTION.matches,
-      fontFamily: font,
-      onPick: id => tapPodSeat(id),
-      onMove: positionPodPlates,
-      onFail: err => {
-        console.warn("3D table lost, back to the CSS one:", err);
-        dropPod3D();
-      },
-    });
-    pod3d = api;
-    podUi.scene.classList.add("is-3d");
-    pod3d.setSpin(podSpin, false);
-    syncPod3DSeats(new Set());
-    syncPod3DSigil();
-    trackPodPlates(900);
-    // The CSS table fades out under the canvas fading in; this timer (not a
-    // transitionend) is what finally drops it, so it can't be left behind.
-    setTimeout(() => podUi && podUi.scene.classList.add("is-3d-done"), 400);
-  } catch (err) {
-    console.warn("3D table unavailable, keeping the CSS one:", err);
-    pod3d = null;
-  }
-}
-
-function syncPod3DSeats(entering) {
-  if (!pod3d) return;
-  const n = podSelections.length;
-  pod3d.setSeats(
-    podSelections.map((slot, i) => {
-      const state = podSeatState(slot);
-      const entry = podSeatEls.get(slot.playerId);
-      return {
-        id: slot.playerId,
-        angle: podAngle(i, n),
-        state,
-        crest: Number(slot.playerId) % 2 === 0,
-        palette: state === "revealed" && entry ? entry.chair._podFire || null : null,
-        focus: editingSeatIndex === i,
-        locked: podSeatLocked(slot),
-      };
-    }),
-    { entering }
-  );
-}
-
-function syncPod3DSigil() {
-  if (!pod3d) return;
-  pod3d.setSigil({
-    seats: podSelections.map(s => ({ state: podSeatState(s) })),
-    ready: podRevealed,
-    count: podUi.count.textContent,
-    word: podUi.word.textContent,
-  });
 }
 
 function podSigilPoint(r, deg) {
@@ -2909,7 +2789,6 @@ function renderPodSigil() {
   podUi.table.classList.toggle("is-ready", podRevealed);
   podUi.count.textContent = n === 0 ? "0" : (podRevealed ? String(n) : `${sealed}/${n}`);
   podUi.word.textContent = n === 0 ? "Seats" : (podRevealed ? "Ready" : "Sealed");
-  syncPod3DSigil();
 }
 
 function renderPodRoster() {
@@ -3171,7 +3050,6 @@ function turnPodTable(i) {
   const delta = ((((target - podSpin) % 360) + 540) % 360) - 180;
   podSpin += delta;
   podUi.rig.style.setProperty("--pod-spin", `${podSpin}deg`);
-  if (pod3d) pod3d.setSpin(podSpin, true);
 }
 
 function tapPodSeat(playerId) {
@@ -3237,10 +3115,7 @@ function renderPodSlots() {
   if (!podTableReady) return;
   const container = document.getElementById("pod-slots");
   if (!container) return;
-  if (!podUi) {
-    podUi = buildPodTable(container);
-    initPod3D(); // only does anything if the Pod tab is already showing
-  }
+  if (!podUi) podUi = buildPodTable(container);
 
   podCount = podSelections.length;
   const editIdx = podEditingPlayerId === null ? -1 : podSelections.findIndex(s => s.playerId === podEditingPlayerId);
@@ -3942,7 +3817,6 @@ function activateTab(tabName) {
   if (tabName === "pod") {
     trackPodPlates(400);
     pollLiveTable(true);
-    initPod3D();
   }
 }
 

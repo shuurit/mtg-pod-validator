@@ -3092,28 +3092,6 @@ input.gtu-in-prefilled {
   .pod-rig { transition: none; }
 }
 
-/* The WebGL table (pod3d/, started by initPod3D in app.js) draws into this
-   canvas, sized to the scene. It fades in over the CSS table, which is
-   dropped once it's up (.is-3d-done, set by a timer, not by this
-   transition, so it can't be left behind). display:none rather than hidden
-   takes the CSS table's 3D layers off the compositor for good. pan-y keeps a
-   drag across the table scrolling the page; a tap on an orb still lands. */
-.pod-gl {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  display: block;
-  opacity: 0;
-  transition: opacity 0.3s ease;
-  touch-action: pan-y;
-}
-.pod-scene.is-3d .pod-gl { opacity: 1; }
-.pod-scene.is-3d-done .pod-rig { display: none; }
-@media (prefers-reduced-motion: reduce) {
-  .pod-gl { transition: none; }
-}
-
 /* A faint summoning circle on the floor under everything. Static. */
 .pod-floor-sigil {
   position: absolute;
