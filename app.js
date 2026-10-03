@@ -2241,7 +2241,16 @@ let liveTableStale = false; // the pod changed after that check
 let liveTableSeenCheckId = null; // the check whose reveal this phone already played
 let podPollInFlight = false;
 let podStatusError = null;
+let podStatusTone = "error"; // "error" (red) or "note" (an explanation, not a failure)
 let podStatusErrorTimer = null;
+// What this phone is waiting on the relay for. A round trip is a few hundred
+// milliseconds, and with nothing changing on screen in that gap a tap felt
+// ignored (reported as a delay when validating) -- these drive the instant
+// feedback instead: the button reads "Checking...", a chip shows pressed,
+// a seat reads "Sealing...".
+let podPendingCheck = false;
+const podPendingSeats = new Set();
+const podPendingPicks = new Set();
 
 function myPodPlayerId() {
   return currentUser ? String(currentUser.playerId) : null;
@@ -2338,8 +2347,9 @@ async function tableOp(body, undoMessage) {
   }
 }
 
-function showPodError(message) {
+function showPodError(message, tone = "error") {
   podStatusError = message;
+  podStatusTone = tone;
   clearTimeout(podStatusErrorTimer);
   podStatusErrorTimer = setTimeout(() => {
     podStatusError = null;
@@ -2698,14 +2708,21 @@ function updatePodSeat(entry, slot, i, n) {
     el.classList.toggle("is-focus", editingSeatIndex === i);
     el.classList.toggle("is-locked", locked);
   }
-  plate.disabled = locked;
+  // Not `disabled`: a disabled button swallows the tap silently, which read
+  // as being locked out with no reason given. aria-disabled keeps it
+  // focusable and announced, and tapPodSeat explains the lock.
+  if (locked) plate.setAttribute("aria-disabled", "true");
+  else plate.removeAttribute("aria-disabled");
 
   const name = player ? player.name : "…";
   plate.querySelector(".pod-plate-name").textContent = name;
   const stateEl = plate.querySelector(".pod-plate-state");
   plate.removeAttribute("title");
   let spoken;
-  if (state === "waiting") {
+  if (podPendingPicks.has(slot.playerId)) {
+    stateEl.textContent = "Sealing…";
+    spoken = "sealing a deck";
+  } else if (state === "waiting") {
     stateEl.textContent = "Pick a deck";
     spoken = "no deck yet";
   } else if (state === "flagged") {
@@ -2879,11 +2896,15 @@ function renderPodRoster() {
     chip.type = "button";
     chip.className = "pod-chip";
     chip.setAttribute("aria-pressed", seated ? "true" : "false");
+    const pending = podPendingSeats.has(String(p.id));
     const locked = seated && podSeatLocked(podSelections[idx]);
-    chip.disabled = (!seated && full) || locked;
+    // Pressed the instant it's tapped (see addPodSeat), not after the relay.
+    chip.setAttribute("aria-pressed", seated || pending ? "true" : "false");
+    if (pending) chip.setAttribute("aria-busy", "true");
+    chip.disabled = !seated && !pending && full;
     chip.classList.toggle("is-locked", locked);
-    if (locked) chip.title = `${p.name} locked in their own deck. Only they can leave the table.`;
-    else if (chip.disabled) chip.title = `The table seats ${POD_MAX_SEATS}`;
+    if (locked) chip.setAttribute("aria-disabled", "true");
+    if (chip.disabled) chip.title = `The table seats ${POD_MAX_SEATS}`;
 
     // A seated member's avatar shows their seat number instead of their
     // initial. Deliberately not an extra "Seat 2" tag: that widened the
@@ -2898,8 +2919,11 @@ function renderPodRoster() {
     nameEl.textContent = p.name;
     chip.appendChild(nameEl);
     if (locked) chip.setAttribute("aria-label", `${p.name}, seat ${idx + 1}. Locked in their own deck.`);
-    else if (seated) chip.setAttribute("aria-label", `${p.name}, seat ${idx + 1}. Tap to leave the table.`);
-    chip.addEventListener("click", () => (seated ? removePodSeat(String(p.id)) : addPodSeat(String(p.id))));
+    else if (seated) chip.setAttribute("aria-label", `${p.name}, seat ${idx + 1}. Pick their deck.`);
+    // Tapping a seated member used to take them off the table -- easy to do
+    // by accident when you meant to pick their deck. It opens their deck
+    // list instead; leaving the table lives in that list, with Undo.
+    chip.addEventListener("click", () => (seated ? tapPodSeat(String(p.id)) : addPodSeat(String(p.id))));
     roster.appendChild(chip);
   }
 }
@@ -2919,8 +2943,10 @@ function renderPodStatus() {
   const el = podUi.status;
   const n = podSelections.length;
   podUi.empty.hidden = n > 0 || !liveTableLoaded;
-  el.classList.toggle("pod-status-error", !!podStatusError);
+  el.classList.toggle("pod-status-error", !!podStatusError && podStatusTone === "error");
+  el.classList.toggle("pod-status-note", !!podStatusError && podStatusTone === "note");
   if (podStatusError) { el.textContent = podStatusError; return; }
+  if (podPendingCheck) { el.textContent = "Checking the spread…"; return; }
   if (!liveTableLoaded) { el.textContent = "Finding the table…"; return; }
   if (n === 0) { el.textContent = "No one at the table yet."; return; }
   if (podRevealed) { el.innerHTML = `<strong>Pod passes.</strong> ${n} ${n === 1 ? "deck" : "decks"} revealed. Ready to play.`; return; }
@@ -3068,15 +3094,19 @@ function renderPodCta() {
   const me = myPodPlayerId();
   const mineIdx = podSelections.findIndex(s => s.playerId === me);
   const canSit = !!me && podPlayers.some(p => String(p.id) === me);
-  const set = (label, action, { primary = true, glow = false } = {}) => {
+  const set = (label, action, { primary = true, glow = false, busy = false } = {}) => {
     btn.textContent = label;
     btn.disabled = !action;
     btn.classList.toggle("primary", primary);
     btn.classList.toggle("glow", glow);
+    btn.classList.toggle("is-busy", busy);
+    if (busy) btn.setAttribute("aria-busy", "true");
+    else btn.removeAttribute("aria-busy");
     podCtaAction = action;
   };
 
   if (!liveTableLoaded) return set("Finding the table…", null);
+  if (podPendingCheck) return set("Checking the spread…", null, { busy: true });
   if (podRevealed) return set("Clear the table", clearPodTable, { primary: false });
   if (mineIdx < 0 && canSit) {
     return n >= POD_MAX_SEATS ? set("The table is full", null) : set("Take a seat", () => addPodSeat(me));
@@ -3096,9 +3126,18 @@ function handlePodCta() {
   if (podCtaAction) podCtaAction();
 }
 
-function addPodSeat(playerId) {
-  if (podSelections.some(s => s.playerId === playerId)) return;
-  tableOp({ op: "seat", playerId: Number(playerId) });
+// Selecting a member seats them and opens their deck list -- picking a deck
+// is what selecting someone is for. (Seating others who'll pick on their
+// own phones is one "Done" each.) The chip shows pressed the moment it's
+// tapped, before the relay answers.
+async function addPodSeat(playerId) {
+  if (podSelections.some(s => s.playerId === playerId) || podPendingSeats.has(playerId)) return;
+  podPendingSeats.add(playerId);
+  renderPodRoster();
+  const view = await tableOp({ op: "seat", playerId: Number(playerId) });
+  podPendingSeats.delete(playerId);
+  renderPodRoster();
+  if (view && podSelections.some(s => s.playerId === playerId)) openPodSeat(playerId);
 }
 
 function removePodSeat(playerId) {
@@ -3115,8 +3154,15 @@ function clearPodTable() {
   tableOp({ op: "clear" }, "Table cleared");
 }
 
-function runPodCheck() {
-  tableOp({ op: "check" });
+async function runPodCheck() {
+  if (podPendingCheck) return;
+  podPendingCheck = true;
+  renderPodCta();
+  renderPodStatus();
+  await tableOp({ op: "check" });
+  podPendingCheck = false;
+  renderPodCta();
+  renderPodStatus();
 }
 
 // Turns the table so seat i faces you, the short way round. Only this
@@ -3129,9 +3175,15 @@ function turnPodTable(i) {
   podUi.rig.style.setProperty("--pod-spin", `${podSpin}deg`);
 }
 
+function explainPodLock(slot) {
+  const name = podNameOf(slot);
+  showPodError(`${name} locked in their own deck. Only ${name} can change it.`, "note");
+}
+
 function tapPodSeat(playerId) {
   const slot = podSelections.find(s => s.playerId === playerId);
-  if (!slot || podSeatLocked(slot)) return;
+  if (!slot) return;
+  if (podSeatLocked(slot)) { explainPodLock(slot); return; }
   if (podEditingPlayerId === playerId) closePodPanel();
   else openPodSeat(playerId);
 }
@@ -3167,8 +3219,11 @@ async function pickPodDeck(playerId, deckId) {
   const slot = podSelections.find(s => s.playerId === playerId);
   if (!slot) return;
   if (podEditingPlayerId === playerId) podEditingPlayerId = null;
+  podPendingPicks.add(playerId);
   renderPodSlots();
   const view = await tableOp({ op: "pick", playerId: Number(playerId), deckId: Number(deckId) });
+  podPendingPicks.delete(playerId);
+  renderPodSlots();
   const orb = view ? podSeatEls.get(playerId)?.chair.querySelector(".pod-orb") : null;
   if (orb && !REDUCED_MOTION.matches) {
     orb.animate([{ transform: "scale(1)" }, { transform: "scale(1.16)" }, { transform: "scale(1)" }],
@@ -3870,7 +3925,9 @@ function renderPodCheckResults() {
 // an animation event, so it opens even if the animation is skipped; dropped
 // if the pod changes before it fires.
 function schedulePodReveal(checkId) {
-  const delay = REDUCED_MOTION.matches ? 0 : Math.min(1500, 800 + podSelections.length * 90);
+  // Long enough for the flames to start flaring, not to finish: a longer
+  // wait read as the check itself being slow.
+  const delay = REDUCED_MOTION.matches ? 0 : Math.min(800, 300 + podSelections.length * 60);
   setTimeout(() => {
     if (!podRevealed || !liveTableCheck || liveTableCheck.id !== checkId) return;
     const evaluated = podSelections.map(slot => {
