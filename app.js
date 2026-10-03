@@ -464,6 +464,11 @@ function setPlayers(newPlayers) {
   updateDeckStrengthValidatorTabBadge(comboFlaggedCount);
   renderPlayersTable();
   renderPodSlots();
+  // The table can land before the player list does; its results card names
+  // players from this list, so redraw it now rather than leave "A player".
+  // Guarded: setPlayers also runs at script load, before the table code's
+  // state exists.
+  if (podTableReady) renderPodCheckResults();
 }
 
 // Called once with the DEFAULT_ROSTER fallback (so the UI isn't empty
@@ -2392,13 +2397,19 @@ const POD_GLOW = {
   W: "rgba(255,226,150,.7)", U: "rgba(61,143,255,.75)", B: "rgba(150,110,220,.7)",
   R: "rgba(255,80,40,.75)", G: "rgba(60,210,110,.7)", C: "rgba(220,226,236,.6)",
 };
+// Back to front: the aura that glances, the glass (plasma swirl, inner
+// fire, crack, gloss, sweep), the flame rising out of it, then embers and
+// sparks. Which of them burn, and how hard, is all CSS per state.
 const POD_ORB_HTML =
-  '<span class="pod-orb-float"><span class="pod-orb"><span class="pod-fire"><span class="pod-fire-core"></span>' +
+  '<span class="pod-orb-float"><span class="pod-orb-aura"></span>' +
+  '<span class="pod-orb"><span class="pod-plasma"></span><span class="pod-fire"><span class="pod-fire-core"></span>' +
   '<i class="pod-tw pod-tw4"><i></i></i><i class="pod-tw pod-tw5"><i></i></i>' +
   '<i class="pod-tw pod-tw1"><i></i></i><i class="pod-tw pod-tw2"><i></i></i><i class="pod-tw pod-tw3"><i></i></i></span>' +
   '<svg class="pod-orb-crack" viewBox="0 0 40 40" aria-hidden="true"><polyline points="15,2 19,12 13,18 21,25 17,38" fill="none" stroke="rgba(255,230,200,.75)" stroke-width="1.3" stroke-linejoin="round"/><polyline points="19,12 27,14" fill="none" stroke="rgba(255,230,200,.6)" stroke-width="1"/><polyline points="21,25 28,29" fill="none" stroke="rgba(255,230,200,.5)" stroke-width="0.9"/></svg>' +
   '<span class="pod-orb-gloss"></span><span class="pod-orb-sweep"></span></span>' +
-  '<i class="pod-ember e1"></i><i class="pod-ember e2"></i><i class="pod-ember e3"></i></span>';
+  '<span class="pod-flame"><i class="pod-pf pod-pf2"><i></i></i><i class="pod-pf pod-pf3"><i></i></i><i class="pod-pf pod-pf1"><i></i></i></span>' +
+  ["e1", "e2", "e3", "e4", "e5", "e6"].map(e => `<i class="pod-ember ${e}"></i>`).join("") +
+  '<i class="pod-ember spark s1"></i><i class="pod-ember spark s2"></i></span>';
 
 // playerId -> { chair, plate } for every seat currently at the table.
 const podSeatEls = new Map();
@@ -2585,8 +2596,10 @@ function buildPodChair(playerId) {
     '<div class="pod-chair-legs back"></div><div class="pod-chair-legs front"></div>' +
     '<div class="pod-chair-side left"></div><div class="pod-chair-side right"></div>' +
     '<div class="pod-chair-seat"></div>' +
+    // The orb's light on its seat and on the table in front of it.
+    '<div class="pod-chair-light seat"></div><div class="pod-chair-light table"></div>' +
     '<div class="pod-chair-arm left"></div><div class="pod-chair-arm right"></div>' +
-    '<div class="pod-chair-back"><span class="pod-chair-gem"></span></div>' +
+    '<div class="pod-chair-back"><span class="pod-chair-glow"></span><span class="pod-chair-gem"></span></div>' +
     `<div class="pod-bb"><span class="pod-orb-hit" aria-hidden="true">${POD_ORB_HTML}</span><span class="pod-plate-anchor"></span></div>`;
   // The orb is a pointer shortcut; the nameplate is the real (focusable) control.
   chair.querySelector(".pod-orb-hit").addEventListener("click", () => tapPodSeat(playerId));

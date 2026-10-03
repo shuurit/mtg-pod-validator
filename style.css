@@ -3504,38 +3504,6 @@ input.gtu-in-prefilled {
   .pod-tw { animation: none; }
 }
 
-/* Embers drift up out of the glass once a deck is in. */
-.pod-ember {
-  position: absolute;
-  left: 50%;
-  top: 10px;
-  width: 3px;
-  height: 3px;
-  margin-left: -1.5px;
-  border-radius: 50%;
-  background: var(--ember);
-  box-shadow: 0 0 4px 1px var(--ember);
-  opacity: 0;
-  display: none;
-  pointer-events: none;
-}
-.pod-chair.is-sealed .pod-ember, .pod-chair.is-flagged .pod-ember, .pod-chair.is-revealed .pod-ember {
-  display: block;
-  animation: pod-ember-rise 2s ease-out infinite;
-}
-/* !important: the state rule's animation shorthand above resets the delay. */
-.pod-ember.e1 { --dx: -7px; animation-delay: calc(var(--pod-d, 0s) - 0.2s) !important; }
-.pod-ember.e2 { --dx: 6px; animation-delay: calc(var(--pod-d, 0s) - 0.9s) !important; }
-.pod-ember.e3 { --dx: -1px; animation-duration: 2.5s !important; animation-delay: calc(var(--pod-d, 0s) - 1.6s) !important; }
-@keyframes pod-ember-rise {
-  0% { transform: translate(0, 0) scale(1); opacity: 0; }
-  15% { opacity: 1; }
-  100% { transform: translate(var(--dx), -32px) scale(0.3); opacity: 0; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .pod-chair.is-sealed .pod-ember, .pod-chair.is-flagged .pod-ember, .pod-chair.is-revealed .pod-ember { display: none; }
-}
-
 /* Waiting: a low violet pilot flame. Sealed: the flame rises to full
    spellfire, violet with a gold heart, identical for every deck so it never
    hints at one. */
@@ -3605,6 +3573,235 @@ input.gtu-in-prefilled {
 }
 @media (prefers-reduced-motion: reduce) {
   .pod-orb-sweep { display: none; }
+}
+
+/* ---- orb personality ---- */
+/* Each state burns differently, not just in a different colour: how big
+   the flame stands, how fast it flickers, how often the orb "glances up",
+   and how hard it lights its throne and the table. Waiting is a small, shy
+   pilot flame that glances often; sealed is steady; flagged is agitated
+   and throws sparks; revealed burns brightest. */
+.pod-chair {
+  --flame-h: 0.45;
+  --flick: 1.4s;
+  --glance: 4.6s;
+  --light: 0.35;
+  --energy: 0.45;
+  --ember-dur: 2.2s;
+}
+.pod-chair.is-sealed { --flame-h: 1; --flick: 1.15s; --glance: 9s; --light: 0.7; --energy: 0.8; }
+.pod-chair.is-flagged { --flame-h: 1.1; --flick: 0.5s; --glance: 2.4s; --light: 0.85; --energy: 1; --ember-dur: 1.3s; }
+.pod-chair.is-revealed { --flame-h: 1.15; --flick: 1s; --glance: 7s; --light: 0.95; --energy: 1; --ember-dur: 2s; }
+
+/* Room above the orb for the flame and embers that now rise out of it: the
+   billboard is its own 3D layer and clips anything past its box (see the
+   halo note on .pod-orb-hit). */
+.pod-orb-hit { padding-top: 40px; }
+
+/* The aura behind the glass, and the glance: every few seconds the orb
+   perks up, swelling and brightening, like someone looking up. */
+.pod-orb-aura {
+  position: absolute;
+  inset: -16px;
+  border-radius: 50%;
+  background: radial-gradient(circle closest-side, var(--c1), rgba(0, 0, 0, 0) 70%);
+  opacity: calc(var(--light) * 0.55);
+  pointer-events: none;
+  animation: pod-orb-glance var(--glance) ease-in-out infinite;
+  animation-delay: var(--pod-d, 0s);
+}
+@keyframes pod-orb-glance {
+  0%, 78%, 100% { opacity: calc(var(--light) * 0.55); scale: 1; }
+  85% { opacity: calc(var(--light) * 1.1); scale: 1.3; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pod-orb-aura { animation: none; }
+}
+
+/* Breathing: a slow swell of the whole glass. On the individual `scale`
+   property so it never fights the transform the ignite and seal pulses use. */
+.pod-orb { animation: pod-orb-breathe 4.3s ease-in-out infinite; animation-delay: var(--pod-d, 0s); }
+.pod-chair.ignite .pod-orb { animation: pod-orb-ignite 0.5s cubic-bezier(0.23, 1, 0.32, 1), pod-orb-breathe 4.3s ease-in-out infinite; }
+@keyframes pod-orb-breathe {
+  0%, 100% { scale: 1; }
+  50% { scale: 1.05; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pod-orb { animation: none; }
+  .pod-chair.ignite .pod-orb { animation: pod-fade-in 0.2s ease; }
+}
+
+/* The living thing inside the glass: a slow swirl of plasma under the fire,
+   churning faster when the orb is agitated. */
+.pod-plasma {
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, rgba(0, 0, 0, 0), var(--c2) 14%, rgba(0, 0, 0, 0) 32%, var(--e2) 52%, rgba(0, 0, 0, 0) 70%, var(--c1) 88%, rgba(0, 0, 0, 0));
+  -webkit-mask: radial-gradient(circle closest-side, #000 35%, rgba(0, 0, 0, 0) 100%);
+  mask: radial-gradient(circle closest-side, #000 35%, rgba(0, 0, 0, 0) 100%);
+  filter: blur(2.5px);
+  opacity: calc(var(--energy) * 0.85);
+  animation: pod-plasma-swirl 7s linear infinite;
+  animation-delay: var(--pod-d, 0s);
+}
+.pod-chair.is-flagged .pod-plasma { animation-duration: 2.4s; }
+@keyframes pod-plasma-swirl {
+  to { rotate: 360deg; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pod-plasma { animation: none; }
+}
+
+/* The flame that rises out of the glass: three tall tongues, hot at the
+   base and tearing off at the tip, leaning with a slow wind. Standing
+   height follows the state (--flame-h) and lifts with each glance. */
+/* Sized well past the tongues it holds: the mask and blur both clip to this
+   box, and a tight one cut the stretched tongues off square (confirmed in
+   testing). */
+.pod-flame {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  width: 48px;
+  height: 66px;
+  margin-left: -24px;
+  transform-origin: 50% 100%;
+  scale: var(--flame-h);
+  filter: blur(0.9px);
+  -webkit-mask: linear-gradient(to top, #000 40%, rgba(0, 0, 0, 0) 92%);
+  mask: linear-gradient(to top, #000 40%, rgba(0, 0, 0, 0) 92%);
+  pointer-events: none;
+  animation: pod-flame-wind 5.3s ease-in-out infinite alternate, pod-flame-glance var(--glance) ease-in-out infinite;
+  animation-delay: var(--pod-d, 0s), var(--pod-d, 0s);
+}
+@keyframes pod-flame-wind {
+  0% { rotate: -5deg; }
+  40% { rotate: 3deg; }
+  70% { rotate: -2deg; }
+  100% { rotate: 6deg; }
+}
+@keyframes pod-flame-glance {
+  0%, 78%, 100% { scale: var(--flame-h); }
+  85% { scale: calc(var(--flame-h) * 1.25); }
+}
+.pod-pf {
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  transform-origin: 50% 100%;
+  animation: pod-pf-flick var(--flick) ease-in-out infinite;
+}
+.pod-pf > i {
+  position: absolute;
+  inset: 0;
+  border-radius: 50% 0 50% 50%;
+  transform: scaleY(1.7) rotate(-45deg);
+}
+.pod-pf1 { width: 18px; height: 18px; margin-left: -9px; animation-delay: var(--pod-d, 0s); }
+.pod-pf2 { width: 12px; height: 12px; margin-left: -10px; animation-duration: calc(var(--flick) * 0.8); animation-delay: calc(var(--pod-d, 0s) - 0.4s); }
+.pod-pf3 { width: 11px; height: 11px; margin-left: -1px; animation-duration: calc(var(--flick) * 1.2); animation-delay: calc(var(--pod-d, 0s) - 0.7s); }
+.pod-pf1 > i { background: linear-gradient(45deg, var(--c1) 6%, var(--e1) 55%, rgba(0, 0, 0, 0) 100%); opacity: 0.85; }
+.pod-pf2 > i, .pod-pf3 > i { background: linear-gradient(45deg, var(--c2) 6%, var(--e2) 55%, rgba(0, 0, 0, 0) 100%); opacity: 0.75; }
+@keyframes pod-pf-flick {
+  0%, 100% { transform: scale(1, 1) skewX(0deg); }
+  18% { transform: scale(0.9, 1.18) skewX(6deg); }
+  41% { transform: scale(1.06, 0.86) skewX(-5deg); }
+  63% { transform: scale(0.95, 1.12) skewX(4deg); }
+  84% { transform: scale(1.04, 0.92) skewX(-6deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pod-flame { animation: none; }
+  .pod-pf { animation: none; }
+}
+
+/* Embers curl up out of the flame on paths that widen as they rise; sparks
+   are smaller, hotter and quicker. Sealed throws a few embers, revealed
+   more, flagged everything at once. A waiting pilot flame throws none. */
+.pod-ember {
+  position: absolute;
+  left: 50%;
+  top: 4px;
+  width: 3px;
+  height: 3px;
+  margin-left: -1.5px;
+  border-radius: 50%;
+  background: var(--ember);
+  box-shadow: 0 0 4px 1px var(--ember);
+  opacity: 0;
+  display: none;
+  pointer-events: none;
+}
+.pod-ember.spark { width: 2px; height: 2px; margin-left: -1px; background: var(--c3); box-shadow: 0 0 3px 1px var(--c3); }
+.pod-chair.is-sealed .pod-ember:is(.e1, .e2, .e3, .e4),
+.pod-chair.is-revealed .pod-ember:not(.s2),
+.pod-chair.is-flagged .pod-ember {
+  display: block;
+  animation: pod-ember-curl var(--ember-dur) ease-out infinite;
+}
+.pod-chair.is-revealed .pod-ember.spark,
+.pod-chair.is-flagged .pod-ember.spark { animation-name: pod-spark-fly; animation-duration: calc(var(--ember-dur) * 0.5); }
+/* !important: the state rules' animation shorthand above resets the delay. */
+.pod-ember.e1 { --dx: -7px; animation-delay: calc(var(--pod-d, 0s) - 0.2s) !important; }
+.pod-ember.e2 { --dx: 6px; animation-delay: calc(var(--pod-d, 0s) - 0.9s) !important; }
+.pod-ember.e3 { --dx: -3px; animation-delay: calc(var(--pod-d, 0s) - 1.6s) !important; }
+.pod-ember.e4 { --dx: 9px; animation-delay: calc(var(--pod-d, 0s) - 0.55s) !important; }
+.pod-ember.e5 { --dx: -10px; animation-delay: calc(var(--pod-d, 0s) - 1.25s) !important; }
+.pod-ember.e6 { --dx: 4px; animation-delay: calc(var(--pod-d, 0s) - 1.9s) !important; }
+.pod-ember.s1 { --dx: -14px; animation-delay: calc(var(--pod-d, 0s) - 0.3s) !important; }
+.pod-ember.s2 { --dx: 15px; animation-delay: calc(var(--pod-d, 0s) - 0.75s) !important; }
+@keyframes pod-ember-curl {
+  0% { translate: 0 0; scale: 1; opacity: 0; }
+  12% { opacity: 1; }
+  38% { translate: calc(var(--dx) * 0.5) -14px; }
+  66% { translate: calc(var(--dx) * -0.3) -27px; scale: 0.7; }
+  100% { translate: calc(var(--dx) * 1.4) -42px; scale: 0.25; opacity: 0; }
+}
+@keyframes pod-spark-fly {
+  0% { translate: 0 0; opacity: 0; }
+  10% { opacity: 1; }
+  100% { translate: var(--dx) -36px; opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pod-chair .pod-ember { display: none !important; }
+}
+
+/* The orb lights its surroundings: a pool of its colour on the seat, a
+   wash up the throne back's leather, and a glow on the table in front of
+   it, all flickering with the flame. Their strength follows the state
+   (--light): faint for a pilot flame, strongest at the reveal. */
+.pod-chair-light {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, var(--c1), rgba(0, 0, 0, 0));
+  pointer-events: none;
+  opacity: calc(var(--lk) * 0.85);
+  animation: pod-light-flicker 2.3s ease-in-out infinite;
+  animation-delay: var(--pod-d, 0s);
+}
+.pod-chair-light.seat { --lk: calc(var(--light) * 0.6); width: 74px; height: 66px; left: -37px; top: -33px; transform: translateZ(-21px); }
+.pod-chair-light.table { --lk: calc(var(--light) * 0.5); width: 92px; height: 64px; left: -46px; top: -78px; transform: translateZ(1.5px); }
+.pod-chair-glow {
+  --lk: calc(var(--light) * 0.75);
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  background: radial-gradient(ellipse 60% 55% at 50% 78%, var(--c1), rgba(0, 0, 0, 0));
+  opacity: calc(var(--lk) * 0.85);
+  animation: pod-light-flicker 2.3s ease-in-out infinite;
+  animation-delay: var(--pod-d, 0s);
+}
+.pod-chair.is-flagged .pod-chair-light, .pod-chair.is-flagged .pod-chair-glow { animation-duration: 0.9s; }
+@keyframes pod-light-flicker {
+  0%, 100% { opacity: calc(var(--lk) * 0.85); }
+  17% { opacity: var(--lk); }
+  31% { opacity: calc(var(--lk) * 0.72); }
+  48% { opacity: calc(var(--lk) * 0.95); }
+  64% { opacity: calc(var(--lk) * 0.8); }
+  81% { opacity: var(--lk); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pod-chair-light, .pod-chair-glow { animation: none; }
 }
 
 /* ---- nameplates ---- */
