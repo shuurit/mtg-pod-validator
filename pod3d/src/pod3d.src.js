@@ -11,7 +11,7 @@
 import {
   WebGLRenderer, Scene, PerspectiveCamera, Group, Mesh, Points, PlaneGeometry, SphereGeometry,
   BufferGeometry, Float32BufferAttribute, ShaderMaterial, MeshBasicMaterial, CanvasTexture,
-  SRGBColorSpace, AdditiveBlending, Color, Vector3, DirectionalLight, HemisphereLight, PointLight, Quaternion,
+  SRGBColorSpace, AdditiveBlending, Color, Vector3, DirectionalLight, HemisphereLight,
   PMREMGenerator, ACESFilmicToneMapping, Raycaster, Vector2, BackSide, DoubleSide,
 } from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
@@ -65,22 +65,12 @@ class Tween {
 
 // ---- spellfire palettes (the CSS orb's per-state fire) ----
 
-// Each state has a personality as well as a palette: how big and how
-// restless the fire is (size, speed, turb), how much it flickers and breathes,
-// how hard it lights the room (lightK), and how often it "glances up"
-// (surge: a min/max gap in seconds).
 const FIRE = {
-  waiting: { e1: "#4a2bd0", c1: "#a48bff", e2: "#7b5cff", c2: "#d9ccff", c3: "#efe8ff", ember: "#c9b6ff", halo: "#8e6bff",
-    size: 0.62, speed: 0.8, turb: 0.9, flick: 0.28, breath: 0.12, glow: 0.4, lightK: 0.55, embers: 0, heat: 0.6, energy: 0.55, surge: [3, 6] },
-  sealed: { e1: "#5a2ee0", c1: "#e7a8ff", e2: "#b86bff", c2: "#ffe1a0", c3: "#fff2c8", ember: "#ffd27a", halo: "#b06eff",
-    size: 1, speed: 1, turb: 0.75, flick: 0.1, breath: 0.05, glow: 0.75, lightK: 1, embers: 1, heat: 1, energy: 0.9, surge: [6, 12] },
-  flagged: { e1: "#a3140a", c1: "#ff6a2a", e2: "#ff4a12", c2: "#ffc061", c3: "#fff0b0", ember: "#ffb347", halo: "#ff5028",
-    size: 1.05, speed: 1.9, turb: 1.7, flick: 0.34, breath: 0.03, glow: 0.9, lightK: 1.2, embers: 1, heat: 1.9, energy: 1.1, surge: [1.5, 3] },
-  revealed: { size: 1.12, speed: 1.1, turb: 1, flick: 0.1, breath: 0.06, glow: 0.9, lightK: 1.35, embers: 1, heat: 1.1, energy: 1, surge: [5, 9] },
+  waiting: { e1: "#4a2bd0", c1: "#a48bff", e2: "#7b5cff", c2: "#d9ccff", c3: "#efe8ff", ember: "#c9b6ff", halo: "#8e6bff", size: 0.5, speed: 1, embers: 0, glow: 0.3 },
+  sealed: { e1: "#5a2ee0", c1: "#e7a8ff", e2: "#b86bff", c2: "#ffe1a0", c3: "#fff2c8", ember: "#ffd27a", halo: "#b06eff", size: 1, speed: 1, embers: 1, glow: 0.7 },
+  flagged: { e1: "#a3140a", c1: "#ff6a2a", e2: "#ff4a12", c2: "#ffc061", c3: "#fff0b0", ember: "#ffb347", halo: "#ff5028", size: 1, speed: 2, embers: 1, glow: 0.8 },
+  revealed: { size: 1, speed: 1.15, embers: 1, glow: 0.75 },
 };
-const LIFE_KEYS = ["size", "speed", "embers", "glow", "crack", "turb", "flick", "breath", "lightK", "heat", "energy"];
-const LIGHT_BASE = 2.2;   // candela of a calm sealed orb's light
-const _cw = new Vector3(), _l = new Vector3(), _q = new Quaternion();
 const GEM = { waiting: "#b59cff", sealed: "#ffe6a6", revealed: "#ffe6a6", flagged: "#ff8a5c" };
 
 // ---- shaders ----
@@ -102,87 +92,33 @@ const NOISE = /* glsl */`
     return mix(mix(h21(i), h21(i + vec2(1.0, 0.0)), f.x), mix(h21(i + vec2(0.0, 1.0)), h21(i + vec2(1.0, 1.0)), f.x), f.y);
   }`;
 
-// Anchored at the bottom centre so a flame grows up out of its root as it swells.
-const BASE_VERT = /* glsl */`
-  uniform vec2 uSize;
-  varying vec2 vUv;
-  void main() {
-    vUv = uv;
-    vec4 mv = modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0);
-    mv.xy += vec2(position.x * uSize.x, (position.y + 0.5) * uSize.y);
-    gl_Position = projectionMatrix * mv;
-  }`;
-
 const FLAME_FRAG = /* glsl */`
-  uniform float uTime, uSpeed, uAlpha, uFlick, uTurb, uLean, uSeed, uInner;
-  uniform vec3 uE1, uC1, uC2, uC3;
+  uniform float uTime, uSpeed, uAlpha;
+  uniform vec3 uE1, uC1, uE2, uC2, uC3;
   varying vec2 vUv;
   ${NOISE}
-  float fbm(vec2 p) {
-    float a = 0.5, s = 0.0;
-    for (int i = 0; i < 4; i++) { s += a * vn(p); p = p * 2.03 + vec2(1.7, 9.2); a *= 0.5; }
-    return s;
-  }
-  // A flame grown from rising, scrolling turbulence: it bends more toward the
-  // tip, tears off raggedly at the top, and is hottest at its root.
-  void main() {
-    vec2 p = vec2((vUv.x - 0.5) * 2.0, vUv.y);
-    float t = uTime * uSpeed + uSeed * 13.0;
-    float h = p.y;
-    p.x -= uLean * h * h * 0.55 + sin(t * 1.1) * 0.05 * h * h;
-    vec2 q = vec2(p.x * 1.5 + uSeed * 4.0, h * 1.3 - t * 1.15);
-    float w1 = fbm(q);
-    float w2 = fbm(q * 1.9 + vec2(4.1, -t * 0.8));
-    p.x += (w1 - 0.5) * uTurb * h * 1.25 + (w2 - 0.5) * uTurb * 0.4 * h * h;
-    float width = mix(0.9, 0.05, pow(h, 0.7)) * (1.0 - uInner * 0.45) * (0.8 + 0.35 * w1);
-    float d = abs(p.x) / max(width, 0.02);
-    float body = smoothstep(1.0, 0.2, d);
-    float top = 1.0 - smoothstep(0.55, 1.02, h + (w2 - 0.5) * 0.5 + (1.0 - uFlick) * 0.35);
-    body *= top * smoothstep(0.0, 0.05, h);
-    float heat = clamp((1.0 - d) * (1.0 - h * 0.85) + (w1 - 0.5) * 0.35 + uInner * 0.25, 0.0, 1.0);
-    vec3 col = mix(uE1, uC1, smoothstep(0.0, 0.5, heat));
-    col = mix(col, uC2, smoothstep(0.45, 0.85, heat));
-    col = mix(col, uC3, smoothstep(0.8, 1.0, heat));
-    float a = body * (0.5 + 1.1 * heat) * uFlick;
-    gl_FragColor = vec4(col * (0.75 + 0.7 * heat), clamp(a, 0.0, 1.0) * uAlpha);
-    #include <colorspace_fragment>
-  }`;
-
-// The living thing inside the glass: swirling plasma that churns slowly,
-// brighter toward the middle where you look straight through it.
-const PLASMA_VERT = /* glsl */`
-  varying vec3 vP, vN, vV;
-  void main() {
-    vP = normalize(position);
-    vN = normalize(normalMatrix * normal);
-    vec4 mv = modelViewMatrix * vec4(position, 1.0);
-    vV = normalize(-mv.xyz);
-    gl_Position = projectionMatrix * mv;
-  }`;
-const PLASMA_FRAG = /* glsl */`
-  uniform float uTime, uAlpha, uEnergy;
-  uniform vec3 uE1, uC1, uC2, uC3;
-  varying vec3 vP, vN, vV;
-  float h31(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
-  float vn3(vec3 p) {
-    vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
-    return mix(mix(mix(h31(i), h31(i + vec3(1,0,0)), f.x), mix(h31(i + vec3(0,1,0)), h31(i + vec3(1,1,0)), f.x), f.y),
-               mix(mix(h31(i + vec3(0,0,1)), h31(i + vec3(1,0,1)), f.x), mix(h31(i + vec3(0,1,1)), h31(i + vec3(1,1,1)), f.x), f.y), f.z);
+  // One tongue of flame: a teardrop that sways on scrolling noise and
+  // cools from a hot core (c) to its edge colour (e).
+  vec4 tongue(vec2 uv, float seed, float width, vec3 e, vec3 c) {
+    float t = uTime * uSpeed * (0.8 + seed * 0.45) + seed * 9.0;
+    vec2 p = vec2((uv.x - 0.5) / width, uv.y);
+    float n = vn(vec2(p.x * 2.6 + seed * 5.0, p.y * 2.0 - t * 1.6));
+    p.x += (n - 0.5) * 0.55 * p.y + sin(t * 2.1 + seed * 4.0) * 0.07 * p.y;
+    float w = 0.44 * pow(clamp(1.0 - p.y, 0.0, 1.0), 0.55) * (0.8 + 0.35 * n);
+    w = max(w, 0.0);
+    float d = abs(p.x) / max(w, 0.001);
+    float body = smoothstep(1.0, 0.4, d) * smoothstep(0.0, 0.1, p.y) * step(0.0, 1.0 - p.y);
+    float heat = clamp((1.0 - d) * (1.0 - p.y * 0.85), 0.0, 1.0);
+    vec3 col = mix(e, c, smoothstep(0.05, 0.75, heat));
+    return vec4(col * (0.55 + 0.9 * heat), body);
   }
   void main() {
-    float facing = abs(dot(normalize(vN), normalize(vV)));
-    vec3 p = vP * 1.8;
-    float ang = uTime * 0.45 + p.y * 1.4;
-    float cs = cos(ang), sn = sin(ang);
-    p.xz = mat2(cs, -sn, sn, cs) * p.xz;
-    float n1 = vn3(p * 1.3 + vec3(0.0, -uTime * 0.5, 0.0));
-    float n2 = vn3(p * 2.9 + vec3(3.0, uTime * 0.4, -uTime * 0.3));
-    float plasma = n1 * 0.65 + n2 * 0.35;
-    float e = pow(clamp(plasma * 1.45, 0.0, 1.0), 1.9) * (0.3 + 0.7 * facing) * uEnergy;
-    vec3 col = mix(uE1, uC1, smoothstep(0.1, 0.6, e));
-    col = mix(col, uC2, smoothstep(0.55, 0.95, e));
-    col = mix(col, uC3, smoothstep(1.0, 1.4, e * 1.1));
-    gl_FragColor = vec4(col * (0.5 + 0.7 * e), (0.16 + e * 0.6) * uAlpha);
+    vec4 a = tongue(vUv, 0.0, 1.0, uE1, uC1);
+    vec4 b = tongue(vUv, 1.0, 0.78, uE2, uC2);
+    vec4 c = tongue(vUv, 2.0, 0.5, uC2, uC3);
+    vec3 col = a.rgb * a.a + b.rgb * b.a + c.rgb * c.a;
+    float al = clamp(a.a + 0.9 * b.a + 0.8 * c.a, 0.0, 1.0);
+    gl_FragColor = vec4(col / max(al, 0.001), al * uAlpha);
     #include <colorspace_fragment>
   }`;
 
@@ -234,32 +170,23 @@ const GLASS_FRAG = /* glsl */`
     #include <colorspace_fragment>
   }`;
 
-// Embers and sparks lift off the orb on curling paths that widen as they
-// rise. Sparks (the quicker, tinier ones) burn hotter and fly faster when the
-// fire is agitated (uHeat).
 const EMBER_VERT = /* glsl */`
   attribute float aSeed;
-  uniform float uTime, uPx, uAlpha, uHeat;
-  varying float vA, vKind;
+  uniform float uTime, uPx, uAlpha;
+  varying float vA;
   void main() {
-    float kind = step(0.68, aSeed);
-    float sp = mix(0.26, 0.5, kind) * (0.7 + 0.3 * uHeat);
-    float ph = fract(uTime * sp * (0.7 + aSeed * 0.6) + aSeed * 3.7);
-    float rise = ph * (0.5 + 0.35 * kind) * (0.8 + 0.2 * uHeat);
-    float curl = sin(ph * 7.0 + aSeed * 30.0 + uTime * 0.6) * 0.06 * (0.4 + ph);
-    float curl2 = cos(ph * 5.0 + aSeed * 17.0) * 0.04 * ph;
-    vec3 p = vec3((aSeed - 0.5) * 0.3 + curl, 0.2 + rise, curl2);
+    float ph = fract(uTime * 0.32 * (0.7 + aSeed * 0.6) + aSeed * 3.7);
+    vec3 p = vec3((aSeed - 0.5) * 0.34 + sin(ph * 6.2832 + aSeed * 20.0) * 0.05, 0.1 + ph * 0.55, (fract(aSeed * 7.3) - 0.5) * 0.2);
     vec4 mv = modelViewMatrix * vec4(p, 1.0);
     gl_Position = projectionMatrix * mv;
-    gl_PointSize = max(1.0, uPx * (1.0 - ph * 0.75) * mix(1.0, 0.5, kind) * (0.6 + aSeed) / -mv.z);
-    vA = sin(ph * 3.14159) * mix(0.9, 1.4, kind) * uAlpha;
-    vKind = kind;
+    gl_PointSize = max(1.0, uPx * (1.0 - ph * 0.7) * (0.6 + aSeed) / -mv.z);
+    vA = sin(ph * 3.14159) * uAlpha;
   }`;
 const EMBER_FRAG = /* glsl */`
-  uniform vec3 uColor, uHot; varying float vA, vKind;
+  uniform vec3 uColor; varying float vA;
   void main() {
     float d = length(gl_PointCoord - 0.5);
-    gl_FragColor = vec4(mix(uColor, uHot, vKind), smoothstep(0.5, 0.0, d) * vA);
+    gl_FragColor = vec4(uColor, smoothstep(0.5, 0.0, d) * vA);
     #include <colorspace_fragment>
   }`;
 
@@ -309,7 +236,7 @@ function crackTexture() {
 
 // ---- the module ----
 
-export async function createPod3D({ host, base, suffix = "", adaptiveQuality = false, reducedMotion, fontFamily, onPick, onMove, onFail }) {
+export async function createPod3D({ host, base, suffix = "", reducedMotion, fontFamily, onPick, onMove, onFail }) {
   // a boolean, or a function so a changed OS setting is honoured live
   const isReduced = () => (typeof reducedMotion === "function" ? reducedMotion() : !!reducedMotion);
   const loader = new GLTFLoader();
@@ -354,13 +281,7 @@ export async function createPod3D({ host, base, suffix = "", adaptiveQuality = f
   }
   scene.environmentIntensity = 0.9;
   const key = new DirectionalLight(0xffe2b8, 1.6); key.position.set(-4, 7, 5); scene.add(key);
-  scene.add(new HemisphereLight(0x9a86e8, 0x2a1a10, 0.5));
-  // Each lit orb lights its throne, the gold and the table with its own flickering
-  // light. A fixed pool (a constant light count never recompiles shaders as
-  // seats come and go); unused ones sit at zero.
-  const lightPool = Array.from({ length: 8 }, () => {
-    const l = new PointLight(0xffffff, 0, 3.4, 2); l.userData.used = false; scene.add(l); return l;
-  });
+  scene.add(new HemisphereLight(0x9a86e8, 0x2a1a10, 0.55));
 
   const root = new Group(); scene.add(root);
   const rig = new Group(); root.add(rig);   // turns with the table
@@ -476,10 +397,6 @@ export async function createPod3D({ host, base, suffix = "", adaptiveQuality = f
   const crackTex = crackTexture();
   const emberSeeds = Float32Array.from({ length: 9 }, (_, i) => (i + 0.5) / 9 + (Math.sin(i * 12.9898) * 0.04));
   let T = 0, dirty = true, pxPerUnit = 400;
-  // Adaptive quality: if the first couple of seconds of animation run slowly (an
-  // older phone, a throttled battery-saver GPU), render at a lower pixel ratio
-  // once rather than stutter for good.
-  let quality = 1; const frameTimes = []; let qualityChecked = !adaptiveQuality;
   let focusId = null;
 
   function buildSeat(id, crest) {
@@ -505,35 +422,20 @@ export async function createPod3D({ host, base, suffix = "", adaptiveQuality = f
       time: { value: 0 }, speed: { value: 1 }, alpha: { value: 1 },
       e1: { value: new Color() }, c1: { value: new Color() }, e2: { value: new Color() }, c2: { value: new Color() }, c3: { value: new Color() },
     };
+    const flame = billboard(FLAME_FRAG, { uTime: U.time, uSpeed: U.speed, uAlpha: { value: 1 }, uE1: U.e1, uC1: U.c1, uE2: U.e2, uC2: U.c2, uC3: U.c3 }, 0.63, 0.68, 12);
+    const flameWrap = new Group(); flameWrap.add(flame); flame.position.y = -0.07; orb.add(flameWrap);
     const halo = new Color(), emberC = new Color();
-    const glow = billboard(GLOW_FRAG, { uColor: { value: halo }, uAlpha: { value: 0.6 } }, 1.5, 1.5, 10);
+    const glow = billboard(GLOW_FRAG, { uColor: { value: halo }, uAlpha: { value: 0.6 } }, 1.1, 1.1, 10);
     orb.add(glow);
-    // two flames rooted in the orb: a wide ragged outer one and a narrow white-hot one
-    const flameU = inner => ({
-      uTime: U.time, uSpeed: U.speed, uAlpha: { value: 1 }, uFlick: { value: 1 }, uTurb: { value: 1 }, uLean: { value: 0 },
-      uSeed: { value: inner ? 0.37 : 0.0 }, uInner: { value: inner }, uE1: inner ? U.c1 : U.e1, uC1: inner ? U.c2 : U.c1, uC2: inner ? U.c3 : U.c2, uC3: U.c3,
-    });
-    const mkFlame = (inner, order) => {
-      const m = billboard(FLAME_FRAG, flameU(inner), 0.6, 0.8, order);
-      m.material.vertexShader = BASE_VERT; m.material.needsUpdate = true;
-      m.position.y = 0.04; return m;
-    };
-    const flame = mkFlame(0, 12), flameIn = mkFlame(1, 13);
-    const flameWrap = new Group(); flameWrap.add(flame, flameIn); orb.add(flameWrap);
-    const plasma = new Mesh(new SphereGeometry(0.235, 28, 18), new ShaderMaterial({
-      vertexShader: PLASMA_VERT, fragmentShader: PLASMA_FRAG, transparent: true, depthWrite: false, depthTest: false, blending: AdditiveBlending, toneMapped: false,
-      uniforms: { uTime: U.time, uAlpha: { value: 1 }, uEnergy: { value: 1 }, uE1: U.e1, uC1: U.c1, uC2: U.c2, uC3: U.c3 },
-    }));
-    plasma.renderOrder = 11.5; orb.add(plasma);
     const glass = new Mesh(new SphereGeometry(0.26, 28, 18), new ShaderMaterial({
       vertexShader: GLASS_VERT, fragmentShader: GLASS_FRAG, transparent: true, depthWrite: false, depthTest: false, blending: AdditiveBlending, toneMapped: false,
       uniforms: { uHalo: { value: halo }, uAlpha: { value: 1 } },
     }));
-    glass.renderOrder = 14; orb.add(glass);
+    glass.renderOrder = 13; orb.add(glass);
     // a generous, invisible tap target: the orb is only ~15px across on a phone
     const pick = new Mesh(new SphereGeometry(0.6, 8, 6), new MeshBasicMaterial({ visible: false }));
     pick.userData.seatId = id; orb.add(pick);
-    const crack = billboard(TEX_FRAG, { uTex: { value: crackTex }, uAlpha: { value: 0 } }, 0.41, 0.41, 15);
+    const crack = billboard(TEX_FRAG, { uTex: { value: crackTex }, uAlpha: { value: 0 } }, 0.41, 0.41, 14);
     crack.material.blending = 1; // NormalBlending
     orb.add(crack);
     const ring = billboard(RING_FRAG, { uColor: { value: halo }, uAlpha: { value: 0 }, uR: { value: 0.3 } }, 1.5, 1.5, 11);
@@ -541,21 +443,17 @@ export async function createPod3D({ host, base, suffix = "", adaptiveQuality = f
     const eg = new BufferGeometry();
     eg.setAttribute("position", new Float32BufferAttribute(new Float32Array(emberSeeds.length * 3), 3));
     eg.setAttribute("aSeed", new Float32BufferAttribute(emberSeeds, 1));
-    const hotC = new Color();
     const embers = new Points(eg, new ShaderMaterial({
       vertexShader: EMBER_VERT, fragmentShader: EMBER_FRAG, transparent: true, depthWrite: false, depthTest: false, blending: AdditiveBlending, toneMapped: false,
-      uniforms: { uTime: U.time, uPx: { value: 0.07 * pxPerUnit }, uAlpha: { value: 0 }, uHeat: { value: 1 }, uColor: { value: emberC }, uHot: { value: hotC } },
+      uniforms: { uTime: U.time, uPx: { value: 0.07 * pxPerUnit }, uAlpha: { value: 0 }, uColor: { value: emberC } },
     }));
-    embers.frustumCulled = false; embers.renderOrder = 16; orb.add(embers);
-    const light = lightPool.find(l => !l.userData.used) || null;
-    if (light) light.userData.used = true;
+    embers.frustumCulled = false; embers.renderOrder = 15; orb.add(embers);
 
     const s = {
-      id, crest, pick, pivot, carrier, mount, orb, mats, gemMat, U, halo, emberC, hotC, flame, flameIn, plasma, light, glow, glass, crack, ring, embers, flameWrap,
+      id, crest, pick, pivot, carrier, mount, orb, mats, gemMat, U, halo, emberC, flame, glow, glass, crack, ring, embers, flameWrap,
       ang: new Tween(0), r: new Tween(SEAT_R), sw: new Tween(0), alpha: new Tween(1), flare: new Tween(1), ringT: new Tween(0),
-      state: null, target: null, cur: { size: 1, speed: 1, embers: 0, glow: 0.5, crack: 0, turb: 1, flick: 0.1, breath: 0.05, lightK: 1, heat: 1, energy: 1 }, leaving: false,
-      phase: Math.random() * 6.28, seedT: Math.random() * 50, dim: 1, focus: false,
-      surgeAt: 0, surgeStart: -9, lag: new Vector3(), prevCW: null, foc: 0,
+      state: null, target: null, cur: { size: 1, speed: 1, embers: 0, glow: 0.5, crack: 0 }, leaving: false,
+      phase: Math.random() * 6.28, seedT: Math.random() * 50, dim: 1,
     };
     return s;
   }
@@ -583,8 +481,6 @@ export async function createPod3D({ host, base, suffix = "", adaptiveQuality = f
       e1: col3(p.e1), c1: col3(p.c1), e2: col3(p.e2), c2: col3(p.c2), c3: col3(p.c3),
       halo: col3(p.halo || p.c1), ember: col3(p.ember || p.c1),
       size: base.size, speed: base.speed, embers: base.embers, glow: base.glow, crack: st === "flagged" ? 1 : 0,
-      turb: base.turb, flick: base.flick, breath: base.breath, lightK: base.lightK, heat: base.heat, energy: base.energy,
-      surge: base.surge,
     };
   }
 
@@ -634,16 +530,14 @@ export async function createPod3D({ host, base, suffix = "", adaptiveQuality = f
   function snapSeat(s, t) {
     s.U.e1.value.copy(t.e1); s.U.c1.value.copy(t.c1); s.U.e2.value.copy(t.e2); s.U.c2.value.copy(t.c2); s.U.c3.value.copy(t.c3);
     s.halo.copy(t.halo); s.emberC.copy(t.ember);
-    s.cur = { size: t.size, speed: t.speed, embers: t.embers, glow: t.glow, crack: t.crack, turb: t.turb, flick: t.flick, breath: t.breath, lightK: t.lightK, heat: t.heat, energy: t.energy };
-    s.hotC.copy(t.c3);
+    s.cur = { size: t.size, speed: t.speed, embers: t.embers, glow: t.glow, crack: t.crack };
   }
 
   function removeSeat(s) {
     seats.delete(s.id); rig.remove(s.pivot);
-    if (s.light) { s.light.intensity = 0; s.light.userData.used = false; }
     for (const m of s.mats) m.dispose();
-    for (const o of [s.flame, s.flameIn, s.plasma, s.glow, s.glass, s.crack, s.ring, s.embers, s.pick]) o.material.dispose();
-    s.pick.geometry.dispose(); s.glass.geometry.dispose(); s.plasma.geometry.dispose();
+    for (const o of [s.flame, s.glow, s.glass, s.crack, s.ring, s.embers, s.pick]) o.material.dispose();
+    s.pick.geometry.dispose(); s.glass.geometry.dispose();
     s.embers.geometry.dispose();
   }
 
@@ -662,7 +556,7 @@ export async function createPod3D({ host, base, suffix = "", adaptiveQuality = f
   function resize() {
     const w = host.clientWidth, h = host.clientHeight;
     if (!w || !h) return;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2) * quality;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
     renderer.setPixelRatio(dpr); renderer.setSize(w, h, false);
     camera.aspect = w / h;
     // Fit the whole ring of thrones across the width, then check the height.
@@ -732,70 +626,25 @@ export async function createPod3D({ host, base, suffix = "", adaptiveQuality = f
       const t = s.target, k = isReduced() ? 1 : 1 - Math.exp(-dt * 9);
       if (t) {
         s.U.e1.value.lerp(t.e1, k); s.U.c1.value.lerp(t.c1, k); s.U.e2.value.lerp(t.e2, k); s.U.c2.value.lerp(t.c2, k); s.U.c3.value.lerp(t.c3, k);
-        s.halo.lerp(t.halo, k); s.emberC.lerp(t.ember, k); s.hotC.copy(s.U.c3.value);
-        for (const key of LIFE_KEYS) s.cur[key] = lerpTo(s.cur[key], t[key], k);
+        s.halo.lerp(t.halo, k); s.emberC.lerp(t.ember, k);
+        for (const key of ["size", "speed", "embers", "glow", "crack"]) s.cur[key] = lerpTo(s.cur[key], t[key], k);
       }
-      const still = isReduced(), c = s.cur;
-      const tt = still ? s.seedT : now + s.seedT;
-      s.U.time.value = tt;
-      s.U.speed.value = c.speed;
-      const focused = focusId !== null && s.id === focusId;
-      s.dim = lerpTo(s.dim, focusId !== null && !focused ? 0.45 : 1, k);
-      s.foc = lerpTo(s.foc, focused ? 1 : 0, k);
+      const still = isReduced();
+      s.U.time.value = still ? s.seedT : now + s.seedT;
+      s.U.speed.value = s.cur.speed;
+      const dim = focusId !== null && s.id !== focusId ? 0.45 : 1;
+      s.dim = lerpTo(s.dim, dim, k);
       const vis = s.alpha.v * s.dim;
-
-      // ---- presence ----
-      // Flicker: incommensurate sines, so it never settles into a pattern you can count.
-      const fl = still
-        ? 1 - c.flick * 0.4
-        : 1 - c.flick * (0.5 + 0.5 * (Math.sin(tt * 7.1 + s.phase) * 0.5 + Math.sin(tt * 12.9 + s.phase * 1.7) * 0.3 + Math.sin(tt * 21.3 + s.phase * 2.3) * 0.2));
-      // Breathing, a slow swell of the whole orb.
-      const br = still ? 1 : 1 + c.breath * Math.sin(now * 1.45 + s.phase);
-      // A glance: every few seconds the orb perks up, swells and brightens, like someone
-      // looking up. Seats still waiting on a deck do it most.
-      let surge = 0;
-      if (!still && t) {
-        const gap = () => t.surge[0] + Math.random() * (t.surge[1] - t.surge[0]);
-        if (s.surgeAt === 0) s.surgeAt = now + gap();
-        if (now > s.surgeAt) { s.surgeStart = now; s.surgeAt = now + gap(); }
-        const kk = (now - s.surgeStart) / 1.1;
-        if (kk >= 0 && kk < 1) surge = Math.pow(Math.sin(kk * Math.PI), 1.5);
-      }
-      // Secondary motion: the orb trails its throne when the table turns or a seat slides,
-      // then settles, and drifts a little even at rest.
-      s.carrier.getWorldPosition(_cw);
-      if (s.prevCW && !still) s.lag.x -= (_cw.x - s.prevCW.x) * 0.9, s.lag.y -= (_cw.y - s.prevCW.y) * 0.9, s.lag.z -= (_cw.z - s.prevCW.z) * 0.9;
-      if (!s.prevCW) s.prevCW = new Vector3();
-      s.prevCW.copy(_cw);
-      s.lag.multiplyScalar(Math.exp(-dt * 7));
-      if (s.lag.lengthSq() > 0.0625) s.lag.setLength(0.25);
-      _l.copy(s.lag); s.carrier.getWorldQuaternion(_q); _l.applyQuaternion(_q.invert()).divideScalar(THRONE_K);
-      const drift = still ? 0 : 0.02, bob = still ? 0 : Math.sin(now * 1.96 + s.phase) * 0.04;
-      s.orb.position.set(_l.x + Math.sin(now * 0.5 + s.phase) * drift, ORB_Y + bob + _l.y, _l.z + Math.cos(now * 0.43 + s.phase) * drift);
-      // The flames lean with a slow wind and with the trailing; the focused seat stands upright.
-      const wind = still ? 0 : (0.22 * Math.sin(now * 0.5 + s.phase) + 0.1 * Math.sin(now * 1.3 + s.phase * 2)) * (c.turb > 1.3 ? 1.8 : 1);
-      const lean = wind * (1 - 0.7 * s.foc) + s.lag.x * 5;
-
       const flare = 1 + (1 - s.flare.v) * 0.7;               // swell, then settle
-      const sz = c.size * br * (1 + 0.14 * surge + 0.1 * s.foc) * flare;
-      const lift = 1 + 0.25 * surge;
-      const fo = s.flame.material.uniforms, fi = s.flameIn.material.uniforms;
-      fo.uSize.value.set(0.82 * sz, 1.0 * sz * lift); fo.uFlick.value = fl * (1 + 0.25 * surge); fo.uTurb.value = c.turb; fo.uLean.value = lean; fo.uAlpha.value = vis;
-      fi.uSize.value.set(0.5 * sz, 0.72 * sz * lift); fi.uFlick.value = Math.min(1.1, fl * 1.1 + 0.2 * surge); fi.uTurb.value = c.turb * 1.2; fi.uLean.value = lean * 1.2; fi.uAlpha.value = vis * 0.7;
-      const pu = s.plasma.material.uniforms;
-      pu.uAlpha.value = vis; pu.uEnergy.value = c.energy * (0.75 + 0.3 * fl + 0.35 * surge);
-      s.plasma.scale.setScalar(br * (1 + 0.05 * surge));
-      s.glow.material.uniforms.uSize.value.setScalar(1.5 * br * (1 + 0.15 * surge + 0.1 * s.foc));
-      s.glow.material.uniforms.uAlpha.value = c.glow * vis * (0.75 + 0.35 * fl + 0.4 * surge + (1 - s.flare.v) * 0.8);
+      const bob = still ? 0 : Math.sin(now * 1.96 + s.phase) * 0.04;
+      s.orb.position.y = ORB_Y + bob;
+      const sz = s.cur.size * flare;
+      s.flame.material.uniforms.uSize.value.set(0.63 * sz, 0.68 * sz);
+      s.flame.material.uniforms.uAlpha.value = vis;
+      s.glow.material.uniforms.uAlpha.value = s.cur.glow * vis * (1 + (1 - s.flare.v) * 0.8);
       s.glass.material.uniforms.uAlpha.value = vis;
-      s.crack.material.uniforms.uAlpha.value = c.crack * vis;
-      const eu = s.embers.material.uniforms;
-      eu.uAlpha.value = c.embers * vis * (still ? 0 : 1) * (0.8 + 0.3 * surge); eu.uHeat.value = c.heat;
-      if (s.light) {
-        const L = s.light;
-        L.color.copy(s.halo); s.orb.getWorldPosition(L.position); L.position.y += 0.12;
-        L.intensity = LIGHT_BASE * c.lightK * vis * (0.7 + 0.45 * fl + 0.5 * surge + 0.35 * s.foc + (1 - s.flare.v) * 1.5);
-      }
+      s.crack.material.uniforms.uAlpha.value = s.cur.crack * vis;
+      s.embers.material.uniforms.uAlpha.value = s.cur.embers * vis * (still ? 0 : 1);
       const rg = s.ring.material.uniforms; rg.uAlpha.value = (1 - s.ringT.v) * 0.9 * vis * (s.ringT.on ? 1 : 0); rg.uR.value = 0.25 + s.ringT.v * 0.7;
       if (s.flare.on || s.ringT.on) moving = true;
     }
@@ -814,18 +663,7 @@ export async function createPod3D({ host, base, suffix = "", adaptiveQuality = f
     if (moving || dirty || animated) {
       // idle flame frames at 30fps; transitions get every frame
       if (moving || dirty || now - ids.lastRender >= 0.032) {
-        // Idle frames are throttled to ~30fps, so their spacing is a fair read of whether
-        // this device keeps up: a median well over 33ms means it can't.
-        const gap = (now - ids.lastRender) * 1000;
         renderer.render(scene, camera); ids.lastRender = now;
-        if (!qualityChecked && animated && !moving && gap < 1000) {
-          frameTimes.push(gap);
-          if (frameTimes.length >= 60) {
-            qualityChecked = true;
-            frameTimes.sort((x, y) => x - y);
-            if (frameTimes[30] > 45) { quality = 0.7; resize(); }
-          }
-        }
         if (moving) onMove && onMove();
       }
     }
