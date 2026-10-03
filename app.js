@@ -339,22 +339,50 @@ function buildTonightCountItem(value, labels) {
 // standing, and whatever is outstanding. Everything on it is already
 // loaded for other tabs -- this renders from that shared state rather
 // than fetching anything of its own, so it costs no extra requests.
+// Tonight's main card, from the shared table (see applyLiveTable). Guarded
+// on podTableReady first: renderTonight also runs at script load, before
+// the table's state exists.
+function tonightTableCopy() {
+  const fallback = { title: "Build a pod", sub: "Check the power spread before you shuffle" };
+  if (!podTableReady || !liveTableLoaded || podSelections.length === 0) return fallback;
+  const n = podSelections.length;
+  const me = myPodPlayerId();
+  const mine = podSelections.find(s => s.playerId === me);
+  const waiting = podSelections.filter(s => !s.sealed || podSeatState(s) === "flagged");
+  const names = list => podNameList(list);
+  if (podRevealed) return { title: "Ready to play", sub: `The pod passed. ${n} decks revealed.` };
+  if (!mine) {
+    const others = names(podSelections);
+    return { title: n >= POD_MAX_SEATS ? "The table is full" : "Take your seat", sub: `${n} at the table: ${others}` };
+  }
+  const myState = podSeatState(mine);
+  if (myState === "waiting") return { title: "Pick your deck", sub: `You're at the table. ${n - waiting.length} of ${n} decks sealed.` };
+  if (myState === "flagged") return { title: "Pick a new deck", sub: "Yours is over this pod's range." };
+  if (waiting.length) return { title: "At the table", sub: `Waiting on ${names(waiting)}` };
+  return { title: "Ready to check", sub: `All ${n} decks sealed` };
+}
+
 function renderTonight() {
   const host = document.getElementById("tonight-body");
   if (!host) return;
   host.innerHTML = "";
 
   // --- primary action ---
+  // Follows the shared table once it's loaded: an empty table invites you
+  // to build a pod, a seated one tells you what it needs from you.
+  const tableCopy = tonightTableCopy();
   const action = document.createElement("button");
   action.type = "button";
   action.className = "tonight-action";
   action.innerHTML = `
     <span class="tonight-action-icon">${tonightSvg('<path d="M12 2.6 21 12l-9 9.4L3 12z"></path><circle cx="12" cy="12" r="3.1"></circle>')}</span>
     <span class="tonight-action-text">
-      <span class="tonight-action-title">Build a pod</span>
-      <span class="tonight-action-sub">Check the power spread before you shuffle</span>
+      <span class="tonight-action-title"></span>
+      <span class="tonight-action-sub"></span>
     </span>
     <span class="tonight-item-chevron">${tonightSvg('<path d="m9 18 6-6-6-6"></path>')}</span>`;
+  action.querySelector(".tonight-action-title").textContent = tableCopy.title;
+  action.querySelector(".tonight-action-sub").textContent = tableCopy.sub;
   action.addEventListener("click", () => activateTab("pod"));
   host.appendChild(action);
 
@@ -721,6 +749,8 @@ function trophyEmblemNode(slot) {
     return icon;
   }
   const img = tcEl("img", "trophy-emblem");
+  img.loading = "lazy";
+  img.decoding = "async";
   img.src = slot.emblem;
   img.alt = "";
   return img;
@@ -904,6 +934,8 @@ function renderTrophyCompare(a, b) {
     if (!col.slots.length) emblems.appendChild(tcEl("span", "tc-compare-empty", "None"));
     for (const s of col.slots) {
       const img = tcEl("img", "tc-mini-emblem");
+      img.loading = "lazy";
+      img.decoding = "async";
       img.src = s.emblem;
       img.alt = s.title;
       img.title = s.title;
@@ -1156,6 +1188,8 @@ function renderTrophyLeaderboard(d) {
       const emblems = tcEl("div", "tl-emblems");
       for (const e of row.emblems) {
         const img = tcEl("img", "tl-emblem");
+        img.loading = "lazy";
+        img.decoding = "async";
         img.src = e.emblem;
         img.alt = e.title;
         img.title = e.count > 1 ? `${e.title} ×${e.count}` : e.title;
@@ -1410,6 +1444,10 @@ function renderAchievements(achievements, seasonActive) {
     if (achievement.emblem) {
       const img = document.createElement("img");
       img.className = "trophy-emblem";
+      // Lazy: the season grid draws every achievement at once, and the art
+      // further down shouldn't hold up the first screenful.
+      img.loading = "lazy";
+      img.decoding = "async";
       img.src = achievement.emblem;
       img.alt = "";
       card.appendChild(img);
@@ -2254,6 +2292,7 @@ function applyLiveTable(view) {
   }
   renderPodSlots();
   renderPodCheckResults();
+  renderTonight();
 
   const check = liveTableCheck;
   if (firstLoad) {
@@ -2267,7 +2306,10 @@ function applyLiveTable(view) {
 
 async function pollLiveTable(force) {
   if (!podTableReady || !currentUser || podPollInFlight) return;
-  if (!force && (document.hidden || document.getElementById("tab-pod")?.hidden)) return;
+  // Polls while the Pod tab or Tonight (which shows the table's state on
+  // its main card) is open; anywhere else, nothing.
+  const watching = !document.getElementById("tab-pod")?.hidden || !document.getElementById("tab-tonight")?.hidden;
+  if (!force && (document.hidden || !watching)) return;
   podPollInFlight = true;
   try {
     applyLiveTable(await tableRequest("GET", null, liveTableVersion !== null ? `?v=${liveTableVersion}` : ""));
@@ -2308,6 +2350,16 @@ function showPodError(message) {
 
 // Signed-in start-up: first read of the table, then the poll. The poll only
 // does anything while the Pod tab is open and the app is in front.
+// Only the visible tab background renders now (see .tab-bg in style.css),
+// so the others would otherwise first download on the tap that shows them.
+// Fetched into the cache once the app has settled instead.
+function warmTabBackgrounds() {
+  const urls = ["bg-validator.webp", "bg-games-to-update.webp", "bg-update-app.webp", "bg-winrates.webp"];
+  const warm = () => urls.forEach(u => { new Image().src = u; });
+  if ("requestIdleCallback" in window) requestIdleCallback(warm, { timeout: 5000 });
+  else setTimeout(warm, 2500);
+}
+
 function initLiveTable() {
   podTableReady = true;
   // The pod used to be saved on the phone itself; the relay holds it now.
@@ -2315,6 +2367,7 @@ function initLiveTable() {
   renderPodSlots();
   pollLiveTable(true);
   setInterval(pollLiveTable, TABLE_POLL_MS);
+  warmTabBackgrounds();
   document.addEventListener("visibilitychange", () => { if (!document.hidden) pollLiveTable(); });
 }
 
@@ -2573,7 +2626,18 @@ function buildPodTable(container) {
   // The table is sized off the card's width (and re-pinned when the pod tab
   // goes from hidden to shown, which this also catches as a resize).
   if ("ResizeObserver" in window) new ResizeObserver(fitPodScene).observe(scene);
+  initPodScenePause(scene);
   return ui;
+}
+
+// Holds every flame and ember still while the table is scrolled out of
+// view (see .pod-scene.is-offscreen) -- up to ~200 animations nobody can
+// see. A hidden Pod tab already stops them on its own (display: none).
+function initPodScenePause(scene) {
+  if (!("IntersectionObserver" in window)) return;
+  new IntersectionObserver(entries => {
+    for (const entry of entries) scene.classList.toggle("is-offscreen", !entry.isIntersecting);
+  }).observe(scene);
 }
 
 function fitPodScene() {
@@ -3675,21 +3739,46 @@ function buildPowerGauge(judgedEntries, floor, ceiling) {
   zone.style.width = `${Math.min(100, (span / totalSpan) * 100)}%`;
   track.appendChild(zone);
 
-  for (const entry of judgedEntries) {
-    const pct = Math.min(100, Math.max(0, ((entry.power - floor) / totalSpan) * 100));
+  // Decks close together used to print their names on top of each other
+  // ("Red Becca Mate Michelle"). Each label takes the lowest row where it
+  // clears the label before it; GAUGE_LABEL_GAP is roughly one short name's
+  // width as a share of a phone-width track.
+  const GAUGE_LABEL_GAP = 18;
+  const GAUGE_ROW_PX = 16;
+  const placed = judgedEntries
+    .map(entry => ({ entry, pct: Math.min(100, Math.max(0, ((entry.power - floor) / totalSpan) * 100)) }))
+    .sort((a, b) => a.pct - b.pct);
+  const rowEnds = [];
+  for (const p of placed) {
+    let row = rowEnds.findIndex(end => p.pct - end >= GAUGE_LABEL_GAP);
+    if (row === -1) row = rowEnds.length < 3 ? rowEnds.length : rowEnds.indexOf(Math.min(...rowEnds));
+    rowEnds[row] = p.pct;
+    p.row = row;
+  }
+  const rows = Math.max(1, rowEnds.length);
+  wrap.style.paddingTop = `${34 + GAUGE_ROW_PX * (rows - 1)}px`;
+  if (placed.some(p => !p.entry.compatible)) wrap.style.paddingBottom = `${GAUGE_ROW_PX * rows}px`;
+
+  for (const { entry, pct, row } of placed) {
     const marker = document.createElement("div");
     marker.className = "gauge-marker " + (entry.compatible ? "ok" : "over");
     marker.style.left = `${pct}%`;
+    // Labels at either end lean inward instead of hanging off the card.
+    const shift = pct < 10 ? "-20%" : pct > 90 ? "-80%" : "-50%";
 
     const label = document.createElement("span");
     label.className = "dot-label";
     label.textContent = entry.playerName;
+    label.style.top = `${-26 - GAUGE_ROW_PX * row}px`;
+    label.style.transform = `translateX(${shift})`;
     marker.appendChild(label);
 
     if (!entry.compatible) {
       const val = document.createElement("span");
       val.className = "dot-value";
       val.textContent = `+${formatPower(entry.overBy)}`;
+      val.style.bottom = `${-20 - GAUGE_ROW_PX * row}px`;
+      val.style.transform = `translateX(${shift})`;
       marker.appendChild(val);
     }
     track.appendChild(marker);
@@ -3831,6 +3920,7 @@ function activateTab(tabName) {
     trackPodPlates(400);
     pollLiveTable(true);
   }
+  if (tabName === "tonight") pollLiveTable(true);
 }
 
 // Swaps the active .tab-bg. The new layer shows instantly underneath and
@@ -3999,6 +4089,8 @@ function buildWinRateCard(row, rank, sortKey, direction) {
     for (const t of pins) {
       const img = document.createElement("img");
       img.className = "wr-pin";
+      img.loading = "lazy";
+      img.decoding = "async";
       img.src = t.emblem;
       img.alt = t.title;
       img.title = t.title;
@@ -5812,9 +5904,24 @@ async function checkAuthSession() {
 function renderAuthControl() {
   const avatarImg = document.getElementById("auth-avatar-img");
   if (!avatarImg) return;
+  const initialEl = document.getElementById("auth-avatar-initial");
+  // A missing or broken avatar used to show its alt text squeezed into the
+  // circle; the initial stands in instead.
+  const showInitial = on => {
+    avatarImg.hidden = on;
+    if (initialEl) initialEl.hidden = !on;
+  };
   if (currentUser) {
-    avatarImg.src = currentUser.avatarUrl || "";
     avatarImg.alt = `Signed in as ${currentUser.username}`;
+    if (initialEl) initialEl.textContent = (currentUser.username || "?").charAt(0).toUpperCase();
+    avatarImg.onerror = () => showInitial(true);
+    if (currentUser.avatarUrl) {
+      showInitial(false);
+      avatarImg.src = currentUser.avatarUrl;
+    } else {
+      avatarImg.removeAttribute("src");
+      showInitial(true);
+    }
   } else {
     // #auth-control is hidden whenever this is true (see renderAuthGate),
     // so this is just keeping the <img> from holding onto a stale avatar
