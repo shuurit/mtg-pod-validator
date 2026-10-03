@@ -2770,7 +2770,7 @@ function trackPodPlates(ms) {
 // table is the fallback, and stays on screen until the 3D one is ready or
 // for good if WebGL, the models or the load itself fail.
 
-const POD3D_VERSION = 1; // bump with any change under pod3d/ (cache-bust)
+const POD3D_VERSION = 2; // bump with any change under pod3d/ (cache-bust)
 let pod3dStarted = false;
 
 function podWebGLAvailable() {
@@ -2805,6 +2805,7 @@ async function initPod3D() {
       base: "pod3d",
       suffix: `?v=${POD3D_VERSION}`,
       reducedMotion: () => REDUCED_MOTION.matches,
+      adaptiveQuality: true,
       fontFamily: font,
       onPick: id => tapPodSeat(id),
       onMove: positionPodPlates,
