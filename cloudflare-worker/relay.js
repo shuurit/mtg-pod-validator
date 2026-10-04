@@ -1862,10 +1862,10 @@ async function computeGamesData(env) {
   // can be a season with no games yet -- the client scopes standings to it
   // instead of guessing "highest season among these rows", so a brand-new
   // season reads as empty rather than showing the last one.
-  const [currentSeasonId, { results: seasonRows }] = await Promise.all([
-    getCurrentSeasonId(env),
-    env.DB.prepare("SELECT id, label, closed_at FROM seasons ORDER BY id").all(),
-  ]);
+  // Sequential, not parallel: resolving the current season can create its
+  // row, and the list below has to include it.
+  const currentSeasonId = await getCurrentSeasonId(env);
+  const { results: seasonRows } = await env.DB.prepare("SELECT id, label, closed_at FROM seasons ORDER BY id").all();
   const seasons = seasonRows.map(s => ({ id: s.id, label: s.label, closedAt: s.closed_at }));
 
   return { generated_at: new Date().toISOString(), currentSeasonId, seasons, games };
