@@ -575,26 +575,41 @@ let gameLogSeason3Rows = [];
 // created in chronological order, whether from the original migration or
 // auto-created on a new league's first game) before handing rows off to
 // the rest of the app, matching that same one-season-at-a-time scope.
-function gameLogRowsFromD1(data) {
-  if (data.games.length === 0) return [];
-  const currentSeasonId = Math.max(...data.games.map(g => g.seasonId));
-  return data.games
-    .filter(g => g.seasonId === currentSeasonId)
-    .map(g => ({
-      gameNum: g.gameNum,
-      date: new Date(g.date),
-      player: g.player,
-      commander: g.commander,
-      playgroupGameId: g.playgroupGameId,
-      commanderStrength: g.commanderStrength,
-      result: g.result,
-      podSize: g.podSize,
-      bracket: g.bracket,
-      J: g.adjustedPodSizeScore,
-      K: g.knockoutScore,
-      M: g.winProbability,
-    }));
+function gameRowFromD1(g) {
+  return {
+    gameNum: g.gameNum,
+    date: new Date(g.date),
+    player: g.player,
+    commander: g.commander,
+    playgroupGameId: g.playgroupGameId,
+    commanderStrength: g.commanderStrength,
+    result: g.result,
+    podSize: g.podSize,
+    bracket: g.bracket,
+    J: g.adjustedPodSizeScore,
+    K: g.knockoutScore,
+    M: g.winProbability,
+  };
 }
+
+// The relay says which season is current (currentSeasonId: the one for
+// playgroup.gg's active league, even if it has no games yet). That's what
+// makes a new season start clean -- picking "the highest season among these
+// rows" can't move until a game exists, so the old season kept showing.
+// The max-over-rows fallback is only for an older relay that doesn't send it.
+function gameLogRowsFromD1(data) {
+  const currentSeasonId = data.currentSeasonId ?? (data.games.length ? Math.max(...data.games.map(g => g.seasonId)) : null);
+  if (currentSeasonId == null) return [];
+  return data.games.filter(g => g.seasonId === currentSeasonId).map(gameRowFromD1);
+}
+
+// Every season's rows, for lookups that should carry over between seasons
+// (a deck's last bracket) rather than start clean.
+let gameLogAllRows = [];
+// True once /games has loaded at least once -- "no rows" is only "still
+// syncing" before that. A season with no games yet (a new one) is a normal,
+// loaded, empty state.
+let gameLogLoaded = false;
 
 async function syncFromD1() {
   const statusEl = document.getElementById("sync-status");
@@ -616,6 +631,8 @@ async function syncFromD1() {
     }
 
     gameLogSeason3Rows = gameLogRowsFromD1(gamesData);
+    gameLogAllRows = gamesData.games.map(gameRowFromD1);
+    gameLogLoaded = true;
     renderGamesToUpdate();
     renderWinRatesTable(playgroupGamesData);
     // computeRosterDiff (inside renderUpdateAppTab) reads the `players`
@@ -636,7 +653,7 @@ async function syncFromD1() {
     if (gtuStatus) gtuStatus.textContent = `Couldn't load live data — Games to Update needs it to know what's already logged.`;
     // Only when there's no earlier Game Log to fall back on: a failed
     // refresh after a good load keeps the last known count instead.
-    if (gameLogSeason3Rows.length === 0) {
+    if (!gameLogLoaded) {
       const gtuList = document.getElementById("gtu-game-list");
       if (gtuList) gtuList.innerHTML = "";
       tonightCounts.gamesToLog = "error";
@@ -4523,7 +4540,9 @@ function findDefaultBracket(playerName, commanderName) {
     if (deck && deck.bracketPending) return deck.bracket;
   }
 
-  const matches = gameLogSeason3Rows.filter(
+  // Any season, not just the current one: a deck's bracket carries over, so
+  // its first game of a new season defaults to where it last played.
+  const matches = gameLogAllRows.filter(
     r => r.player === playerName && r.commander === commanderName && typeof r.bracket === "number"
   );
   if (matches.length === 0) return "";
@@ -4561,7 +4580,7 @@ function renderGamesToUpdate() {
   const statusEl = document.getElementById("gtu-status");
   const listEl = document.getElementById("gtu-game-list");
   if (!playgroupGamesData || !statusEl || !listEl) return;
-  if (gameLogSeason3Rows.length === 0) {
+  if (!gameLogLoaded) {
     // "the Game Log" -- not "deck-strength.xlsx", which this stopped
     // reading from back when the D1 migration landed; the string just
     // never got updated to match.

@@ -64,15 +64,18 @@ def fetch_json(url):
     return resp.json()
 
 
-def current_season_games(all_games):
+def current_season_games(all_games, current_season_id=None):
     """Rows (one per player per game) from GET /games belonging to the
-    most-recently-created season -- same "current season" scope app.js's
-    gameLogRowsFromD1 already established (Player Adjusted Ranks has
-    always been one-season-at-a-time, never combined across seasons, even
-    though GET /games itself returns every season's history)."""
+    current season -- same scope app.js's gameLogRowsFromD1 uses (Player
+    Adjusted Ranks has always been one-season-at-a-time, never combined
+    across seasons, even though GET /games itself returns every season's
+    history). current_season_id comes from the relay (the season for
+    playgroup.gg's active league); the highest season among the rows is
+    only a fallback for a relay that doesn't send it."""
     if not all_games:
         return []
-    current_season_id = max(g["seasonId"] for g in all_games)
+    if current_season_id is None:
+        current_season_id = max(g["seasonId"] for g in all_games)
     return [g for g in all_games if g["seasonId"] == current_season_id]
 
 
@@ -99,7 +102,7 @@ def fetch_report_data():
 
     all_players = players_data["players"]
     all_player_names = [p["name"] for p in all_players]
-    season_games = current_season_games(games_data["games"])
+    season_games = current_season_games(games_data["games"], games_data.get("currentSeasonId"))
     if not season_games:
         raise RuntimeError("No games logged yet in the current season -- nothing to report.")
     log_rows = to_pawr_rows(season_games)

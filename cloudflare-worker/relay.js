@@ -581,8 +581,9 @@ async function resolveSeasonId(env) {
   // create two season rows. The unique index on playgroup_league_id makes
   // the loser of that race a no-op instead of an error, and both requests
   // resolve to the same season either way.
+  const label = seasonLabelForLeague(activeLeague.name);
   await env.DB.prepare("INSERT OR IGNORE INTO seasons (label, playgroup_league_id) VALUES (?, ?)")
-    .bind(activeLeague.name, leagueId).run();
+    .bind(label, leagueId).run();
   row = await env.DB.prepare("SELECT id FROM seasons WHERE playgroup_league_id = ?").bind(leagueId).first();
   if (row) return row.id;
 
@@ -593,15 +594,41 @@ async function resolveSeasonId(env) {
   // league reusing an old name is possible. Not safe to guess through --
   // fail loud with enough detail to actually fix it.
   const labelClash = await env.DB.prepare("SELECT id, playgroup_league_id FROM seasons WHERE label = ?")
-    .bind(activeLeague.name).first();
+    .bind(label).first();
   if (labelClash) {
     throw new Error(
-      `playgroup.gg's active league is named "${activeLeague.name}", which already exists as a season here ` +
+      `playgroup.gg's active league is named "${activeLeague.name}" (season label "${label}"), which already exists as a season here ` +
       `(id ${labelClash.id}) attached to a different league (${labelClash.playgroup_league_id ?? "none"}). ` +
       `Rename the league on playgroup.gg, or resolve this by hand in D1.`
     );
   }
   throw new Error(`Failed to resolve or create a season for league ${leagueId} ("${activeLeague.name}").`);
+}
+
+// "Amass a Gathering Season 4" -> "Season 4", matching the existing "Season
+// 3" label, so a new season's name reads the same in Discord posts, the
+// Closing Ceremony title and the season picker. Falls back to the league's
+// full name if stripping would leave nothing.
+function seasonLabelForLeague(name) {
+  const full = String(name || "").trim();
+  return full.replace(/^Amass a Gathering\s+/i, "").trim() || full;
+}
+
+// The season every "current season" read scopes to: the one for
+// playgroup.gg's active league, created here if it doesn't exist yet. This
+// is what makes a new season a clean slate the moment its league starts,
+// instead of the app showing the old season's standings until someone logs
+// the first game (the old behaviour took MAX(season_id) over games, which
+// can't move until a game exists). Falls back to the newest season row if
+// playgroup.gg can't be reached, so a read never fails over this.
+async function getCurrentSeasonId(env) {
+  try {
+    return await resolveSeasonId(env);
+  } catch (err) {
+    console.error("getCurrentSeasonId: couldn't resolve the active league, using the newest season:", err);
+    const row = await env.DB.prepare("SELECT MAX(id) AS id FROM seasons").first();
+    return row ? row.id : null;
+  }
 }
 
 // Manually ends the CURRENT season on demand, so the group can have the
@@ -1660,6 +1687,12 @@ async function computePlayersData(env) {
     "SELECT id, name, playgroup_username FROM players WHERE playgroup_user_id IS NOT NULL ORDER BY id"
   ).all();
 
+  // What carries over from season to season is a deck's strength and bracket
+  // (computed_power, last_logged_bracket below -- deliberately any season).
+  // Everything else about a deck's record starts clean: the combo-watch
+  // window and the logged-game count only look at the current season (?1).
+  const seasonId = await getCurrentSeasonId(env);
+
   const { results: deckRows } = await env.DB.prepare(`
     SELECT d.id, d.player_id, d.name, d.playgroup_deck_id, d.archived, d.new_deck,
            d.potential_bracket_4, d.bracket AS bracket_override, d.color_identity,
@@ -1672,23 +1705,24 @@ async function computePlayersData(env) {
               ORDER BY g.id DESC LIMIT 1),
              d.baseline_power
            ) AS computed_power,
-           -- Last 5 logged games (any season), most recent first -- see the
+           -- Last 5 logged games THIS SEASON, most recent first -- see the
            -- comboFlagged comment below for what this feeds.
            (SELECT COUNT(*) FROM (
               SELECT gr.early_two_card_combo AS c FROM game_results gr JOIN games g ON g.id = gr.game_id
-              WHERE gr.deck_id = d.id ORDER BY g.id DESC LIMIT 5
+              WHERE gr.deck_id = d.id AND g.season_id = ?1 ORDER BY g.id DESC LIMIT 5
             )) AS combo_window_size,
            (SELECT COUNT(*) FROM (
               SELECT gr.early_two_card_combo AS c FROM game_results gr JOIN games g ON g.id = gr.game_id
-              WHERE gr.deck_id = d.id ORDER BY g.id DESC LIMIT 5
+              WHERE gr.deck_id = d.id AND g.season_id = ?1 ORDER BY g.id DESC LIMIT 5
             ) WHERE c = 1) AS combo_flagged_count,
-           -- Total logged games (any season, no LIMIT) -- distinct from
+           -- Total logged games this season (no LIMIT) -- distinct from
            -- combo_window_size above, which is capped at 5. Feeds the
            -- Players & Decks nameplate's "Logged N games" subtitle.
-           (SELECT COUNT(*) FROM game_results gr WHERE gr.deck_id = d.id) AS games_logged
+           (SELECT COUNT(*) FROM game_results gr JOIN games g ON g.id = gr.game_id
+            WHERE gr.deck_id = d.id AND g.season_id = ?1) AS games_logged
     FROM decks d
     ORDER BY d.id
-  `).all();
+  `).bind(seasonId).all();
 
   const decksByPlayer = {};
   for (const d of deckRows) {
@@ -1824,7 +1858,17 @@ async function computeGamesData(env) {
     gameCalculatedDeckStrength: r.game_calculated_deck_strength,
   }));
 
-  return { generated_at: new Date().toISOString(), games };
+  // currentSeasonId is the season for playgroup.gg's active league, which
+  // can be a season with no games yet -- the client scopes standings to it
+  // instead of guessing "highest season among these rows", so a brand-new
+  // season reads as empty rather than showing the last one.
+  const [currentSeasonId, { results: seasonRows }] = await Promise.all([
+    getCurrentSeasonId(env),
+    env.DB.prepare("SELECT id, label, closed_at FROM seasons ORDER BY id").all(),
+  ]);
+  const seasons = seasonRows.map(s => ({ id: s.id, label: s.label, closedAt: s.closed_at }));
+
+  return { generated_at: new Date().toISOString(), currentSeasonId, seasons, games };
 }
 
 async function handleGames(env) {
@@ -1894,8 +1938,7 @@ async function computeRankingsData(env, seasonId) {
 async function handleRankings(env) {
   let data;
   try {
-    const latest = await env.DB.prepare("SELECT MAX(season_id) AS id FROM games").first();
-    data = await computeRankingsData(env, latest.id);
+    data = await computeRankingsData(env, await getCurrentSeasonId(env));
   } catch (err) {
     return jsonResponse({ error: "Failed to compute rankings from D1", detail: err.message }, 500);
   }
@@ -1964,8 +2007,7 @@ async function computeDeckWinRatesData(env, seasonId) {
 async function handleDeckWinRates(env) {
   let data;
   try {
-    const latest = await env.DB.prepare("SELECT MAX(season_id) AS id FROM games").first();
-    data = await computeDeckWinRatesData(env, latest.id);
+    data = await computeDeckWinRatesData(env, await getCurrentSeasonId(env));
   } catch (err) {
     return jsonResponse({ error: "Failed to compute Deck Win Rates from D1", detail: err.message }, 500);
   }
