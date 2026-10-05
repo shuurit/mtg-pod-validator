@@ -17,7 +17,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="style.css?v=56">
+<link rel="stylesheet" href="style.css?v=57">
 
 <!-- Home-screen icon (iOS "Add to Home Screen" + Android/Chrome install).
      Generated from icon-source.png via scripts/generate_icons.py -- rerun
@@ -154,7 +154,7 @@
 
     <section class="card" id="manage-section">
       <h2>Players &amp; Decks</h2>
-      <p class="hint">Read-only reference, synced from the app's database. Tap a deck's power to declare a new bracket before its next game.</p>
+      <p class="hint">Tap a player to see their decks. Tap a deck's power to declare a new bracket before its next game.</p>
       <p class="hint" id="sync-status">Shuffling up the deck list…</p>
 
       <div id="players-table"></div>
@@ -182,7 +182,7 @@
         Tonight
       </button>
       <h2>New Players/Decks</h2>
-      <p class="hint">New playgroup.gg members and new decks for tracked players, detected live — independent of whether a game's been played with them yet. Review, pick a bracket (1–5) for anything new, and submit once to add it all.</p>
+      <p class="hint">New playgroup.gg members and new decks for tracked players. Tick what to add, pick a bracket (1–5) for each, then submit once.</p>
       <p class="hint" id="uta-status">Shuffling up…</p>
       <div id="uta-list"></div>
       <div id="uta-form-area"></div>
@@ -192,7 +192,7 @@
   <div id="tab-winrates" class="tab-panel" hidden>
     <section class="card">
       <h2>Player Win Rates</h2>
-      <p class="hint">Read-only. Nothing on this tab can be edited — it's a side-by-side of playgroup.gg's tracked win rate and the app's calculated Player Adjusted Win Rate.</p>
+      <p class="hint">playgroup.gg's raw win rate next to the app's Player Adjusted Win Rate, which also weighs pod size, knockouts and deck strength.</p>
       <p class="hint" id="winrates-sync-status">Tallying the numbers…</p>
       <div id="winrates-table"></div>
       <p class="hint" id="winrates-note"></p>
@@ -209,7 +209,7 @@
            player's history across every closed season; "Most Decorated"
            ranks everyone by trophies held. -->
       <div class="row align-center view-toggle" id="achievements-view-toggle">
-        <button type="button" class="view-toggle-btn active" data-view="trophies">Season Standings</button>
+        <button type="button" class="view-toggle-btn active" data-view="trophies">Season</button>
         <button type="button" class="view-toggle-btn" data-view="case">Trophy Case</button>
         <button type="button" class="view-toggle-btn" data-view="leaderboard">Most Decorated</button>
       </div>
@@ -241,13 +241,17 @@
              loadAchievements in app.js) -- replayable any time, not a
              one-shot "you already saw this" flow. -->
         <button type="button" id="ceremony-btn" hidden>Watch the Closing Ceremony</button>
-        <!-- Shown only for the current, still-live season (the exact inverse
-             condition of ceremony-btn above) -- see loadAchievements in
-             app.js. Opens close-season-modal for confirmation. -->
-        <button type="button" id="close-season-btn" hidden>Close the Season</button>
       </div>
       <p class="hint" id="achievements-status">Shuffling up…</p>
       <div id="achievements-list"></div>
+      <!-- Shown only for the current, still-live season (the exact inverse
+           condition of ceremony-btn above) -- see loadAchievements in
+           app.js. Opens close-season-modal for confirmation. Below the
+           grid, not above it: a once-a-season, can't-be-undone action
+           shouldn't be the first button on every visit to this tab. -->
+      <div id="season-close-row" class="season-close-row">
+        <button type="button" id="close-season-btn" hidden>Close the Season</button>
+      </div>
       <div id="trophy-case-view" hidden>
         <div id="trophy-case-summary"></div>
         <div id="trophy-case-compare" class="tc-compare" hidden></div>
@@ -385,6 +389,6 @@
   </div>
 </div>
 
-<script src="app.js?v=61"></script>
+<script src="app.js?v=62"></script>
 </body>
 </html>
