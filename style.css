@@ -939,6 +939,30 @@ header h1 {
 #achievements-list {
   margin-top: 12px;
 }
+/* A live season's sealed trophies (renderAchievements): nothing on them
+   to read but a name and a rule, so three or four to a row on a phone
+   instead of two tall cards. */
+#achievements-list.is-sealed {
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 10px;
+}
+#achievements-list.is-sealed .trophy-card {
+  padding: 10px 8px 12px;
+}
+#achievements-list.is-sealed .trophy-emblem {
+  max-width: 76px;
+}
+#achievements-list.is-sealed .trophy-title {
+  font-size: 0.85rem;
+}
+#achievements-list.is-sealed .trophy-description {
+  font-size: 0.68rem;
+  margin-bottom: 0;
+}
+
+.season-close-row {
+  margin-top: 18px;
+}
 /* Same "ID selector beats the default [hidden] rule" gotcha as .row above
    -- an ID's specificity wins even more decisively, so every ID-styled
    container toggled via .hidden needs its own explicit override. */
@@ -947,6 +971,7 @@ header h1 {
 #trophy-case-compare[hidden],
 #trophy-leaderboard-list[hidden],
 #season-view-controls[hidden],
+#season-close-row[hidden],
 #case-card-download-row[hidden] {
   display: none;
 }
@@ -1768,44 +1793,63 @@ tbody tr {
   padding-top: 0;
 }
 
+/* The whole row toggles the player's deck list (renderPlayersTable). A
+   real button stripped back to a row: the base button's border, fill and
+   press nudge would turn eight stacked players into eight stacked boxes. */
 .player-block-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-}
-
-.player-block-header-left {
   display: flex;
   align-items: center;
   gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 4px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  font-weight: 400;
+}
+.player-block-header:active { transform: none; }
+@media (hover: hover) and (pointer: fine) {
+  .player-block-header:hover {
+    background: var(--bg-accent);
+    color: var(--ink);
+  }
 }
 
-.toggle-btn {
-  width: 22px;
-  height: 22px;
-  padding: 0;
+.player-block-chevron {
+  flex: 0 0 auto;
   display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
   color: var(--muted);
-  font-size: 0.75rem;
+  transition: transform 0.15s ease;
 }
-@media (hover: hover) and (pointer: fine) {
-  .toggle-btn:hover { color: var(--accent); border-color: var(--accent); }
+.player-block-chevron svg {
+  width: 16px;
+  height: 16px;
+}
+.player-block-header[aria-expanded="true"] .player-block-chevron {
+  transform: rotate(90deg);
+  color: var(--accent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .player-block-chevron { transition: none; }
+}
+
+/* Deck count and power range, pushed to the row's right edge. */
+.player-block-meta {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
 }
 
 .deck-count {
   color: var(--muted);
-  font-size: 0.82rem;
-  cursor: pointer;
-  padding: 3px 9px;
-  border-radius: 999px;
-  background: var(--bg-accent);
-}
-@media (hover: hover) and (pointer: fine) {
-  .deck-count:hover { color: var(--accent); }
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .player-name-display {
@@ -1892,42 +1936,6 @@ td.num {
   .power-chip::after { display: none; }
 }
 
-/* "Everyone's power at a glance" -- see buildPowerOverviewStrip in app.js.
-   One pill per player above the collapsible list below (expandedPlayerId
-   stays single-open there for phone-friendly card heights, which is
-   exactly why this exists). Wraps to multiple lines on a narrow screen
-   rather than scrolling sideways, same reasoning as the rest of this app's
-   wide-content handling. */
-.power-overview-strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 14px;
-}
-
-.power-overview-card {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid var(--border);
-  background: var(--card-bg);
-  border-radius: 999px;
-  padding: 5px 10px 5px 12px;
-  cursor: pointer;
-}
-@media (hover: hover) and (pointer: fine) {
-  .power-overview-card:hover {
-    border-color: var(--accent);
-  }
-}
-
-.power-overview-name {
-  font-size: 0.82rem;
-  font-weight: 600;
-  color: var(--ink);
-  white-space: nowrap;
-}
-
 /* One range per player (e.g. "2.4–3.9"), not one dot per deck -- a
    player's card used to grow with their deck count and a double-digit
    collection (real examples in this playgroup exist) overflowed past the
@@ -1979,6 +1987,22 @@ td.num {
   font-weight: 600;
   color: var(--muted);
   border-radius: 999px;
+}
+/* Touch target: the pill itself is ~24px tall. An invisible ::before
+   stretches the tappable area to 44px without making the active pill a
+   tall capsule; the bar's row gap leaves room for it. */
+@media (pointer: coarse) {
+  .sort-btn {
+    position: relative;
+  }
+  .sort-btn::before {
+    content: "";
+    position: absolute;
+    inset: -10px 0;
+  }
+  .sort-bar {
+    row-gap: 20px;
+  }
 }
 @media (hover: hover) and (pointer: fine) {
   .sort-btn:hover { color: var(--accent); }
@@ -2033,12 +2057,19 @@ td.num {
   align-items: center;
   gap: 8px;
 }
+/* Two lines before clipping, not one: at phone width a single line cut
+   most commander names to "Prossh, Skyraider o…", which is exactly the
+   part that tells two of a player's decks apart. */
 .deck-plate-name-text {
   font-weight: 700;
   font-size: 0.95rem;
+  line-height: 1.25;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow-wrap: anywhere;
 }
 .deck-plate-sub {
   margin-top: 3px;
@@ -2592,10 +2623,71 @@ td.num {
   margin-bottom: 10px;
 }
 
+/* The card for the game whose form is open below (markOpenGtuCard). */
+.gtu-game-card.is-open {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
 .gtu-game-summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
   font-size: 0.92rem;
-  margin-bottom: 8px;
-  line-height: 1.5;
+  margin-bottom: 6px;
+}
+.gtu-game-size {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+/* One player per line (renderGamesToUpdate), winner first. */
+.gtu-game-players {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+}
+.gtu-game-players li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 0.88rem;
+}
+.gtu-game-player {
+  flex: 0 0 auto;
+  font-weight: 600;
+}
+.gtu-game-deck {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gtu-game-won {
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--good);
+  background: var(--good-bg);
+  border: 1px solid var(--good-border);
+}
+
+@media (pointer: coarse) {
+  .gtu-fill-btn {
+    min-height: 44px;
+  }
+}
+.gtu-game-card.is-open .gtu-fill-btn {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .gtu-form {
@@ -2725,10 +2817,14 @@ input.gtu-in-prefilled {
   gap: 8px;
   margin-top: 10px;
 }
+/* Wraps the bracket controls onto their own line when the name would
+   otherwise get less than ~11rem: on a phone the name used to be squeezed
+   to "Gis…" beside a full-width bracket select. */
 .uta-deck-card {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 10px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 13px 16px;
@@ -2742,7 +2838,7 @@ input.gtu-in-prefilled {
   height: 18px;
 }
 .uta-deck-card-info {
-  flex: 1 1 auto;
+  flex: 1 1 11rem;
   min-width: 0;
   font-size: 0.88rem;
 }
@@ -2758,9 +2854,8 @@ input.gtu-in-prefilled {
   font-size: 0.95rem;
 }
 .uta-deck-card-name-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .uta-deck-card-sub {
   margin-top: 3px;
@@ -2769,6 +2864,7 @@ input.gtu-in-prefilled {
 }
 .uta-deck-card-controls {
   flex: 0 0 auto;
+  margin-left: auto;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -2819,9 +2915,25 @@ input.gtu-in-prefilled {
   margin-bottom: 10px;
 }
 
+/* One group's Select All / Deselect All (buildUtaSelectButtons): in each
+   group's header when groups are listed, beside the dropdown otherwise. */
+.uta-select-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.uta-group-header .uta-select-btns {
+  margin-top: 10px;
+}
+@media (pointer: coarse) {
+  .uta-select-btns button {
+    min-height: 44px;
+  }
+}
+
 .uta-group-title {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 8px;
   flex-wrap: wrap;
 }
@@ -2877,21 +2989,11 @@ input.gtu-in-prefilled {
     padding: 18px 16px 20px;
   }
 
-  /* Same shrink issue on the player row header — let it wrap instead
-     of clipping content off-screen. */
-  .player-block-header {
-    flex-wrap: wrap;
-    row-gap: 8px;
-  }
-
-  .player-block-header-left {
-    flex: 1 1 100%;
-    min-width: 0;
-  }
-
   .player-name-display {
-    flex: 1 1 auto;
     min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   /* Tables (deck editing, win rates) can scroll horizontally on their
@@ -3047,7 +3149,10 @@ input.gtu-in-prefilled {
 }
 .tonight-item-lead {
   flex: 0 0 auto;
-  min-width: 1.7em;
+  /* Wide enough for a two-digit count or the check icon to line labels
+     up, no wider -- at 1.7em a lone "2" sat a thumb's width from the
+     words it was counting. */
+  min-width: 1.1em;
   font-family: var(--font-display);
   font-variant-numeric: tabular-nums;
   font-size: 1.35rem;
@@ -3076,6 +3181,123 @@ input.gtu-in-prefilled {
   width: 16px;
   height: 16px;
   display: block;
+}
+
+/* Top of the season's standings (buildTonightLeaders in app.js). One
+   button for the whole list -- every row goes to the same place, so
+   separate tap targets would only be more places to miss. */
+.tonight-board {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  padding: 6px 16px;
+  margin-top: -10px;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--ink);
+  font-weight: 400;
+  box-shadow: none;
+}
+/* Pulled up under the "Your season" stat tiles as part of the same group;
+   without the tiles it sits under its own label like any other section. */
+.tonight-board.is-first {
+  margin-top: 0;
+}
+@media (hover: hover) and (pointer: fine) {
+  .tonight-board:hover {
+    border-color: var(--accent);
+    background: transparent;
+    color: var(--ink);
+  }
+}
+.tonight-board-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+.tonight-board-row.is-detached {
+  border-top: 1px dashed var(--border);
+}
+.tonight-board-rank {
+  flex: 0 0 1.4em;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.1rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.tonight-board-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.1rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.tonight-board-pct {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.tonight-board-row.is-me .tonight-board-name,
+.tonight-board-row.is-me .tonight-board-pct {
+  color: var(--accent);
+}
+.tonight-board-more {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  padding: 10px 0 6px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.tonight-board-more svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* The season's last few logged games (buildTonightRecentGames). Plain
+   rows, not cards: nothing here is tappable. */
+.tonight-games {
+  display: flex;
+  flex-direction: column;
+}
+.tonight-game {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 10px 2px;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: 0.88rem;
+}
+.tonight-game:last-child {
+  border-bottom: 0;
+}
+.tonight-game-date {
+  flex: 0 0 3.4em;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.tonight-game-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.tonight-game-pod {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.78rem;
+  color: var(--muted);
 }
 
 /* Route back to Tonight from the two panels that are no longer in either

@@ -262,6 +262,12 @@ function updateTonightTabBadge() {
   setTabBadge("tonight-tab-badge", knownCount(tonightCounts.gamesToLog) + knownCount(tonightCounts.newDecks));
 }
 let latestStandings = null;
+// True once /games has loaded at least once -- "no rows" is only "still
+// syncing" before that. A season with no games yet (a new one) is a normal,
+// loaded, empty state. Declared up here, not with the Game Log rows below,
+// because renderTonight reads it and first runs while this file is still
+// loading.
+let gameLogLoaded = false;
 
 function tonightSvg(path) {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
@@ -386,36 +392,10 @@ function renderTonight() {
   action.addEventListener("click", () => activateTab("pod"));
   host.appendChild(action);
 
-  // --- your season ---
-  const myName = currentUser && players.length
-    ? (players.find(p => p.id === currentUser.playerId) || {}).name
-    : null;
-  const myRow = myName && latestStandings
-    ? latestStandings.rows.find(r => r.name === myName)
-    : null;
-
-  if (myRow && myRow.adjPct !== null) {
-    const label = document.createElement("div");
-    label.className = "tonight-label";
-    label.textContent = "Your season";
-    host.appendChild(label);
-
-    const stats = document.createElement("div");
-    stats.className = "tonight-stats";
-    const rank = latestStandings.adjustedRankByName[myName];
-    stats.innerHTML = `
-      <div class="tonight-stat">
-        <div class="tonight-stat-value tonight-stat-rank">${rank ? "#" + rank : "—"}</div>
-        <div class="tonight-stat-label">Standing</div>
-      </div>
-      <div class="tonight-stat">
-        <div class="tonight-stat-value">${myRow.adjPct.toFixed(1)}<span class="tonight-stat-unit">%</span></div>
-        <div class="tonight-stat-label">Adjusted &middot; ${myRow.adjWins}&ndash;${myRow.adjLosses}</div>
-      </div>`;
-    host.appendChild(stats);
-  }
-
   // --- needs you ---
+  // Straight after the main action: these are the only other things on
+  // this screen that ask for a tap, so they shouldn't sit below the fold
+  // under read-only stats.
   const label = document.createElement("div");
   label.className = "tonight-label";
   label.textContent = "Needs you";
@@ -451,6 +431,149 @@ function renderTonight() {
   }
 
   host.appendChild(list);
+
+  // --- your season ---
+  const myName = currentUser && players.length
+    ? (players.find(p => p.id === currentUser.playerId) || {}).name
+    : null;
+  const myRow = myName && latestStandings
+    ? latestStandings.rows.find(r => r.name === myName)
+    : null;
+
+  const leaders = buildTonightLeaders(myName);
+  const hasMyStats = !!myRow && myRow.adjPct !== null;
+  if (hasMyStats || leaders) {
+    const seasonLabel = document.createElement("div");
+    seasonLabel.className = "tonight-label";
+    seasonLabel.textContent = hasMyStats ? "Your season" : "This season";
+    host.appendChild(seasonLabel);
+  }
+
+  if (hasMyStats) {
+    const stats = document.createElement("div");
+    stats.className = "tonight-stats";
+    const rank = latestStandings.adjustedRankByName[myName];
+    stats.innerHTML = `
+      <div class="tonight-stat">
+        <div class="tonight-stat-value tonight-stat-rank">${rank ? "#" + rank : "—"}</div>
+        <div class="tonight-stat-label">Standing</div>
+      </div>
+      <div class="tonight-stat">
+        <div class="tonight-stat-value">${myRow.adjPct.toFixed(1)}<span class="tonight-stat-unit">%</span></div>
+        <div class="tonight-stat-label">Adjusted &middot; ${myRow.adjWins}&ndash;${myRow.adjLosses}</div>
+      </div>`;
+    host.appendChild(stats);
+  }
+
+  if (leaders) {
+    if (!hasMyStats) leaders.classList.add("is-first");
+    host.appendChild(leaders);
+  }
+
+  const recent = buildTonightRecentGames();
+  if (recent) {
+    const recentLabel = document.createElement("div");
+    recentLabel.className = "tonight-label";
+    recentLabel.textContent = "Last games";
+    host.appendChild(recentLabel);
+    host.appendChild(recent);
+  }
+}
+
+// Top of the current season's standings, plus your own row if you're not
+// already in it -- the same latestStandings Player Win Rates just
+// computed, so the two can never disagree. The whole list is one tap
+// through to the full table.
+const TONIGHT_LEADER_COUNT = 3;
+function buildTonightLeaders(myName) {
+  if (!latestStandings) return null;
+  const ranked = latestStandings.rows
+    .filter(r => r.adjPct !== null)
+    .sort((a, b) => b.adjPct - a.adjPct);
+  if (ranked.length === 0) return null;
+  const shown = ranked.slice(0, TONIGHT_LEADER_COUNT);
+  const mine = ranked.find(r => r.name === myName);
+  if (mine && !shown.includes(mine)) shown.push(mine);
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "tonight-board";
+  btn.setAttribute("aria-label", "Season standings: open the full table");
+  btn.addEventListener("click", () => activateTab("winrates"));
+
+  shown.forEach((r, i) => {
+    const row = document.createElement("span");
+    row.className = "tonight-board-row";
+    if (r.name === myName) row.classList.add("is-me");
+    // A gap in rank (you at #5 under the top three) gets a divider so the
+    // jump reads as a jump, not as the next place down.
+    if (i === TONIGHT_LEADER_COUNT && r === mine) row.classList.add("is-detached");
+    const rank = document.createElement("span");
+    rank.className = "tonight-board-rank";
+    rank.textContent = latestStandings.adjustedRankByName[r.name] ?? "—";
+    const name = document.createElement("span");
+    name.className = "tonight-board-name";
+    name.textContent = r.name === myName ? `${r.name} (you)` : r.name;
+    const pct = document.createElement("span");
+    pct.className = "tonight-board-pct";
+    pct.textContent = `${r.adjPct.toFixed(1)}%`;
+    row.append(rank, name, pct);
+    btn.appendChild(row);
+  });
+
+  const more = document.createElement("span");
+  more.className = "tonight-board-more";
+  more.innerHTML = `Full standings ${tonightSvg('<path d="m9 18 6-6-6-6"></path>')}`;
+  btn.appendChild(more);
+  return btn;
+}
+
+// The current season's last few logged games, newest first: who won and
+// with what. Read from the same Game Log rows the rest of the app already
+// loaded -- nothing fetched for this.
+const TONIGHT_RECENT_GAMES = 3;
+function buildTonightRecentGames() {
+  if (!gameLogLoaded || gameLogSeason3Rows.length === 0) return null;
+  const byGame = new Map();
+  for (const r of gameLogSeason3Rows) {
+    if (!byGame.has(r.gameNum)) byGame.set(r.gameNum, []);
+    byGame.get(r.gameNum).push(r);
+  }
+  const games = [...byGame.entries()]
+    .sort((a, b) => Number(b[0]) - Number(a[0]))
+    .slice(0, TONIGHT_RECENT_GAMES);
+
+  const list = document.createElement("div");
+  list.className = "tonight-games";
+  for (const [, rows] of games) {
+    const winner = rows.find(r => r.result === 1);
+    const item = document.createElement("div");
+    item.className = "tonight-game";
+    const when = document.createElement("span");
+    when.className = "tonight-game-date";
+    // Game Log dates are plain calendar days ("2026-06-26") parsed as UTC
+    // midnight -- formatted in UTC too, or anyone west of Greenwich sees
+    // the day before.
+    const d = rows[0].date;
+    when.textContent = d instanceof Date && !isNaN(d)
+      ? d.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" })
+      : "";
+    const what = document.createElement("span");
+    what.className = "tonight-game-text";
+    const who = document.createElement("strong");
+    who.textContent = winner ? winner.player : "No winner logged";
+    what.appendChild(who);
+    if (winner) {
+      what.appendChild(document.createTextNode(` won with ${stripDeckDisambiguation(winner.commander)}`));
+    }
+    const pod = document.createElement("span");
+    pod.className = "tonight-game-pod";
+    pod.textContent = `${rows.length}p`;
+    pod.setAttribute("aria-label", `${rows.length} players`);
+    item.append(when, what, pod);
+    list.appendChild(item);
+  }
+  return list;
 }
 
 // Updates both a tab badge's top-nav copy (#<baseId>) and its
@@ -606,10 +729,6 @@ function gameLogRowsFromD1(data) {
 // Every season's rows, for lookups that should carry over between seasons
 // (a deck's last bracket) rather than start clean.
 let gameLogAllRows = [];
-// True once /games has loaded at least once -- "no rows" is only "still
-// syncing" before that. A season with no games yet (a new one) is a normal,
-// loaded, empty state.
-let gameLogLoaded = false;
 
 async function syncFromD1() {
   const statusEl = document.getElementById("sync-status");
@@ -627,7 +746,10 @@ async function syncFromD1() {
     applyPlayersFromD1(playersData);
     if (statusEl) {
       const deckCount = players.reduce((n, p) => n + p.decks.length, 0);
-      statusEl.textContent = `Synced (${players.length} players, ${deckCount} decks; ${podPlayers.length} shown in Deck Strength Validator).`;
+      // Counts only. This used to add "N shown in Deck Strength Validator",
+      // which named a tab that no longer exists and read 0 on every load:
+      // that number comes from /playgroup-games, which lands after this.
+      statusEl.textContent = `Synced: ${players.length} players, ${deckCount} decks.`;
     }
 
     gameLogSeason3Rows = gameLogRowsFromD1(gamesData);
@@ -635,6 +757,10 @@ async function syncFromD1() {
     gameLogLoaded = true;
     renderGamesToUpdate();
     renderWinRatesTable(playgroupGamesData);
+    // Tonight's "Last games" reads these rows. renderWinRatesTable redraws
+    // Tonight too, but bails before that while playgroup.gg hasn't
+    // answered, and these rows don't depend on it.
+    renderTonight();
     // computeRosterDiff (inside renderUpdateAppTab) reads the `players`
     // array just rebuilt above by applyPlayersFromD1. refreshEverything()
     // runs this and loadRosterDiff() in parallel, and this fetch can
@@ -1433,6 +1559,10 @@ function renderAchievementsSeasonSelect(seasons, seasonId) {
 function renderAchievements(achievements, seasonActive) {
   const container = document.getElementById("achievements-list");
   container.innerHTML = "";
+  // A live season has no winners to show yet, so every card is just art,
+  // a title and a rule. At full size that was 28 tall cards of nothing to
+  // act on; sealed, they pack into small tiles.
+  container.classList.toggle("is-sealed", !!seasonActive && !achievements.some(a => a.winner));
 
   if (achievements.length === 0) {
     const empty = document.createElement("p");
@@ -1526,6 +1656,7 @@ function setAchievementsView(view) {
     "achievements-season-row": view === "trophies",
     "season-view-controls": view === "trophies",
     "achievements-list": view === "trophies",
+    "season-close-row": view === "trophies",
     "trophy-case-player-row": view === "case",
     "trophy-case-view": view === "case",
     "trophy-leaderboard-list": view === "leaderboard",
@@ -1822,53 +1953,26 @@ function buildPowerChip(power) {
 // same as buildPowerChip) -- clicking a pill expands that player's own
 // card and scrolls it into view rather than duplicating any deck detail
 // here. Skipped entirely at 1 or fewer players: nothing to compare yet.
-function buildPowerOverviewStrip() {
-  if (podPlayers.length <= 1) return null;
-
-  const strip = document.createElement("div");
-  strip.className = "power-overview-strip";
-
-  for (const player of podPlayers) {
-    const activeDecks = player.decks.filter(d => !d.archived);
-    if (activeDecks.length === 0) continue;
-
-    const card = document.createElement("button");
-    card.type = "button";
-    card.className = "power-overview-card";
-    card.addEventListener("click", () => {
-      expandedPlayerId = player.id;
-      renderPlayersTable();
-      document.getElementById(`player-block-${player.id}`)
-        ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    });
-
-    const name = document.createElement("span");
-    name.className = "power-overview-name";
-    name.textContent = player.name;
-    card.appendChild(name);
-
-    // A range, not one dot per deck -- a player with a dozen decks (real
-    // examples in this playgroup go into double digits) made the original
-    // one-dot-per-deck version overflow its own card instead of staying
-    // compact, defeating the whole point of an at-a-glance strip. Colored
-    // by the average deck's tier, since a single hue can't honestly
-    // represent a player whose decks span multiple tiers -- the average is
-    // the least misleading single answer to "how strong is this player,"
-    // and the printed range still shows the real spread as text.
-    const powers = activeDecks.map(d => d.power);
-    const min = Math.min(...powers);
-    const max = Math.max(...powers);
-    const avg = powers.reduce((a, b) => a + b, 0) / powers.length;
-    const range = document.createElement("span");
-    range.className = `power-overview-range ${powerTierClass(avg, "power-overview-dot")}`;
-    range.textContent = min === max ? formatPower(min) : `${formatPower(min)}–${formatPower(max)}`;
-    range.title = `${activeDecks.length} deck${activeDecks.length === 1 ? "" : "s"}`;
-    card.appendChild(range);
-
-    strip.appendChild(card);
-  }
-
-  return strip;
+// One player's power range as a pill (e.g. "2.4–3.9"), shown on their row
+// in Players & Decks. A range, not one dot per deck -- a player with a
+// dozen decks (real examples in this playgroup go into double digits)
+// would otherwise overflow the row. Colored by the average deck's tier,
+// since a single hue can't honestly represent a player whose decks span
+// multiple tiers -- the average is the least misleading single answer to
+// "how strong is this player," and the printed range still shows the real
+// spread as text. This used to be a separate strip of pills above the
+// list, one per player, which repeated every name the list below already
+// showed; it lives on the row itself now.
+function buildPowerRangePill(activeDecks) {
+  if (activeDecks.length === 0) return null;
+  const powers = activeDecks.map(d => d.power);
+  const min = Math.min(...powers);
+  const max = Math.max(...powers);
+  const avg = powers.reduce((a, b) => a + b, 0) / powers.length;
+  const range = document.createElement("span");
+  range.className = `power-overview-range ${powerTierClass(avg, "power-overview-dot")}`;
+  range.textContent = min === max ? formatPower(min) : `${formatPower(min)}–${formatPower(max)}`;
+  return range;
 }
 
 // POSTs decks.potential_bracket_4 (see schema.sql) and refreshes -- the
@@ -2128,13 +2232,10 @@ function renderPlayersTable() {
   if (podPlayers.length === 0) {
     const empty = document.createElement("p");
     empty.className = "hint";
-    empty.textContent = "No playgroup-linked players found in Current Deck Strength yet.";
+    empty.textContent = "No players linked to playgroup.gg yet.";
     container.appendChild(empty);
     return;
   }
-
-  const overviewStrip = buildPowerOverviewStrip();
-  if (overviewStrip) container.appendChild(overviewStrip);
 
   for (const player of podPlayers) {
     const isExpanded = expandedPlayerId === player.id;
@@ -2144,37 +2245,29 @@ function renderPlayersTable() {
 
     const block = document.createElement("div");
     block.className = "player-block";
-    // Scroll target for buildPowerOverviewStrip's pills above.
     block.id = `player-block-${player.id}`;
 
-    const header = document.createElement("div");
+    // The whole row is the expand control. It used to be a 22px arrow plus
+    // the deck-count pill, with the player's name itself doing nothing when
+    // tapped -- the name is exactly where a thumb goes.
+    const header = document.createElement("button");
+    header.type = "button";
     header.className = "player-block-header";
-
-    const toggleBtn = document.createElement("button");
-    toggleBtn.className = "icon-btn toggle-btn";
-    toggleBtn.textContent = isExpanded ? "▾" : "▸";
-    toggleBtn.setAttribute("aria-label", isExpanded ? "Collapse" : "Expand");
-    toggleBtn.addEventListener("click", () => {
+    header.setAttribute("aria-expanded", isExpanded ? "true" : "false");
+    header.addEventListener("click", () => {
       expandedPlayerId = isExpanded ? null : player.id;
       renderPlayersTable();
     });
+
+    const chevron = document.createElement("span");
+    chevron.className = "player-block-chevron";
+    chevron.innerHTML = tonightSvg('<path d="m9 18 6-6-6-6"></path>');
+    header.appendChild(chevron);
 
     const nameSpan = document.createElement("span");
     nameSpan.className = "player-name-display";
     nameSpan.textContent = player.name;
-
-    const deckCount = document.createElement("span");
-    deckCount.className = "deck-count";
-    deckCount.textContent = `${activeDecks.length} deck${activeDecks.length === 1 ? "" : "s"}`;
-    deckCount.addEventListener("click", () => {
-      expandedPlayerId = isExpanded ? null : player.id;
-      renderPlayersTable();
-    });
-
-    const headerLeft = document.createElement("div");
-    headerLeft.className = "player-block-header-left";
-    headerLeft.appendChild(toggleBtn);
-    headerLeft.appendChild(nameSpan);
+    header.appendChild(nameSpan);
 
     // Shown collapsed or expanded (header always renders) so a flagged
     // deck is noticeable without expanding every player to check -- same
@@ -2185,12 +2278,19 @@ function renderPlayersTable() {
       comboBadge.className = "tab-badge";
       comboBadge.textContent = String(comboCount);
       comboBadge.title = `${comboCount} deck${comboCount === 1 ? "" : "s"} showing the Bracket 4 combo pattern — expand to see which.`;
-      headerLeft.appendChild(comboBadge);
+      header.appendChild(comboBadge);
     }
 
-    headerLeft.appendChild(deckCount);
+    const meta = document.createElement("span");
+    meta.className = "player-block-meta";
+    const deckCount = document.createElement("span");
+    deckCount.className = "deck-count";
+    deckCount.textContent = `${activeDecks.length} deck${activeDecks.length === 1 ? "" : "s"}`;
+    meta.appendChild(deckCount);
+    const rangePill = buildPowerRangePill(activeDecks);
+    if (rangePill) meta.appendChild(rangePill);
+    header.appendChild(meta);
 
-    header.appendChild(headerLeft);
     block.appendChild(header);
 
     if (!isExpanded) {
@@ -4062,8 +4162,10 @@ let winRatesSortDirection = "desc"; // "desc" | "asc"
 // Column order left-to-right: the group's own metric (and its Trend)
 // right next to Player, then playgroup.gg's raw rate further out.
 const WINRATES_COLUMNS = [
-  { key: "adjusted", label: "Player Adjusted Win Rate" },
-  { key: "playgroup", label: "Win Rate (playgroup.gg)" },
+  // Short enough to sit on one line at phone width; the tab's intro line
+  // says what each one is.
+  { key: "adjusted", label: "Adjusted" },
+  { key: "playgroup", label: "playgroup.gg" },
 ];
 
 // {name, rate} sorted descending -> {name: rank}, tied rates sharing a
@@ -4594,7 +4696,8 @@ function renderGamesToUpdate() {
   const loggedMatches = computeLoggedMatches(playgroupGamesData.games);
   const missing = playgroupGamesData.games.filter(g => !loggedMatches.has(g.playgroup_game_id));
   const liveAsOf = playgroupGamesData.generated_at ? new Date(playgroupGamesData.generated_at).toLocaleTimeString() : null;
-  statusEl.textContent = `${liveAsOf ? `Live as of ${liveAsOf} — ` : ""}${missing.length} of ${playgroupGamesData.games.length} ${playgroupGamesData.league || ""} games aren't in the Game Log yet.`;
+  const league = playgroupGamesData.league ? ` from ${playgroupGamesData.league}` : "";
+  statusEl.textContent = `${missing.length} of ${playgroupGamesData.games.length} games${league} still need logging.${liveAsOf ? ` Checked ${liveAsOf}.` : ""}`;
   updateGamesToUpdateTabBadge(missing.length);
 
   listEl.innerHTML = "";
@@ -4609,27 +4712,53 @@ function renderGamesToUpdate() {
   for (const g of missing) {
     const card = document.createElement("div");
     card.className = "gtu-game-card";
+    card.dataset.gameId = g.playgroup_game_id;
 
     // Built via createElement/textContent, not innerHTML -- player and
     // commander names come from playgroup.gg (ultimately editable by any
     // playgroup member), so interpolating them into a template-literal
-    // innerHTML string would let one break out of markup. The date strong
-    // tag is the only actual markup here, so it's the only thing built as
-    // a real element; everything else is plain text nodes.
+    // innerHTML string would let one break out of markup.
     const header = document.createElement("div");
     header.className = "gtu-game-summary";
     const dateStrong = document.createElement("strong");
-    dateStrong.textContent = g.date;
-    header.appendChild(dateStrong);
-    const summary = g.participants.map(p => `${p.player} (${p.commander}${p.result === "win" ? " — won" : ""})`).join(", ");
-    header.appendChild(document.createTextNode(` — ${summary}`));
+    dateStrong.textContent = formatGameDay(g.date);
+    const size = document.createElement("span");
+    size.className = "gtu-game-size";
+    size.textContent = `${g.participants.length} players`;
+    header.append(dateStrong, size);
+
+    // One line per player, winner first, instead of a single run-on
+    // sentence of "Name (Commander — won), Name (Commander)…" that was
+    // hard to scan for who was even in the game.
+    const roster = document.createElement("ul");
+    roster.className = "gtu-game-players";
+    const ordered = [...g.participants].sort((a, b) => (b.result === "win") - (a.result === "win"));
+    for (const p of ordered) {
+      const li = document.createElement("li");
+      const who = document.createElement("span");
+      who.className = "gtu-game-player";
+      who.textContent = p.player;
+      const deck = document.createElement("span");
+      deck.className = "gtu-game-deck";
+      deck.textContent = p.commander;
+      li.append(who, deck);
+      if (p.result === "win") {
+        li.classList.add("is-winner");
+        const won = document.createElement("span");
+        won.className = "gtu-game-won";
+        won.textContent = "Won";
+        li.appendChild(won);
+      }
+      roster.appendChild(li);
+    }
 
     const fillBtn = document.createElement("button");
+    fillBtn.type = "button";
+    fillBtn.className = "gtu-fill-btn";
     fillBtn.textContent = "Fill in";
     fillBtn.addEventListener("click", () => openGameForm(g));
 
-    card.appendChild(header);
-    card.appendChild(fillBtn);
+    card.append(header, roster, fillBtn);
     if (g.note) {
       const note = document.createElement("p");
       note.className = "hint";
@@ -4638,6 +4767,28 @@ function renderGamesToUpdate() {
     }
     listEl.appendChild(card);
   }
+  markOpenGtuCard();
+}
+
+// "Fri, Oct 2" from playgroup.gg's plain "2026-10-02" day. Formatted in
+// UTC because that's how a bare date parses -- local time would show the
+// day before for anyone west of Greenwich.
+function formatGameDay(isoDay) {
+  const d = new Date(isoDay);
+  if (isNaN(d)) return isoDay;
+  return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
+}
+
+// Which pending game's form is open below the list, so its card says so
+// instead of offering "Fill in" for the game you're already filling in.
+let openGtuGameId = null;
+function markOpenGtuCard() {
+  document.querySelectorAll("#gtu-game-list .gtu-game-card").forEach(card => {
+    const open = openGtuGameId !== null && card.dataset.gameId === String(openGtuGameId);
+    card.classList.toggle("is-open", open);
+    const btn = card.querySelector(".gtu-fill-btn");
+    if (btn) btn.textContent = open ? "Filling in below" : "Fill in";
+  });
 }
 
 function computeGameRowFormulas({ commanderStrength, otherStrengths, result, podSize, knockouts, place, tov, popOff, disruptions, recoveries, gamesClearlyBehind, bracket }) {
@@ -4802,6 +4953,13 @@ function markGtuPrefilled(input) {
 // and the playgroup.gg pre-fill below both keep finding them the same way
 // via querySelector -- only the surrounding markup changed, not how any
 // value gets read out or filled in.
+// The exact prefilled power while the field still shows its rounded
+// version (see buildGtuParticipantCard); whatever was typed otherwise.
+function readGtuStrength(input) {
+  if (input.dataset.exact && input.value === input.dataset.shown) return parseFloat(input.dataset.exact);
+  return parseFloat(input.value);
+}
+
 function buildGtuParticipantCard(p, i, pgGame) {
   const defaultStrength = findDefaultStrength(p.player, p.commander);
   const defaultPlace = p.result === "win" ? 1 : "";
@@ -4837,8 +4995,17 @@ function buildGtuParticipantCard(p, i, pgGame) {
     return wrap;
   };
 
-  const strengthInput = makeGtuInput("number", "gtu-strength", i, { step: "0.1", min: "0", max: "5", value: defaultStrength ?? "" });
-  if (defaultStrength !== null) markGtuPrefilled(strengthInput);
+  // Shown to 2 decimals: a deck's computed power carries a long tail
+  // ("2.32333333") that overflowed the field on a phone. The exact value
+  // is kept on the input and used unless someone actually edits the
+  // number (readGtuStrength), so the calculation doesn't change.
+  const shownStrength = defaultStrength === null ? "" : String(Math.round(defaultStrength * 100) / 100);
+  const strengthInput = makeGtuInput("number", "gtu-strength", i, { step: "0.1", min: "0", max: "5", value: shownStrength });
+  if (defaultStrength !== null) {
+    strengthInput.dataset.exact = String(defaultStrength);
+    strengthInput.dataset.shown = shownStrength;
+    markGtuPrefilled(strengthInput);
+  }
 
   const placeInput = makeGtuInput("number", "gtu-place", i, { min: "1", max: pgGame.pod_size, value: defaultPlace });
   if (defaultPlace) markGtuPrefilled(placeInput);
@@ -4972,8 +5139,10 @@ function openGameForm(pgGame) {
   box.className = "gtu-form";
 
   const title = document.createElement("h3");
-  title.textContent = `${pgGame.date} — ${pgGame.participants.map(p => p.player).join(", ")}`;
+  title.textContent = `${formatGameDay(pgGame.date)}: ${pgGame.participants.map(p => p.player).join(", ")}`;
   box.appendChild(title);
+  openGtuGameId = pgGame.playgroup_game_id;
+  markOpenGtuCard();
 
   const derivedHint = document.createElement("p");
   derivedHint.className = "hint";
@@ -5060,13 +5229,16 @@ function openGameForm(pgGame) {
   box.appendChild(calcBtn);
   box.appendChild(resultsEl);
   areaEl.appendChild(box);
-  areaEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  // "start", not "nearest": the form opens below every pending game, and
+  // on a phone "nearest" only nudged its top edge into view, leaving the
+  // tap looking like it did nothing.
+  box.scrollIntoView({ behavior: REDUCED_MOTION.matches ? "auto" : "smooth", block: "start" });
 }
 
 function calculateGameToUpdate(pgGame, box, resultsEl) {
   const podSize = pgGame.pod_size;
   const readInputs = (i) => ({
-    strength: parseFloat(box.querySelector(`.gtu-strength[data-i="${i}"]`).value),
+    strength: readGtuStrength(box.querySelector(`.gtu-strength[data-i="${i}"]`)),
     place: parseInt(box.querySelector(`.gtu-place[data-i="${i}"]`).value, 10),
     knockouts: parseInt(box.querySelector(`.gtu-knockouts[data-i="${i}"]`).value, 10) || 0,
     tov: parseInt(box.querySelector(`.gtu-tov[data-i="${i}"]`).value, 10),
@@ -5193,7 +5365,7 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
         // that complexity existed before was papering over that slow wait.
         statusEl.textContent = "Refreshing…";
         await refreshEverything();
-        statusEl.textContent = "Added — Games to Update, Player Win Rates, and Deck Strength Validator's deck power are all up to date.";
+        statusEl.textContent = "Added. Standings and deck power are up to date.";
         // The submitted game is already gone from the missing-games list
         // above (refreshEverything just re-rendered it), but this filled-in
         // form otherwise just sits here forever -- confirmed the hard way,
@@ -5204,6 +5376,8 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
         setTimeout(() => {
           const areaEl = box.parentElement;
           if (areaEl) areaEl.innerHTML = "";
+          openGtuGameId = null;
+          markOpenGtuCard();
         }, 1500);
       } catch (err) {
         submitBtn.disabled = false;
@@ -5590,6 +5764,27 @@ function renderRosterUpdateGroup(group) {
   return box;
 }
 
+const UTA_STACK_MAX = 3;
+
+// Select All / Deselect All for one group's decks only (see
+// setAllRosterUpdateChecked for why never every group at once).
+function buildUtaSelectButtons(group) {
+  const wrap = document.createElement("div");
+  wrap.className = "uta-select-btns";
+  const selectAllBtn = document.createElement("button");
+  selectAllBtn.type = "button";
+  selectAllBtn.textContent = "Select All";
+  selectAllBtn.title = "Checks every deck in this group -- not every pending player.";
+  selectAllBtn.addEventListener("click", () => setAllRosterUpdateChecked(group, true));
+  const deselectAllBtn = document.createElement("button");
+  deselectAllBtn.type = "button";
+  deselectAllBtn.textContent = "Deselect All";
+  deselectAllBtn.title = "Unchecks every deck in this group -- not every pending player.";
+  deselectAllBtn.addEventListener("click", () => setAllRosterUpdateChecked(group, false));
+  wrap.append(selectAllBtn, deselectAllBtn);
+  return wrap;
+}
+
 // Checks/unchecks every deck for the ONE group currently shown in the
 // dropdown -- deliberately not every pending group. It used to be global,
 // but that meant clicking Select All to grab one new player's decks
@@ -5645,7 +5840,9 @@ function renderUpdateAppTab() {
 
   const { newPlayers, newDecksForExisting } = computeRosterDiff(rosterDiffData);
   updateRosterUpdateTabBadge(newPlayers, newDecksForExisting);
-  statusEl.textContent = `Live as of ${new Date(rosterDiffData.generated_at).toLocaleTimeString()} — ${newPlayers.length} new player(s), ${newDecksForExisting.reduce((n, g) => n + g.decks.length, 0)} new deck(s) for existing players found on playgroup.gg.`;
+  const newDeckCount = newDecksForExisting.reduce((n, g) => n + g.decks.length, 0);
+  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  statusEl.textContent = `Found ${plural(newPlayers.length, "new player")} and ${plural(newDeckCount, "new deck")} for existing players. Checked ${new Date(rosterDiffData.generated_at).toLocaleTimeString()}.`;
 
   listEl.innerHTML = "";
   renderRosterUpdateConfirmationBanner(listEl);
@@ -5669,6 +5866,22 @@ function renderUpdateAppTab() {
     ...newPlayers.map(p => ({ key: `new:${p.username}`, kind: "new", label: `New player: ${p.username} (${p.decks.length})`, data: p })),
     ...newDecksForExisting.map(g => ({ key: `existing:${g.player}`, kind: "existing", label: `${g.player} (${g.decks.length} new deck${g.decks.length === 1 ? "" : "s"})`, data: g })),
   ];
+
+  // A typical night turns up one or two of these. Hiding all but one behind
+  // a dropdown meant a second pending player went unnoticed, so up to
+  // UTA_STACK_MAX groups are simply listed, each with its own Select All;
+  // the dropdown is kept for a genuinely long backlog.
+  if (groups.length <= UTA_STACK_MAX) {
+    rosterUpdateSelectedGroupKey = null;
+    for (const group of groups) {
+      const box = renderRosterUpdateGroup(group);
+      // Select All on a one-deck group is just its checkbox again.
+      if (group.data.decks.length > 1) box.querySelector(".uta-group-header")?.appendChild(buildUtaSelectButtons(group));
+      listEl.appendChild(box);
+    }
+    renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting);
+    return;
+  }
 
   // Keep whatever the dropdown was already showing if it's still pending;
   // only fall back to the first group if that one got submitted/vanished.
@@ -5698,21 +5911,7 @@ function renderUpdateAppTab() {
   });
   selectWrap.appendChild(select);
   controls.appendChild(selectWrap);
-
-  const selectAllBtn = document.createElement("button");
-  selectAllBtn.type = "button";
-  selectAllBtn.textContent = "Select All";
-  selectAllBtn.title = "Checks every deck for the player shown below -- not every pending player.";
-  selectAllBtn.addEventListener("click", () => setAllRosterUpdateChecked(activeGroup, true));
-
-  const deselectAllBtn = document.createElement("button");
-  deselectAllBtn.type = "button";
-  deselectAllBtn.textContent = "Deselect All";
-  deselectAllBtn.title = "Unchecks every deck for the player shown below -- not every pending player.";
-  deselectAllBtn.addEventListener("click", () => setAllRosterUpdateChecked(activeGroup, false));
-
-  controls.appendChild(selectAllBtn);
-  controls.appendChild(deselectAllBtn);
+  controls.appendChild(buildUtaSelectButtons(activeGroup));
   listEl.appendChild(controls);
 
   listEl.appendChild(renderRosterUpdateGroup(activeGroup));
