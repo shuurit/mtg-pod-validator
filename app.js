@@ -34,6 +34,8 @@ const TROPHY_LEADERBOARD_RELAY_URL = RELAY_BASE_URL + "/trophy-leaderboard";
 const SEASON_CLOSE_RELAY_URL = RELAY_BASE_URL + "/seasons/close";
 // The shared Set Up Pod table -- see applyLiveTable.
 const TABLE_RELAY_URL = RELAY_BASE_URL + "/table";
+const PROPOSALS_RELAY_URL = RELAY_BASE_URL + "/proposals";
+const PLAYER_ACTIVE_RELAY_URL = RELAY_BASE_URL + "/players/active";
 
 // Discord OAuth sign-in. Client ID is public (it's part of the login URL
 // below), matches the constant of the same name in relay.js -- the Client
@@ -153,7 +155,14 @@ let knownPlaygroupPlayers = new Set(PLAYERS_WITH_PLAYGROUP_ACCOUNT);
 // on every load (see checkAuthSession) so a revoked/expired token is
 // caught immediately rather than trusting a stale cached identity.
 let sessionToken = localStorage.getItem("sessionToken");
-let currentUser = null; // { playerId, username } once confirmed, else null
+let currentUser = null; // { playerId, username, isAdmin } once confirmed, else null
+// Admin-only: players switched off with players.active, kept out of
+// `players` entirely (see applyPlayersFromD1).
+let inactivePlayers = [];
+// The last GET /proposals response (see loadProposals). Declared up here,
+// not with the rest of the proposals code, because renderTonight reads it
+// and already runs at script load.
+let proposalsData = null;
 // True when the last /auth/me check couldn't reach the relay at all (as
 // opposed to the relay saying the token is invalid) -- see checkAuthSession.
 let authUnreachable = false;
@@ -430,7 +439,41 @@ function renderTonight() {
     }));
   }
 
+  // Only once /proposals has answered, and only when there's something to
+  // do -- an empty board isn't a task.
+  if (proposalsData) {
+    const toVote = proposalsAwaitingMyVote();
+    if (toVote > 0) {
+      list.appendChild(buildTonightItem({
+        count: toVote,
+        label: toVote === 1 ? "proposal to vote on" : "proposals to vote on",
+        onRetry: () => openProposalsTab("active"),
+      }));
+    }
+  }
+
   host.appendChild(list);
+
+  // Rules on trial are in effect at the table tonight, so they're named
+  // here rather than only on the Proposals tab.
+  const trials = proposalsData ? proposalsData.proposals.filter(p => p.status === "trial") : [];
+  if (trials.length) {
+    const trialLabel = document.createElement("div");
+    trialLabel.className = "tonight-label";
+    trialLabel.textContent = "On trial tonight";
+    host.appendChild(trialLabel);
+    const trialList = document.createElement("div");
+    trialList.className = "tonight-list";
+    for (const p of trials) {
+      trialList.appendChild(buildTonightItem({
+        count: `${p.trialGamesPlayed ?? 0}/${p.trialGames}`,
+        label: p.title,
+        tone: "warn",
+        onRetry: () => openProposalsTab("active"),
+      }));
+    }
+    host.appendChild(trialList);
+  }
 
   // --- your season ---
   const myName = currentUser && players.length
@@ -614,6 +657,7 @@ function setPlayers(newPlayers) {
   );
   updateDeckStrengthValidatorTabBadge(comboFlaggedCount);
   renderPlayersTable();
+  renderActivePlayersAdmin();
   renderPodSlots();
   // The table can land before the player list does; its results card names
   // players from this list, so redraw it now rather than leave "A player".
@@ -639,7 +683,12 @@ function applyDeckStrengthRows(rows) {
 // across a re-sync -- which real database primary keys guarantee better
 // than a name-derived slug ever did.
 function applyPlayersFromD1(data) {
-  setPlayers(data.players.map(p => ({
+  // /players only includes inactive players for the admin (see
+  // computePlayersData in relay.js), and only so the Active switches below
+  // Players & Decks can list them. They never reach `players`, so nothing
+  // else in the app -- Set Up Pod, Standings, Trophies -- ever shows them.
+  inactivePlayers = data.players.filter(p => p.active === false).map(p => ({ id: p.id, name: p.name }));
+  setPlayers(data.players.filter(p => p.active !== false).map(p => ({
     id: p.id,
     name: p.name,
     // Up to 3 trophies shown next to the name on Player Win Rates -- see
@@ -6092,6 +6141,642 @@ function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
   formAreaEl.appendChild(statusEl);
 }
 
+// ---------- Active players (admin) ----------
+// The admin's switches under Players & Decks. Turning a player off hides
+// them from the whole app (players.active -- see schema.sql); their past
+// games are never touched. Everyone but the admin never sees this section.
+function renderActivePlayersAdmin() {
+  const host = document.getElementById("active-players-admin");
+  if (!host) return;
+  host.hidden = !(currentUser && currentUser.isAdmin);
+  if (host.hidden) return;
+  host.innerHTML = "";
+
+  const heading = document.createElement("h3");
+  heading.className = "active-admin-title";
+  heading.textContent = "Active players";
+  host.appendChild(heading);
+  const hint = document.createElement("p");
+  hint.className = "hint";
+  hint.textContent = "Only you see this. A player switched off disappears from the app; their games still count.";
+  host.appendChild(hint);
+
+  const rows = [
+    ...podPlayers.map(p => ({ id: p.id, name: p.name, active: true })),
+    ...inactivePlayers.map(p => ({ id: p.id, name: p.name, active: false })),
+  ].sort((a, b) => a.name.localeCompare(b.name));
+
+  const list = document.createElement("div");
+  list.className = "active-admin-list";
+  for (const row of rows) {
+    const item = document.createElement("div");
+    item.className = `active-admin-row${row.active ? "" : " is-inactive"}`;
+    const name = document.createElement("span");
+    name.className = "active-admin-name";
+    name.textContent = row.name;
+    const state = document.createElement("span");
+    state.className = "active-admin-state";
+    state.textContent = row.active ? "Active" : "Not active";
+    const sw = document.createElement("button");
+    sw.type = "button";
+    sw.className = "switch";
+    sw.setAttribute("role", "switch");
+    sw.setAttribute("aria-checked", String(row.active));
+    sw.setAttribute("aria-label", `${row.name} active`);
+    const isMe = currentUser && row.id === currentUser.playerId;
+    // The relay refuses this too -- switching yourself off would hide the
+    // very list this switch lives in.
+    if (isMe) {
+      sw.disabled = true;
+      sw.title = "You can't switch yourself off";
+    }
+    sw.addEventListener("click", () => setPlayerActive(row, !row.active, sw, state));
+    item.append(name, state, sw);
+    list.appendChild(item);
+  }
+  host.appendChild(list);
+
+  const status = document.createElement("p");
+  status.className = "hint active-admin-status";
+  status.id = "active-admin-status";
+  status.setAttribute("role", "status");
+  host.appendChild(status);
+}
+
+async function setPlayerActive(row, active, sw, stateEl) {
+  const status = document.getElementById("active-admin-status");
+  sw.disabled = true;
+  stateEl.textContent = active ? "Turning on…" : "Turning off…";
+  try {
+    const res = await fetch(PLAYER_ACTIVE_RELAY_URL, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({ playerId: row.id, active }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+    // Who counts changes the majority on every proposal too.
+    await Promise.all([syncFromD1(), loadProposals()]);
+    const after = document.getElementById("active-admin-status");
+    if (after) after.textContent = `${row.name} is now ${active ? "active" : "not active"}.`;
+  } catch (err) {
+    sw.disabled = false;
+    stateEl.textContent = row.active ? "Active" : "Not active";
+    if (status) status.textContent = `Couldn't change ${row.name}: ${err.message}`;
+  }
+}
+
+// ---------- Pod Proposals ----------
+// House rules and ideas the pod votes on (GET/POST /proposals in
+// relay.js). The relay decides every outcome -- a majority of active
+// players moves a proposal to trial or shelves it, and a finished trial
+// adopts it -- and answers every write with the whole settled board, so
+// nothing here guesses at a result. Rule changes read as Out -> In, ideas
+// as Pros & Cons; the layout toggle only changes how the same bullets show.
+
+const proposalsUi = {
+  view: "auto",       // "auto" | "inout" | "procon"
+  filter: "active",   // "active" | "adopted" | "shelved"
+  formKind: "rule",
+  busy: false,
+  // Set for one render after this viewer's own vote passed a proposal, so
+  // its card gets the foil pass once -- see .proposal-card.is-passing.
+  justPassed: new Set(),
+  // Fades the bullet columns only on a layout switch, never when a vote
+  // re-renders the list (web-animation rule 7).
+  swapping: false,
+  addingPoint: null,  // { id, side } while a pro/con input is open
+};
+
+const PROPOSAL_POINT_LIMIT = 8;
+const PROPOSAL_EMPTY = {
+  active: ["No open proposals", "Propose a rule change or an idea and the pod can vote on it."],
+  adopted: ["No house rules yet", "A proposal becomes a house rule once it passes its trial."],
+  shelved: ["Nothing shelved", "Proposals that get a majority No, or no majority in 14 days, land here and can be reopened."],
+};
+
+function proposalsAwaitingMyVote() {
+  if (!proposalsData) return 0;
+  return proposalsData.proposals.filter(p => p.status === "open" && !p.myVote).length;
+}
+
+function openProposalsTab(filter) {
+  proposalsUi.filter = filter;
+  activateTab("proposals");
+  renderProposals();
+}
+
+async function loadProposals() {
+  if (!currentUser) return;
+  const status = document.getElementById("proposals-status");
+  try {
+    const res = await fetch(PROPOSALS_RELAY_URL, { cache: "no-store", headers: authHeaders() });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+    applyProposalsData(body);
+  } catch (err) {
+    if (status) {
+      status.hidden = false;
+      status.textContent = `Couldn't load proposals (${err.message}). Pull down to try again.`;
+    }
+  }
+}
+
+function applyProposalsData(data) {
+  const before = new Map((proposalsData ? proposalsData.proposals : []).map(p => [p.id, p.status]));
+  proposalsData = data;
+  for (const p of data.proposals) {
+    if (before.get(p.id) === "open" && p.status === "trial") proposalsUi.justPassed.add(p.id);
+  }
+  renderProposals();
+  renderProposalsBadge();
+  renderTonight();
+}
+
+// The menu's count and the gold dot on the avatar: proposals still
+// waiting on this viewer's vote. The avatar's label says it in words too,
+// so the dot is never the only signal.
+function renderProposalsBadge() {
+  const n = proposalsAwaitingMyVote();
+  const count = document.getElementById("auth-proposals-count");
+  if (count) {
+    count.hidden = n === 0;
+    count.textContent = `${n} to vote`;
+  }
+  const dot = document.getElementById("auth-avatar-dot");
+  if (dot) dot.hidden = n === 0;
+  const btn = document.getElementById("auth-avatar-btn");
+  if (btn) btn.setAttribute("aria-label", n ? `Account menu, ${n} proposal${n === 1 ? "" : "s"} to vote on` : "Account menu");
+}
+
+// "2025-10-23 18:04:11" (SQLite datetime('now'), UTC) -> Date.
+function parseProposalTime(s) {
+  return s ? new Date(s.replace(" ", "T") + "Z") : null;
+}
+
+function formatProposalDate(s) {
+  const d = parseProposalTime(s);
+  return d ? d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
+}
+
+function proposalTimeline(p) {
+  if (p.status === "open") {
+    const closes = parseProposalTime(p.votingClosesAt);
+    const days = closes ? Math.ceil((closes - Date.now()) / 86400000) : null;
+    const left = days === null ? "" : days <= 1 ? "last day to vote" : `${days} days left`;
+    return p.reopenCount ? `Reopened · ${left}` : left;
+  }
+  if (p.status === "trial") return `Trial since ${formatProposalDate(p.decidedAt)}`;
+  if (p.status === "adopted") return `Adopted ${formatProposalDate(p.decidedAt)}`;
+  if (p.shelvedReason === "expired") return `Expired ${formatProposalDate(p.decidedAt)} · no majority`;
+  return `Shelved ${formatProposalDate(p.decidedAt)} · majority no`;
+}
+
+function proposalStatusChip(p) {
+  const chip = document.createElement("span");
+  chip.className = `proposal-chip proposal-chip-${p.status}`;
+  chip.textContent = {
+    open: "Voting",
+    trial: `Trial · ${p.trialGamesPlayed ?? 0} of ${p.trialGames} games`,
+    adopted: "House rule",
+    shelved: p.shelvedReason === "expired" ? "Expired" : "Shelved",
+  }[p.status];
+  return chip;
+}
+
+function buildProposalColumn(side, title, items, showWho) {
+  const col = document.createElement("div");
+  col.className = `proposal-col proposal-col-${side}`;
+  const h = document.createElement("h4");
+  h.textContent = title;
+  col.appendChild(h);
+  if (!items.length) {
+    const empty = document.createElement("p");
+    empty.className = "proposal-col-empty";
+    empty.textContent = side === "pro" || side === "con" ? "None yet" : "Nothing listed";
+    col.appendChild(empty);
+    return col;
+  }
+  const ul = document.createElement("ul");
+  for (const item of items) {
+    const li = document.createElement("li");
+    li.textContent = item.text;
+    if (showWho) {
+      const who = document.createElement("span");
+      who.className = "proposal-who";
+      who.textContent = `added by ${item.addedBy}`;
+      li.appendChild(who);
+    }
+    ul.appendChild(li);
+  }
+  col.appendChild(ul);
+  return col;
+}
+
+// Shape carries the vote and colour backs it up: filled = yes, crossed
+// ring = no, dashed ring = not voted yet. Anonymous proposals get counts
+// only, sorted, so a dot's position can't be matched to a name.
+function buildProposalTally(p) {
+  const wrap = document.createElement("div");
+  wrap.className = "proposal-tally";
+  wrap.setAttribute("role", "img");
+  wrap.setAttribute("aria-label",
+    `${p.tally.yes} yes, ${p.tally.no} no, ${p.tally.waiting} not voted${p.anonymous ? ", anonymous" : ""}`);
+  const dots = p.voters
+    ? p.voters.map(v => ({ vote: v.vote, title: `${v.name}: ${v.vote || "not voted"}` }))
+    : [
+      ...Array(p.tally.yes).fill({ vote: "yes" }),
+      ...Array(p.tally.no).fill({ vote: "no" }),
+      ...Array(p.tally.waiting).fill({ vote: null }),
+    ];
+  for (const d of dots) {
+    const dot = document.createElement("i");
+    dot.className = `proposal-dot${d.vote === "yes" ? " is-yes" : d.vote === "no" ? " is-no" : ""}`;
+    if (d.title) dot.title = d.title;
+    wrap.appendChild(dot);
+  }
+  const text = document.createElement("span");
+  text.className = "proposal-tally-text";
+  text.textContent = p.status === "open"
+    ? `${p.tally.yes} yes · ${p.tally.no} no · ${proposalsData.majority} decides`
+    : `${p.tally.yes} yes · ${p.tally.no} no`;
+  wrap.appendChild(text);
+  return wrap;
+}
+
+function buildProposalCard(p) {
+  const card = document.createElement("article");
+  card.className = `proposal-card is-${p.status}`;
+  if (proposalsUi.justPassed.has(p.id)) card.classList.add("is-passing");
+
+  const top = document.createElement("div");
+  top.className = "proposal-top";
+  const head = document.createElement("div");
+  head.className = "proposal-head";
+  const title = document.createElement("h3");
+  title.className = "proposal-title";
+  title.textContent = p.title;
+  const meta = document.createElement("p");
+  meta.className = "proposal-meta";
+  const kind = document.createElement("span");
+  kind.className = "proposal-kind";
+  kind.textContent = p.kind === "rule" ? "Rule change" : "Idea";
+  meta.appendChild(kind);
+  const bits = [p.proposedBy.name, proposalTimeline(p), p.appliesTo].filter(Boolean);
+  meta.appendChild(document.createTextNode(bits.join(" · ")));
+  if (p.anonymous) {
+    const anon = document.createElement("span");
+    anon.className = "proposal-anon";
+    anon.textContent = "Anonymous";
+    meta.appendChild(anon);
+  }
+  head.append(title, meta);
+  top.append(head, proposalStatusChip(p));
+  card.appendChild(top);
+
+  const useInOut = proposalsUi.view === "inout" || (proposalsUi.view === "auto" && p.kind === "rule");
+  const cols = document.createElement("div");
+  cols.className = `proposal-cols${proposalsUi.swapping ? " is-swapping" : ""}`;
+  if (useInOut) {
+    cols.append(buildProposalColumn("out", "Out", p.points.out, false), buildProposalColumn("in", "In", p.points.in, false));
+  } else {
+    cols.append(buildProposalColumn("pro", "Pros", p.points.pro, true), buildProposalColumn("con", "Cons", p.points.con, true));
+  }
+  card.appendChild(cols);
+
+  if (p.status === "open") card.appendChild(buildProposalPointAdder(p));
+  if (currentUser && currentUser.isAdmin && (p.status === "open" || p.status === "trial")) {
+    card.appendChild(buildProposalTrialControl(p));
+  }
+
+  const foot = document.createElement("div");
+  foot.className = "proposal-foot";
+  foot.appendChild(buildProposalTally(p));
+  if (p.status === "open") {
+    const votes = document.createElement("div");
+    votes.className = "proposal-votes";
+    for (const v of ["yes", "no"]) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = `proposal-vote proposal-vote-${v}`;
+      b.textContent = v === "yes" ? "Yes" : "No";
+      b.setAttribute("aria-pressed", String(p.myVote === v));
+      b.disabled = proposalsUi.busy;
+      // Tapping your current vote again takes it back.
+      b.addEventListener("click", () => proposalWrite("/vote", { proposalId: p.id, vote: p.myVote === v ? null : v }));
+      votes.appendChild(b);
+    }
+    foot.appendChild(votes);
+  } else if (p.canReopen) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "proposal-reopen";
+    b.textContent = "Reopen for a new vote";
+    b.disabled = proposalsUi.busy;
+    b.addEventListener("click", async () => {
+      const ok = await proposalWrite("/reopen", { proposalId: p.id });
+      if (ok) { proposalsUi.filter = "active"; renderProposals(); }
+    });
+    foot.appendChild(b);
+  }
+  card.appendChild(foot);
+  return card;
+}
+
+// "+ Pro" / "+ Con" under an open proposal. Only pros and cons can be
+// added after posting -- the Out/In rule itself stays as it was voted on.
+function buildProposalPointAdder(p) {
+  const wrap = document.createElement("div");
+  wrap.className = "proposal-adder";
+  const open = proposalsUi.addingPoint && proposalsUi.addingPoint.id === p.id ? proposalsUi.addingPoint.side : null;
+  if (!open) {
+    for (const side of ["pro", "con"]) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "proposal-adder-btn";
+      b.textContent = side === "pro" ? "+ Pro" : "+ Con";
+      b.addEventListener("click", () => {
+        proposalsUi.addingPoint = { id: p.id, side };
+        renderProposals();
+        const input = document.getElementById(`proposal-point-${p.id}`);
+        if (input) input.focus();
+      });
+      wrap.appendChild(b);
+    }
+    return wrap;
+  }
+  const form = document.createElement("form");
+  form.className = "proposal-adder-form";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.id = `proposal-point-${p.id}`;
+  input.maxLength = 200;
+  input.placeholder = open === "pro" ? "A reason for it" : "A reason against it";
+  input.setAttribute("aria-label", open === "pro" ? "New pro" : "New con");
+  const add = document.createElement("button");
+  add.type = "submit";
+  add.className = "primary";
+  add.textContent = open === "pro" ? "Add pro" : "Add con";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => { proposalsUi.addingPoint = null; renderProposals(); });
+  form.addEventListener("submit", async e => {
+    e.preventDefault();
+    const text = input.value.trim();
+    if (!text) { input.focus(); return; }
+    const ok = await proposalWrite("/points", { proposalId: p.id, side: open, text });
+    if (ok) { proposalsUi.addingPoint = null; renderProposals(); }
+  });
+  form.append(input, add, cancel);
+  wrap.appendChild(form);
+  return wrap;
+}
+
+// Admin only: how many games a trial runs before it becomes a house rule.
+function buildProposalTrialControl(p) {
+  const form = document.createElement("form");
+  form.className = "proposal-trial";
+  const label = document.createElement("label");
+  label.htmlFor = `proposal-trial-${p.id}`;
+  label.textContent = "Trial length (games)";
+  const input = document.createElement("input");
+  input.type = "number";
+  input.id = `proposal-trial-${p.id}`;
+  input.min = "1";
+  input.max = "20";
+  input.value = String(p.trialGames);
+  const save = document.createElement("button");
+  save.type = "submit";
+  save.textContent = "Save";
+  form.addEventListener("submit", e => {
+    e.preventDefault();
+    const n = parseInt(input.value, 10);
+    proposalWrite("/trial", { proposalId: p.id, trialGames: n });
+  });
+  form.append(label, input, save);
+  return form;
+}
+
+// One write path for every proposal action. Returns true on success.
+async function proposalWrite(path, payload) {
+  if (proposalsUi.busy) return false;
+  proposalsUi.busy = true;
+  const status = document.getElementById("proposals-status");
+  renderProposals();
+  try {
+    const res = await fetch(PROPOSALS_RELAY_URL + path, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify(payload),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+    proposalsUi.busy = false;
+    applyProposalsData(body);
+    return true;
+  } catch (err) {
+    proposalsUi.busy = false;
+    renderProposals();
+    if (status) {
+      status.hidden = false;
+      status.textContent = err.message;
+    }
+    return false;
+  }
+}
+
+function renderProposals() {
+  const list = document.getElementById("proposals-list");
+  if (!list) return;
+  const heading = document.getElementById("proposals-heading");
+  if (heading) heading.textContent = proposalsUi.filter === "adopted" ? "House Rules" : "Pod Proposals";
+
+  document.querySelectorAll("[data-proposals-view]").forEach(b => {
+    const on = b.dataset.proposalsView === proposalsUi.view;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-pressed", String(on));
+  });
+  document.querySelectorAll("[data-proposals-filter]").forEach(b => {
+    const on = b.dataset.proposalsFilter === proposalsUi.filter;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-pressed", String(on));
+  });
+
+  const status = document.getElementById("proposals-status");
+  if (!proposalsData) return;
+  if (status && !proposalsUi.busy) {
+    const n = proposalsAwaitingMyVote();
+    status.hidden = false;
+    status.textContent = `${proposalsData.activeCount} active players · ${proposalsData.majority} decides · `
+      + (n ? `${n} waiting on your vote` : "you're all caught up");
+  }
+
+  list.innerHTML = "";
+  const shown = proposalsData.proposals.filter(p => proposalsUi.filter === "active"
+    ? p.status === "open" || p.status === "trial"
+    : p.status === proposalsUi.filter);
+  if (!shown.length) {
+    const [title, body] = PROPOSAL_EMPTY[proposalsUi.filter];
+    const empty = document.createElement("div");
+    empty.className = "proposals-empty";
+    const strong = document.createElement("strong");
+    strong.textContent = title;
+    const span = document.createElement("span");
+    span.textContent = body;
+    empty.append(strong, span);
+    list.appendChild(empty);
+  } else {
+    for (const p of shown) list.appendChild(buildProposalCard(p));
+  }
+  // The foil pass plays on the render where the vote passed and never again.
+  proposalsUi.justPassed.clear();
+}
+
+// ---- the New proposal form ----
+
+function proposalFormSides() {
+  return proposalsUi.formKind === "rule"
+    ? [["out", "What's out", "OUT", "The rule as it is now"], ["in", "What's in", "IN", "The new rule"]]
+    : [["pro", "Pros", "PRO", "A reason for it"], ["con", "Cons", "CON", "A reason against it"]];
+}
+
+function addProposalBulletInput(listEl, side, tag, placeholder, value) {
+  const inputs = listEl.querySelectorAll("input");
+  if (inputs.length >= PROPOSAL_POINT_LIMIT) return null;
+  const row = document.createElement("div");
+  row.className = "proposal-bullet-row";
+  const label = document.createElement("span");
+  label.className = `proposal-tag proposal-tag-${side}`;
+  label.textContent = tag;
+  label.setAttribute("aria-hidden", "true");
+  const input = document.createElement("input");
+  input.type = "text";
+  input.maxLength = 200;
+  input.placeholder = placeholder;
+  input.dataset.side = side;
+  input.id = `proposal-${side}-${inputs.length}`;
+  input.setAttribute("aria-label", `${tag} bullet ${inputs.length + 1}`);
+  if (value) input.value = value;
+  row.append(label, input);
+  listEl.appendChild(row);
+  return input;
+}
+
+function renderProposalFormLists() {
+  const host = document.getElementById("proposal-bullet-lists");
+  if (!host) return;
+  host.innerHTML = "";
+  for (const [side, title, tag, placeholder] of proposalFormSides()) {
+    const group = document.createElement("div");
+    group.className = "proposal-field";
+    const label = document.createElement("span");
+    label.textContent = title;
+    const list = document.createElement("div");
+    list.className = "proposal-bullet-list";
+    addProposalBulletInput(list, side, tag, placeholder);
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "proposal-add-bullet";
+    more.textContent = "+ Add bullet";
+    more.addEventListener("click", () => {
+      const input = addProposalBulletInput(list, side, tag, placeholder);
+      if (input) input.focus();
+      if (list.querySelectorAll("input").length >= PROPOSAL_POINT_LIMIT) more.hidden = true;
+    });
+    group.append(label, list, more);
+    host.appendChild(group);
+  }
+  const hint = document.getElementById("proposal-kind-hint");
+  if (hint) {
+    hint.textContent = proposalsUi.formKind === "rule"
+      ? "What stops being the rule, and what replaces it."
+      : "Something new to try. Give reasons for and against.";
+  }
+  document.querySelectorAll("[data-proposal-kind]").forEach(b => {
+    const on = b.dataset.proposalKind === proposalsUi.formKind;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-pressed", String(on));
+  });
+}
+
+function showProposalForm(show) {
+  const form = document.getElementById("proposal-form");
+  const newBtn = document.getElementById("proposals-new-btn");
+  if (!form) return;
+  form.hidden = !show;
+  if (newBtn) newBtn.closest(".row").hidden = show;
+  if (show) {
+    form.reset();
+    proposalsUi.formKind = "rule";
+    renderProposalFormLists();
+    const err = document.getElementById("proposal-form-error");
+    if (err) err.hidden = true;
+    document.getElementById("proposal-title").focus();
+  }
+}
+
+async function submitProposalForm(e) {
+  e.preventDefault();
+  const err = document.getElementById("proposal-form-error");
+  const fail = msg => { err.textContent = msg; err.hidden = false; };
+  const payload = {
+    kind: proposalsUi.formKind,
+    title: document.getElementById("proposal-title").value.trim(),
+    appliesTo: document.getElementById("proposal-applies").value.trim(),
+    anonymous: document.getElementById("proposal-anonymous").checked,
+    out: [], in: [], pro: [], con: [],
+  };
+  document.querySelectorAll("#proposal-bullet-lists input").forEach(input => {
+    const text = input.value.trim();
+    if (text) payload[input.dataset.side].push(text);
+  });
+  if (!payload.title) return fail("Give it a title.");
+  if (payload.kind === "rule" && (!payload.out.length || !payload.in.length)) {
+    return fail("A rule change needs at least one Out bullet and one In bullet.");
+  }
+  if (payload.kind === "idea" && !payload.pro.length && !payload.con.length) {
+    return fail("An idea needs at least one pro or con.");
+  }
+  const submit = document.getElementById("proposal-submit");
+  submit.disabled = true;
+  submit.textContent = "Posting…";
+  const ok = await proposalWrite("", payload);
+  submit.disabled = false;
+  submit.textContent = "Post to the pod";
+  if (ok) {
+    showProposalForm(false);
+    proposalsUi.filter = "active";
+    renderProposals();
+  } else {
+    fail(document.getElementById("proposals-status").textContent);
+  }
+}
+
+function initProposals() {
+  document.querySelectorAll("[data-proposals-view]").forEach(b => b.addEventListener("click", () => {
+    if (proposalsUi.view === b.dataset.proposalsView) return;
+    proposalsUi.view = b.dataset.proposalsView;
+    proposalsUi.swapping = !REDUCED_MOTION.matches;
+    renderProposals();
+    proposalsUi.swapping = false;
+  }));
+  document.querySelectorAll("[data-proposals-filter]").forEach(b => b.addEventListener("click", () => {
+    proposalsUi.filter = b.dataset.proposalsFilter;
+    renderProposals();
+  }));
+  document.querySelectorAll("[data-proposal-kind]").forEach(b => b.addEventListener("click", () => {
+    proposalsUi.formKind = b.dataset.proposalKind;
+    renderProposalFormLists();
+  }));
+  const newBtn = document.getElementById("proposals-new-btn");
+  if (newBtn) newBtn.addEventListener("click", () => showProposalForm(true));
+  const cancel = document.getElementById("proposal-cancel");
+  if (cancel) cancel.addEventListener("click", () => showProposalForm(false));
+  const form = document.getElementById("proposal-form");
+  if (form) form.addEventListener("submit", submitProposalForm);
+}
+
 // ---------- Discord sign-in ----------
 
 // Discord redirects back here with #session=<token> or #auth_error=<code>
@@ -6270,6 +6955,12 @@ function wireAuthControl() {
       }
     });
   }
+
+  // The menu is Proposals' only way in -- it has no tab-bar button.
+  const proposalsBtn = document.getElementById("auth-proposals-btn");
+  if (proposalsBtn) proposalsBtn.addEventListener("click", () => { hideAuthMenu(); openProposalsTab("active"); });
+  const houseRulesBtn = document.getElementById("auth-house-rules-btn");
+  if (houseRulesBtn) houseRulesBtn.addEventListener("click", () => { hideAuthMenu(); openProposalsTab("adopted"); });
 
   const signoutBtn = document.getElementById("auth-signout-btn");
   if (signoutBtn) {
@@ -6592,6 +7283,8 @@ checkAuthSession().then(() => {
     refreshPlaygroupGames();
     loadRosterDiff();
     loadAchievements();
+    initProposals();
+    loadProposals();
   }
 });
 
@@ -6618,7 +7311,7 @@ async function refreshEverything() {
   // three now-guaranteed-401 requests every time a signed-out visitor
   // switches back to the tab.
   if (!currentUser) return;
-  await Promise.all([syncFromD1(), refreshPlaygroupGames(), loadRosterDiff(), refreshAchievementsView()]);
+  await Promise.all([syncFromD1(), refreshPlaygroupGames(), loadRosterDiff(), refreshAchievementsView(), loadProposals()]);
 }
 
 // Only fires on an actual open/return to the app, not a timer -- catches
