@@ -3533,6 +3533,14 @@ input.gtu-in-prefilled {
 .pod-sigil .node-bad { fill: #ff5a2a; stroke: #ffc2a8; }
 .pod-table.is-ready .pod-sigil { filter: drop-shadow(0 0 1.5px rgba(120, 70, 10, 0.95)) drop-shadow(0 0 3px rgba(255, 211, 107, 0.8)); }
 .pod-table.is-ready .pod-sigil .line { stroke: #ffd36b; }
+/* While a power check is out to the relay (runPodCheck): the sigil breathes
+   so the table answers the tap at once, instead of sitting still for the
+   round trip. Opacity only -- the GPU runs it, nothing on the main thread. */
+.pod-table.is-checking .pod-sigil { animation: pod-sigil-check 0.55s ease-in-out infinite alternate; }
+@keyframes pod-sigil-check { to { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) {
+  .pod-table.is-checking .pod-sigil { animation: none; opacity: 0.6; }
+}
 /* Sits in the well, counter-rotated by the table's turn so it stays upright. */
 .pod-slate-label {
   position: absolute;

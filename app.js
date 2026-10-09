@@ -2368,6 +2368,10 @@ let podStatusErrorTimer = null;
 let podPendingCheck = false;
 const podPendingSeats = new Set();
 const podPendingPicks = new Set();
+// Seats this phone has taken off the table but the relay hasn't confirmed
+// yet. They leave the screen on the tap (see removePodSeat), so a poll that
+// still lists them mustn't put them back.
+const podPendingRemovals = new Set();
 
 function myPodPlayerId() {
   return currentUser ? String(currentUser.playerId) : null;
@@ -2404,7 +2408,7 @@ function applyLiveTable(view) {
     pickedBy: s.pickedBy != null ? String(s.pickedBy) : "",
     outOfRange: !!s.outOfRange,
     repicked: !!s.repicked,
-  }));
+  })).filter(s => !podPendingRemovals.has(s.playerId));
   podRevealed = !!view.revealed;
   lastCeiling = view.ceiling ?? null;
   liveTableStale = !!view.stale;
@@ -2900,8 +2904,18 @@ function renderPodChairs() {
   });
   podSeatsEntering.clear();
   podUi.scene.classList.toggle("has-focus", editingSeatIndex !== null);
-  trackPodPlates(900);
+  // Only when thrones actually move (someone joined, left or the order
+  // changed). A check result or a deck pick just restyles seats in place,
+  // and measuring the scene for 900 ms after those cost a dropped frame
+  // or two for nothing. Nameplates are centred by CSS, so new text in one
+  // doesn't need a re-measure either.
+  const layout = podSelections.map(s => s.playerId).join(",");
+  if (layout !== podChairsLayout) {
+    podChairsLayout = layout;
+    trackPodPlates(900);
+  }
 }
+let podChairsLayout = null;
 
 function removePodSeatEls(id, entry) {
   podSeatEls.delete(id);
@@ -2921,22 +2935,31 @@ function removePodSeatEls(id, entry) {
 
 // Pins each flat nameplate under its orb by reading where the orb's anchor
 // actually lands on screen. Runs every frame only while something moves.
+// All reads first, then all writes: reading one anchor right after moving
+// the previous plate made the browser redo style and layout for the whole
+// 3D scene once per seat, every frame (~28 ms a pass on a slowed CPU).
 function positionPodPlates() {
   if (!podUi) return;
   const sr = podUi.scene.getBoundingClientRect();
   if (sr.width === 0) return; // pod tab hidden; fitPodScene re-runs this on show
-  for (const { chair, plate } of podSeatEls.values()) {
-    const a = chair.querySelector(".pod-plate-anchor").getBoundingClientRect();
-    const x = a.left + a.width / 2 - sr.left;
-    const y = a.top - sr.top + 2;
+  const spots = [];
+  for (const entry of podSeatEls.values()) {
+    entry.anchor ||= entry.chair.querySelector(".pod-plate-anchor");
+    const a = entry.anchor.getBoundingClientRect();
+    spots.push([entry.plate, a.left + a.width / 2 - sr.left, a.top - sr.top + 2]);
+  }
+  for (const [plate, x, y] of spots) {
     plate.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translateX(-50%)`;
   }
 }
 
 let podPlatesTrackUntil = 0;
 let podPlatesTracking = false;
+// Starts on the next frame rather than measuring straight away: a render
+// has usually just changed the scene, and measuring it inside the tap
+// handler forced a full restyle before the tap could paint anything. New
+// nameplates start transparent (.entering), so the frame's wait is unseen.
 function trackPodPlates(ms) {
-  positionPodPlates();
   podPlatesTrackUntil = Math.max(podPlatesTrackUntil, performance.now() + ms);
   // rAF pauses in a background tab -- land the final spot by timer too.
   setTimeout(positionPodPlates, ms + 60);
@@ -2994,7 +3017,12 @@ function renderPodSigil() {
     const [x, y] = podSigilPoint(POD_NODE_R, podAngle(i, n));
     html += `<circle class="node ${cls(slot, "node")}" cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="2.2"/>`;
   });
-  podUi.sigil.innerHTML = html;
+  // Every render used to rebuild the drawing even when it hadn't changed,
+  // re-laying it out on the frame a tap needed to paint.
+  if (podUi.sigilHtml !== html) {
+    podUi.sigilHtml = html;
+    podUi.sigil.innerHTML = html;
+  }
 
   const sealed = podSelections.filter(s => s.sealed && podSeatState(s) !== "flagged").length;
   podUi.table.classList.toggle("is-ready", podRevealed);
@@ -3004,8 +3032,19 @@ function renderPodSigil() {
 
 function renderPodRoster() {
   const roster = podUi.roster;
-  roster.innerHTML = "";
   const full = podSelections.length >= POD_MAX_SEATS;
+  // Rebuilt only when something a chip shows actually changed: every render
+  // (a poll, a pick, a check) used to tear down and re-lay out every chip.
+  const signature = JSON.stringify([full, podPlayers.map(p => {
+    const id = String(p.id);
+    const idx = podSelections.findIndex(s => s.playerId === id);
+    return [id, p.name, idx, podPendingSeats.has(id), idx >= 0 && podSeatLocked(podSelections[idx])];
+  })]);
+  if (roster.dataset.signature === signature) return;
+  roster.dataset.signature = signature;
+  // Keep focus on the chip that had it -- rebuilding drops it otherwise.
+  const focusedId = roster.contains(document.activeElement) ? document.activeElement.dataset.playerId : null;
+  roster.innerHTML = "";
   for (const p of podPlayers) {
     const idx = podSelections.findIndex(s => s.playerId === String(p.id));
     const seated = idx >= 0;
@@ -3041,8 +3080,10 @@ function renderPodRoster() {
     // by accident when you meant to pick their deck. It opens their deck
     // list instead; leaving the table lives in that list, with Undo.
     chip.addEventListener("click", () => (seated ? tapPodSeat(String(p.id)) : addPodSeat(String(p.id))));
+    chip.dataset.playerId = String(p.id);
     roster.appendChild(chip);
   }
+  if (focusedId) roster.querySelector(`[data-player-id="${focusedId}"]`)?.focus({ preventScroll: true });
 }
 
 function podNameOf(slot) {
@@ -3257,13 +3298,32 @@ async function addPodSeat(playerId) {
   if (view && podSelections.some(s => s.playerId === playerId)) openPodSeat(playerId);
 }
 
-function removePodSeat(playerId) {
+// The seat leaves the table on the tap; the relay catches up behind it.
+// Waiting for its reply (a few hundred milliseconds) before anything moved
+// read as lag. Mirrors what the relay does to the pod: any earlier check is
+// now stale and nothing is revealed. If the write fails, the table is read
+// back fresh and the seat returns.
+async function removePodSeat(playerId) {
   const slot = podSelections.find(s => s.playerId === playerId);
-  if (!slot) return;
+  if (!slot || podPendingRemovals.has(playerId)) return;
   const name = podNameOf(slot);
   if (podEditingPlayerId === playerId) podEditingPlayerId = null;
   const leaving = playerId === myPodPlayerId() ? "You left the table" : `${name} left the table`;
-  tableOp({ op: "unseat", playerId: Number(playerId) }, leaving);
+
+  podPendingRemovals.add(playerId);
+  podSelections = podSelections.filter(s => s.playerId !== playerId);
+  if (liveTableCheck) liveTableStale = true;
+  podRevealed = false;
+  renderPodSlots();
+  renderPodCheckResults();
+  renderTonight();
+
+  const view = await tableOp({ op: "unseat", playerId: Number(playerId) }, leaving);
+  podPendingRemovals.delete(playerId);
+  if (!view) {
+    const fresh = await tableRequest("GET").catch(() => null);
+    if (fresh) applyLiveTable(fresh);
+  }
 }
 
 function clearPodTable() {
@@ -3274,10 +3334,12 @@ function clearPodTable() {
 async function runPodCheck() {
   if (podPendingCheck) return;
   podPendingCheck = true;
+  podUi?.table.classList.add("is-checking");
   renderPodCta();
   renderPodStatus();
   await tableOp({ op: "check" });
   podPendingCheck = false;
+  podUi?.table.classList.remove("is-checking");
   renderPodCta();
   renderPodStatus();
 }
@@ -3290,6 +3352,8 @@ function turnPodTable(i) {
   const delta = ((((target - podSpin) % 360) + 540) % 360) - 180;
   podSpin += delta;
   podUi.rig.style.setProperty("--pod-spin", `${podSpin}deg`);
+  // The nameplates ride the turn (0.7s, see .pod-rig's transition).
+  if (Math.abs(delta) > 0.01) trackPodPlates(800);
 }
 
 function explainPodLock(slot) {
@@ -3970,6 +4034,12 @@ function renderPodCheckResults() {
   const resultsDiv = document.getElementById("results");
   if (!resultsSection || !resultsDiv) return;
   const check = liveTableCheck;
+  // Rebuilt only when the verdict, its staleness or what it may name has
+  // changed -- not on every poll and pick, which re-laid it all out.
+  const revealedDecks = podRevealed ? podSelections.map(s => s.deckId).join(",") : "";
+  const signature = JSON.stringify([check ? check.id : null, liveTableStale, podRevealed, revealedDecks, podPlayers.length]);
+  if (resultsDiv.dataset.signature === signature) return;
+  resultsDiv.dataset.signature = signature;
   resultsDiv.innerHTML = "";
   resultsSection.hidden = !check;
   if (!check) return;
