@@ -17,7 +17,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="style.css?v=57">
+<link rel="stylesheet" href="style.css?v=58">
 
 <!-- Home-screen icon (iOS "Add to Home Screen" + Android/Chrome install).
      Generated from icon-source.png via scripts/generate_icons.py -- rerun
@@ -50,6 +50,9 @@
 <!-- Reuses bg-winrates.webp -- no dedicated Achievements artwork exists
      yet, and this is the other read-only stats tab, closest in tone. -->
 <div class="tab-bg" id="bg-achievements"></div>
+<!-- Reuses bg-validator.webp (the Pod tab's table art) until Proposals
+     gets artwork of its own -- house rules belong to the table. -->
+<div class="tab-bg" id="bg-proposals"></div>
 <!-- Visible by default, hidden once a signed-in session is confirmed --
      fails closed: nothing else on the page loads or fetches live data
      until then (see renderAuthGate/checkAuthSession in app.js), rather
@@ -89,6 +92,10 @@
             <img id="auth-avatar-img" alt="">
             <span id="auth-avatar-initial" class="auth-avatar-initial" aria-hidden="true" hidden></span>
           </button>
+          <!-- Outside the button, which clips to a circle. Proposals waiting
+               on this viewer's vote -- see renderProposalsBadge in app.js,
+               which also says so in the button's aria-label. -->
+          <span id="auth-avatar-dot" class="auth-avatar-dot" aria-hidden="true" hidden></span>
           <div id="auth-menu" class="auth-menu" hidden>
             <!-- Explicit override on top of the system (prefers-color-scheme)
                  theme this app already had -- "Auto" is that same default,
@@ -101,6 +108,13 @@
                 <button type="button" class="theme-toggle-btn" data-theme-choice="dark">Dark</button>
               </div>
             </div>
+            <div class="auth-menu-divider"></div>
+            <!-- Proposals has no tab-bar button, like Games to Update: this
+                 menu is its only way in. See openProposalsTab in app.js. -->
+            <button id="auth-proposals-btn" type="button" class="auth-menu-item auth-menu-item-nav">
+              Pod Proposals <span id="auth-proposals-count" class="auth-menu-count" hidden></span>
+            </button>
+            <button id="auth-house-rules-btn" type="button" class="auth-menu-item auth-menu-item-nav">House Rules</button>
             <div class="auth-menu-divider"></div>
             <button id="auth-signout-btn" type="button" class="auth-menu-item">Sign out</button>
           </div>
@@ -158,6 +172,9 @@
       <p class="hint" id="sync-status">Shuffling up the deck list…</p>
 
       <div id="players-table"></div>
+      <!-- Admin only -- renderActivePlayersAdmin in app.js fills and shows
+           this when /auth/me says isAdmin. -->
+      <div id="active-players-admin" class="active-admin" hidden></div>
     </section>
   </div>
 
@@ -186,6 +203,56 @@
       <p class="hint" id="uta-status">Shuffling up…</p>
       <div id="uta-list"></div>
       <div id="uta-form-area"></div>
+    </section>
+  </div>
+
+  <!-- Reached only from the avatar menu (Pod Proposals / House Rules) --
+       see openProposalsTab and renderProposals in app.js. -->
+  <div id="tab-proposals" class="tab-panel" hidden>
+    <section class="card">
+      <h2 id="proposals-heading">Pod Proposals</h2>
+      <p class="hint" id="proposals-intro">House rules and ideas for the pod. A majority of active players decides each one.</p>
+      <p class="hint" id="proposals-status">Gathering the proposals…</p>
+      <div class="proposals-controls">
+        <div class="view-toggle" role="group" aria-label="Layout" id="proposals-layout-toggle">
+          <button type="button" class="view-toggle-btn active" data-proposals-view="auto" aria-pressed="true">By type</button>
+          <button type="button" class="view-toggle-btn" data-proposals-view="inout" aria-pressed="false">Out → In</button>
+          <button type="button" class="view-toggle-btn" data-proposals-view="procon" aria-pressed="false">Pros &amp; Cons</button>
+        </div>
+        <div class="view-toggle" role="group" aria-label="Stage" id="proposals-filter-toggle">
+          <button type="button" class="view-toggle-btn active" data-proposals-filter="active" aria-pressed="true">Active</button>
+          <button type="button" class="view-toggle-btn" data-proposals-filter="adopted" aria-pressed="false">House Rules</button>
+          <button type="button" class="view-toggle-btn" data-proposals-filter="shelved" aria-pressed="false">Shelved</button>
+        </div>
+      </div>
+      <div id="proposals-list" class="proposals-list"></div>
+      <div class="row">
+        <button type="button" id="proposals-new-btn" class="primary">Propose something</button>
+      </div>
+      <form id="proposal-form" class="proposal-form" hidden novalidate>
+        <h3 class="proposal-form-title">New proposal</h3>
+        <div class="view-toggle" role="group" aria-label="Proposal type">
+          <button type="button" class="view-toggle-btn active" data-proposal-kind="rule" aria-pressed="true">Rule change</button>
+          <button type="button" class="view-toggle-btn" data-proposal-kind="idea" aria-pressed="false">Idea</button>
+        </div>
+        <p class="hint" id="proposal-kind-hint">What stops being the rule, and what replaces it.</p>
+        <label class="proposal-field" for="proposal-title">Title
+          <input type="text" id="proposal-title" maxlength="120" autocomplete="off" required>
+        </label>
+        <div id="proposal-bullet-lists"></div>
+        <label class="proposal-field" for="proposal-applies">Applies to <span class="proposal-optional">(optional)</span>
+          <input type="text" id="proposal-applies" maxlength="60" placeholder="All games, Bracket 3 and below, theme nights…" autocomplete="off">
+        </label>
+        <label class="proposal-check" for="proposal-anonymous">
+          <input type="checkbox" id="proposal-anonymous">
+          <span><strong>Anonymous votes</strong><br><span class="proposal-check-hint">Everyone sees the count, not who voted which way. Can't be changed after posting.</span></span>
+        </label>
+        <p class="proposal-form-error" id="proposal-form-error" role="alert" hidden></p>
+        <div class="row">
+          <button type="submit" class="primary" id="proposal-submit">Post to the pod</button>
+          <button type="button" id="proposal-cancel">Cancel</button>
+        </div>
+      </form>
     </section>
   </div>
 
@@ -389,6 +456,6 @@
   </div>
 </div>
 
-<script src="app.js?v=62"></script>
+<script src="app.js?v=63"></script>
 </body>
 </html>

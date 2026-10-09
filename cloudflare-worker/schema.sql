@@ -53,7 +53,16 @@ CREATE TABLE players (
   -- account" flow isn't worth building. Same ALTER TABLE + separate unique
   -- index pattern as playgroup_user_id above, for the same reason (SQLite
   -- rejects UNIQUE on ADD COLUMN).
-  discord_user_id TEXT
+  discord_user_id TEXT,
+  -- 0 hides a player from the whole app: every player list, Standings,
+  -- Trophies, Set Up Pod, proposals and the Discord report (see
+  -- MEMBER_FILTER in relay.js). Their rows and game_results stay exactly
+  -- as they are -- only who's listed changes. Toggled by the admin from
+  -- Players & Decks (POST /players/active).
+  active INTEGER NOT NULL DEFAULT 1,
+  -- Who can toggle active and set a proposal's trial length (see
+  -- requireAdmin in relay.js). Set by hand, one UPDATE -- not self-serve.
+  is_admin INTEGER NOT NULL DEFAULT 0
 );
 CREATE UNIQUE INDEX idx_players_pg_user_id ON players(playgroup_user_id);
 CREATE UNIQUE INDEX idx_players_discord_user_id ON players(discord_user_id);
@@ -339,4 +348,58 @@ CREATE TABLE live_table (
   state TEXT NOT NULL,
   version INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
+);
+
+-- Pod Proposals: house rules and ideas the pod votes on (see GET/POST
+-- /proposals in relay.js). kind decides how the app lays the bullets out:
+-- a rule change reads as Out -> In, an idea as Pros & Cons. Status moves
+-- open -> trial -> adopted, or open -> shelved, and a shelved proposal can
+-- be reopened (back to open, votes cleared). Every transition after a vote
+-- is decided by a majority of active players (see settleProposal), never
+-- set by hand -- except trial_games, which only the admin changes.
+CREATE TABLE proposals (
+  id INTEGER PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('rule', 'idea')),
+  title TEXT NOT NULL,
+  applies_to TEXT,
+  -- Set once at posting and never changed, so nobody can reveal votes
+  -- partway through. GET /proposals returns only counts (plus the viewer's
+  -- own vote) when this is 1.
+  anonymous INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'trial', 'adopted', 'shelved')),
+  shelved_reason TEXT CHECK (shelved_reason IN ('majority_no', 'expired')),
+  proposed_by_player_id INTEGER NOT NULL REFERENCES players(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  -- 14 days after posting (or reopening). A proposal still open past this
+  -- with no majority is shelved as 'expired' the next time it's read.
+  voting_closes_at TEXT NOT NULL,
+  decided_at TEXT,
+  trial_games INTEGER NOT NULL DEFAULT 4,
+  -- games.id of the newest game when the trial started; the trial counts
+  -- games logged after it. An id, not a timestamp, so it can't be thrown by
+  -- played_at formats.
+  trial_after_game_id INTEGER,
+  reopen_count INTEGER NOT NULL DEFAULT 0
+);
+
+-- Every bullet on a proposal. side 'out'/'in' are the proposer's own rule
+-- text; 'pro'/'con' can be added by any active player while voting is open.
+CREATE TABLE proposal_points (
+  id INTEGER PRIMARY KEY,
+  proposal_id INTEGER NOT NULL REFERENCES proposals(id),
+  side TEXT NOT NULL CHECK (side IN ('out', 'in', 'pro', 'con')),
+  text TEXT NOT NULL,
+  added_by_player_id INTEGER NOT NULL REFERENCES players(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX idx_proposal_points_proposal ON proposal_points(proposal_id);
+
+-- One vote per player per proposal; changing a vote overwrites the row.
+-- Cleared when a shelved proposal is reopened.
+CREATE TABLE proposal_votes (
+  proposal_id INTEGER NOT NULL REFERENCES proposals(id),
+  player_id INTEGER NOT NULL REFERENCES players(id),
+  vote TEXT NOT NULL CHECK (vote IN ('yes', 'no')),
+  voted_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (proposal_id, player_id)
 );

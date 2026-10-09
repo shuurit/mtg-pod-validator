@@ -326,6 +326,24 @@ async function requireSession(request, env) {
   return kvGetJson(env, `session:${match[1]}`, null);
 }
 
+// Read from players.is_admin on every call rather than stored in the
+// session, so granting or removing admin takes effect immediately instead
+// of after a 30-day session expires.
+async function isAdmin(env, session) {
+  if (!session || !session.playerId) return false;
+  const row = await env.DB.prepare("SELECT is_admin FROM players WHERE id = ?").bind(session.playerId).first();
+  return !!(row && row.is_admin);
+}
+
+// Whether the signed-in player counts as a voting member -- same
+// population as every player list (playgroup-linked and active).
+async function isActiveMember(env, playerId) {
+  const row = await env.DB.prepare(
+    "SELECT id FROM players WHERE id = ? AND playgroup_user_id IS NOT NULL AND active = 1"
+  ).bind(playerId).first();
+  return !!row;
+}
+
 // Fires a GitHub repository_dispatch event. Only one caller now
 // (handleGamesWrite's "post-discord" dispatch) -- this used to also
 // back the add-game/roster-update GitHub-dispatch endpoints, removed in
@@ -525,7 +543,12 @@ async function handleAuthMe(request, env) {
   if (!session) {
     return jsonResponse({ error: "Not signed in" }, 401);
   }
-  return jsonResponse({ playerId: session.playerId, username: session.username, avatarUrl: session.avatarUrl }, 200);
+  return jsonResponse({
+    playerId: session.playerId,
+    username: session.username,
+    avatarUrl: session.avatarUrl,
+    isAdmin: await isAdmin(env, session),
+  }, 200);
 }
 
 // ---------- POST /games, POST /roster : D1 writes ----------
@@ -1682,9 +1705,14 @@ function effectiveDeckPower(d) {
   return isBracketPending(d) ? d.bracket_override : d.computed_power;
 }
 
-async function computePlayersData(env) {
+// includeInactive is only ever true for the admin (see handlePlayers), so
+// Players & Decks can list inactive players with a switch to bring them
+// back. Everyone else -- and scripts/discord_report.py -- only ever gets
+// active players.
+async function computePlayersData(env, { includeInactive = false } = {}) {
   const { results: playerRows } = await env.DB.prepare(
-    "SELECT id, name, playgroup_username FROM players WHERE playgroup_user_id IS NOT NULL ORDER BY id"
+    `SELECT id, name, playgroup_username, active FROM players
+     WHERE playgroup_user_id IS NOT NULL ${includeInactive ? "" : "AND active = 1"} ORDER BY id`
   ).all();
 
   // What carries over from season to season is a deck's strength and bracket
@@ -1780,11 +1808,13 @@ async function computePlayersData(env) {
   }
 
   // playerRows is already scoped to playgroup_user_id IS NOT NULL (see the
-  // query above) -- a player with no linked playgroup.gg account (inactive,
-  // never played, etc.) never appears here or anywhere downstream of it.
+  // query above) -- a player with no linked playgroup.gg account (never
+  // played, etc.) never appears here or anywhere downstream of it, and
+  // neither does an inactive one unless includeInactive is set.
   const players = playerRows.map(p => ({
     id: p.id,
     name: p.name,
+    active: !!p.active,
     playgroupUsername: p.playgroup_username,
     decks: decksByPlayer[p.id] || [],
     pinnedTrophies: pinsByPlayer[p.id] || [],
@@ -1793,10 +1823,10 @@ async function computePlayersData(env) {
   return { generated_at: new Date().toISOString(), players };
 }
 
-async function handlePlayers(env) {
+async function handlePlayers(env, session) {
   let data;
   try {
-    data = await computePlayersData(env);
+    data = await computePlayersData(env, { includeInactive: await isAdmin(env, session) });
   } catch (err) {
     return jsonResponse({ error: "Failed to read players from D1", detail: err.message }, 500);
   }
@@ -1823,7 +1853,7 @@ async function computeGamesData(env) {
     JOIN seasons s ON s.id = g.season_id
     JOIN players p ON p.id = gr.player_id
     JOIN decks d ON d.id = gr.deck_id
-    WHERE p.playgroup_user_id IS NOT NULL
+    WHERE p.playgroup_user_id IS NOT NULL AND p.active = 1
     ORDER BY g.id, p.name
   `).all();
 
@@ -1912,7 +1942,7 @@ function computePlayerAdjustedWinRate(rows) {
 // established (Player Adjusted Ranks has never combined seasons).
 async function computeRankingsData(env, seasonId) {
   const { results: playerRows } = await env.DB.prepare(
-    "SELECT id, name FROM players WHERE playgroup_user_id IS NOT NULL ORDER BY id"
+    "SELECT id, name FROM players WHERE playgroup_user_id IS NOT NULL AND active = 1 ORDER BY id"
   ).all();
   const { results: gameRows } = await env.DB.prepare(`
     SELECT p.name AS player, gr.result,
@@ -1966,7 +1996,7 @@ async function computeDeckWinRatesData(env, seasonId) {
     JOIN players p ON p.id = d.player_id
     LEFT JOIN game_results gr ON gr.deck_id = d.id
       AND gr.game_id IN (SELECT id FROM games WHERE season_id = ?)
-    WHERE p.playgroup_user_id IS NOT NULL
+    WHERE p.playgroup_user_id IS NOT NULL AND p.active = 1
     GROUP BY d.id
     ORDER BY d.id
   `).bind(seasonId).all();
@@ -1978,7 +2008,7 @@ async function computeDeckWinRatesData(env, seasonId) {
     FROM players p
     LEFT JOIN game_results gr ON gr.player_id = p.id
       AND gr.game_id IN (SELECT id FROM games WHERE season_id = ?)
-    WHERE p.playgroup_user_id IS NOT NULL
+    WHERE p.playgroup_user_id IS NOT NULL AND p.active = 1
     GROUP BY p.id
     ORDER BY p.id
   `).bind(seasonId).all();
@@ -2547,7 +2577,7 @@ async function gatherAchievementContext(env, seasonId) {
       FROM game_event_stats s
       JOIN games g ON g.id = s.game_id
       JOIN players p ON p.id = s.player_id
-      WHERE g.season_id = ? AND p.playgroup_user_id IS NOT NULL
+      WHERE g.season_id = ? AND p.playgroup_user_id IS NOT NULL AND p.active = 1
     `).bind(seasonId).all(),
     env.DB.prepare(`
       SELECT gr.game_id, gr.player_id, p.name, gr.place, gr.result, gr.tov, gr.deck_id,
@@ -2556,7 +2586,7 @@ async function gatherAchievementContext(env, seasonId) {
       FROM game_results gr
       JOIN games g ON g.id = gr.game_id
       JOIN players p ON p.id = gr.player_id
-      WHERE g.season_id = ? AND p.playgroup_user_id IS NOT NULL
+      WHERE g.season_id = ? AND p.playgroup_user_id IS NOT NULL AND p.active = 1
     `).bind(seasonId).all(),
     // Reuses the same Player Adjusted Win Rate formula the (currently
     // otherwise-unused) GET /rankings already computes -- verified exact
@@ -3022,7 +3052,7 @@ async function loadMintedAwards(env) {
 async function handleTrophyLeaderboard(env) {
   const [minted, playersRes] = await Promise.all([
     loadMintedAwards(env),
-    env.DB.prepare("SELECT id, name FROM players WHERE playgroup_user_id IS NOT NULL ORDER BY id").all(),
+    env.DB.prepare("SELECT id, name FROM players WHERE playgroup_user_id IS NOT NULL AND active = 1 ORDER BY id").all(),
   ]);
 
   const countsByPlayer = new Map();
@@ -3370,7 +3400,7 @@ async function applyTableOp(env, read, body, viewerId) {
       // Same population as /players (computePlayersData): tracked players
       // with a playgroup.gg account.
       const player = await env.DB.prepare(
-        "SELECT id FROM players WHERE id = ? AND playgroup_user_id IS NOT NULL"
+        "SELECT id FROM players WHERE id = ? AND playgroup_user_id IS NOT NULL AND active = 1"
       ).bind(body.playerId).first();
       if (!player) return { error: "That player isn't in the playgroup.", status: 400 };
       next.seats.push({ playerId: body.playerId, deckId: null, pickedBy: null, outOfRange: false, repicked: false });
@@ -3527,6 +3557,359 @@ async function handleTableWrite(request, env, session) {
   return jsonResponse({ error: "The table was busy. Try again." }, 409);
 }
 
+// ---------- POST /players/active : admin-only roster switch ----------
+// Hides (or brings back) a player across the whole app -- see the
+// players.active comment in schema.sql. Their games are never touched.
+async function handlePlayerActiveWrite(request, env, session) {
+  if (!(await isAdmin(env, session))) {
+    return jsonResponse({ error: "Only the admin can change who's active." }, 403);
+  }
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: "Invalid JSON" }, 400);
+  }
+  if (!body || !Number.isInteger(body.playerId) || typeof body.active !== "boolean") {
+    return jsonResponse({ error: "Payload must include playerId (integer) and active (boolean)" }, 400);
+  }
+  // Switching yourself off would lock the admin out of every player list,
+  // including the one this switch lives in.
+  if (body.playerId === session.playerId && !body.active) {
+    return jsonResponse({ error: "You can't mark yourself inactive." }, 400);
+  }
+  const res = await env.DB.prepare("UPDATE players SET active = ? WHERE id = ?")
+    .bind(body.active ? 1 : 0, body.playerId).run();
+  if (!res.meta.changes) return jsonResponse({ error: `Unknown player: ${body.playerId}` }, 400);
+  return jsonResponse({ ok: true, playerId: body.playerId, active: body.active });
+}
+
+// ---------- GET/POST /proposals : Pod Proposals ----------
+// House rules and ideas the pod votes on. A proposal is decided by a
+// majority of active players -- floor(n / 2) + 1, so 4 of 6 -- and never
+// by hand: settleProposals applies every transition (majority yes -> trial,
+// majority no or 14 days without a majority -> shelved, trial games played
+// -> adopted) on every read and after every vote. Discord announcements
+// are planned but on hold until a channel is chosen.
+
+const PROPOSAL_VOTING_DAYS = 14;
+const PROPOSAL_TITLE_MAX = 120;
+const PROPOSAL_POINT_MAX = 200;
+const PROPOSAL_POINTS_PER_SIDE_MAX = 8;
+// Pros or cons the whole pod can pile onto one proposal after posting.
+const PROPOSAL_ADDED_POINTS_MAX = 24;
+const PROPOSAL_TRIAL_GAMES_MAX = 20;
+// Shown wherever an inactive player's name would otherwise appear on a
+// proposal (who posted it, who added a bullet) -- the rows stay, only the
+// name is hidden.
+const FORMER_PLAYER = "Former player";
+
+function proposalMajority(activeCount) {
+  return Math.floor(activeCount / 2) + 1;
+}
+
+// Applies any transition that's now due and writes it back, so the state a
+// client reads is always already settled. Returns the proposals with
+// their (possibly new) status.
+async function settleProposals(env, proposals, votesByProposal, majority) {
+  const latest = await env.DB.prepare("SELECT MAX(id) AS id FROM games").first();
+  const latestGameId = latest && latest.id ? latest.id : 0;
+  const nowSql = (await env.DB.prepare("SELECT datetime('now') AS now").first()).now;
+  const updates = [];
+
+  for (const p of proposals) {
+    const votes = votesByProposal.get(p.id) || [];
+    const yes = votes.filter(v => v.vote === "yes").length;
+    const no = votes.filter(v => v.vote === "no").length;
+    if (p.status === "open") {
+      if (yes >= majority) {
+        p.status = "trial";
+        p.decided_at = nowSql;
+        p.trial_after_game_id = latestGameId;
+        updates.push(env.DB.prepare(
+          "UPDATE proposals SET status = 'trial', decided_at = ?, trial_after_game_id = ? WHERE id = ? AND status = 'open'"
+        ).bind(nowSql, latestGameId, p.id));
+      } else if (no >= majority || p.voting_closes_at < nowSql) {
+        p.status = "shelved";
+        p.shelved_reason = no >= majority ? "majority_no" : "expired";
+        p.decided_at = nowSql;
+        updates.push(env.DB.prepare(
+          "UPDATE proposals SET status = 'shelved', shelved_reason = ?, decided_at = ? WHERE id = ? AND status = 'open'"
+        ).bind(p.shelved_reason, nowSql, p.id));
+      }
+    }
+    if (p.status === "trial") {
+      const played = await env.DB.prepare("SELECT COUNT(*) AS n FROM games WHERE id > ?")
+        .bind(p.trial_after_game_id || 0).first();
+      p.trial_games_played = played ? played.n : 0;
+      if (p.trial_games_played >= p.trial_games) {
+        p.status = "adopted";
+        p.decided_at = nowSql;
+        updates.push(env.DB.prepare(
+          "UPDATE proposals SET status = 'adopted', decided_at = ? WHERE id = ? AND status = 'trial'"
+        ).bind(nowSql, p.id));
+      }
+    }
+  }
+  if (updates.length) await env.DB.batch(updates);
+  return proposals;
+}
+
+async function computeProposalsData(env, session) {
+  const [playersRes, proposalsRes, pointsRes, votesRes, admin] = await Promise.all([
+    env.DB.prepare("SELECT id, name, active, playgroup_user_id FROM players").all(),
+    env.DB.prepare("SELECT * FROM proposals ORDER BY id DESC").all(),
+    env.DB.prepare("SELECT id, proposal_id, side, text, added_by_player_id FROM proposal_points ORDER BY id").all(),
+    // While a vote is open only active members count -- a player marked
+    // inactive mid-vote stops counting toward either side, and the majority
+    // shrinks with them. Once decided, the final count is history and keeps
+    // every vote that was cast (see countedVotes below).
+    env.DB.prepare(`
+      SELECT v.proposal_id, v.player_id, v.vote,
+             (p.playgroup_user_id IS NOT NULL AND p.active = 1) AS is_member
+      FROM proposal_votes v
+      JOIN players p ON p.id = v.player_id
+    `).all(),
+    isAdmin(env, session),
+  ]);
+
+  const playerById = new Map(playersRes.results.map(p => [p.id, p]));
+  const members = playersRes.results.filter(p => p.active && p.playgroup_user_id != null);
+  const majority = proposalMajority(members.length);
+  const nameOf = id => {
+    const p = playerById.get(id);
+    return p && p.active ? p.name : FORMER_PLAYER;
+  };
+
+  const allVotesByProposal = new Map();
+  const memberVotesByProposal = new Map();
+  for (const v of votesRes.results) {
+    if (!allVotesByProposal.has(v.proposal_id)) allVotesByProposal.set(v.proposal_id, []);
+    allVotesByProposal.get(v.proposal_id).push(v);
+    if (!v.is_member) continue;
+    if (!memberVotesByProposal.has(v.proposal_id)) memberVotesByProposal.set(v.proposal_id, []);
+    memberVotesByProposal.get(v.proposal_id).push(v);
+  }
+  const countedVotes = p => (p.status === "open" ? memberVotesByProposal : allVotesByProposal).get(p.id) || [];
+  const pointsByProposal = new Map();
+  for (const pt of pointsRes.results) {
+    if (!pointsByProposal.has(pt.proposal_id)) pointsByProposal.set(pt.proposal_id, { out: [], in: [], pro: [], con: [] });
+    pointsByProposal.get(pt.proposal_id)[pt.side].push({ id: pt.id, text: pt.text, addedBy: nameOf(pt.added_by_player_id) });
+  }
+
+  const settled = await settleProposals(env, proposalsRes.results, memberVotesByProposal, majority);
+  const myId = session ? session.playerId : null;
+
+  const proposals = settled.map(p => {
+    const votes = countedVotes(p);
+    const yes = votes.filter(v => v.vote === "yes").length;
+    const no = votes.filter(v => v.vote === "no").length;
+    const mine = votes.find(v => v.player_id === myId);
+    return {
+      id: p.id,
+      kind: p.kind,
+      title: p.title,
+      appliesTo: p.applies_to,
+      anonymous: !!p.anonymous,
+      status: p.status,
+      shelvedReason: p.shelved_reason,
+      proposedBy: { id: p.proposed_by_player_id, name: nameOf(p.proposed_by_player_id) },
+      createdAt: p.created_at,
+      votingClosesAt: p.voting_closes_at,
+      decidedAt: p.decided_at,
+      trialGames: p.trial_games,
+      trialGamesPlayed: p.trial_games_played ?? null,
+      reopenCount: p.reopen_count,
+      points: pointsByProposal.get(p.id) || { out: [], in: [], pro: [], con: [] },
+      tally: { yes, no, waiting: p.status === "open" ? Math.max(0, members.length - yes - no) : 0 },
+      myVote: mine ? mine.vote : null,
+      // Anonymous proposals never send who voted which way -- not even
+      // to the admin. The viewer still gets their own vote (myVote).
+      // Open: one entry per active member, voted or not. Decided: just the
+      // votes that were cast, with an inactive voter's name hidden.
+      voters: p.anonymous ? null : p.status === "open"
+        ? members.map(m => {
+          const v = votes.find(x => x.player_id === m.id);
+          return { playerId: m.id, name: m.name, vote: v ? v.vote : null };
+        })
+        : votes.map(v => ({ playerId: v.player_id, name: nameOf(v.player_id), vote: v.vote })),
+      canReopen: p.status === "shelved" && (p.proposed_by_player_id === myId || admin),
+    };
+  });
+
+  return { generated_at: new Date().toISOString(), activeCount: members.length, majority, isAdmin: admin, proposals };
+}
+
+async function handleProposalsRead(env, session) {
+  let data;
+  try {
+    data = await computeProposalsData(env, session);
+  } catch (err) {
+    return jsonResponse({ error: "Failed to read proposals from D1", detail: err.message }, 500);
+  }
+  return jsonResponse(data, 200, { "Cache-Control": "no-store" });
+}
+
+function cleanProposalText(value, max) {
+  if (typeof value !== "string") return null;
+  const text = value.trim().replace(/\s+/g, " ");
+  return text && text.length <= max ? text : null;
+}
+
+// A list of bullet strings, each cleaned. Returns null if any entry is
+// invalid, so a bad bullet is an error rather than silently dropped.
+function cleanProposalPoints(list) {
+  if (list == null) return [];
+  if (!Array.isArray(list) || list.length > PROPOSAL_POINTS_PER_SIDE_MAX) return null;
+  const out = [];
+  for (const item of list) {
+    const text = cleanProposalText(item, PROPOSAL_POINT_MAX);
+    if (!text) return null;
+    out.push(text);
+  }
+  return out;
+}
+
+async function handleProposalsWrite(request, env, session, pathname) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ error: "Invalid JSON" }, 400);
+  }
+  if (!body || typeof body !== "object") return jsonResponse({ error: "Invalid JSON" }, 400);
+  if (!(await isActiveMember(env, session.playerId))) {
+    return jsonResponse({ error: "Only active players can post or vote on proposals." }, 403);
+  }
+
+  let result;
+  try {
+    if (pathname === "/proposals") result = await createProposal(env, session, body);
+    else if (pathname === "/proposals/vote") result = await voteOnProposal(env, session, body);
+    else if (pathname === "/proposals/points") result = await addProposalPoint(env, session, body);
+    else if (pathname === "/proposals/reopen") result = await reopenProposal(env, session, body);
+    else if (pathname === "/proposals/trial") result = await setProposalTrialGames(env, session, body);
+    else return new Response("Not found", { status: 404, headers: corsHeaders() });
+  } catch (err) {
+    return jsonResponse({ error: "Failed to save the proposal", detail: err.message }, 500);
+  }
+  if (result && result.error) return jsonResponse({ error: result.error }, result.status || 400);
+
+  // Every write answers with the whole settled board, so the client never
+  // has to guess what a vote just decided.
+  return jsonResponse(await computeProposalsData(env, session), 200);
+}
+
+async function createProposal(env, session, body) {
+  if (body.kind !== "rule" && body.kind !== "idea") return { error: "kind must be 'rule' or 'idea'." };
+  const title = cleanProposalText(body.title, PROPOSAL_TITLE_MAX);
+  if (!title) return { error: `Give it a title (up to ${PROPOSAL_TITLE_MAX} characters).` };
+  const appliesTo = body.appliesTo == null || body.appliesTo === "" ? null : cleanProposalText(body.appliesTo, 60);
+  if (body.appliesTo && !appliesTo) return { error: "\"Applies to\" is too long." };
+
+  const sides = {};
+  for (const side of ["out", "in", "pro", "con"]) {
+    sides[side] = cleanProposalPoints(body[side]);
+    if (!sides[side]) return { error: `Each bullet needs text, up to ${PROPOSAL_POINT_MAX} characters, and at most ${PROPOSAL_POINTS_PER_SIDE_MAX} per list.` };
+  }
+  if (body.kind === "rule" && (!sides.out.length || !sides.in.length)) {
+    return { error: "A rule change needs at least one Out bullet and one In bullet." };
+  }
+  if (body.kind === "idea" && !sides.pro.length && !sides.con.length) {
+    return { error: "An idea needs at least one pro or con." };
+  }
+
+  const insert = await env.DB.prepare(`
+    INSERT INTO proposals (kind, title, applies_to, anonymous, proposed_by_player_id, voting_closes_at)
+    VALUES (?, ?, ?, ?, ?, datetime('now', '+${PROPOSAL_VOTING_DAYS} days'))
+  `).bind(body.kind, title, appliesTo, body.anonymous ? 1 : 0, session.playerId).run();
+  const proposalId = insert.meta.last_row_id;
+
+  const stmts = [];
+  for (const side of ["out", "in", "pro", "con"]) {
+    for (const text of sides[side]) {
+      stmts.push(env.DB.prepare("INSERT INTO proposal_points (proposal_id, side, text, added_by_player_id) VALUES (?, ?, ?, ?)")
+        .bind(proposalId, side, text, session.playerId));
+    }
+  }
+  if (stmts.length) await env.DB.batch(stmts);
+  return { ok: true };
+}
+
+async function loadProposal(env, id) {
+  if (!Number.isInteger(id)) return null;
+  return env.DB.prepare("SELECT * FROM proposals WHERE id = ?").bind(id).first();
+}
+
+async function voteOnProposal(env, session, body) {
+  const p = await loadProposal(env, body.proposalId);
+  if (!p) return { error: "That proposal doesn't exist.", status: 404 };
+  if (p.status !== "open") return { error: "Voting on this proposal has closed.", status: 409 };
+  // vote: null takes a vote back.
+  if (body.vote === null) {
+    await env.DB.prepare("DELETE FROM proposal_votes WHERE proposal_id = ? AND player_id = ?")
+      .bind(p.id, session.playerId).run();
+    return { ok: true };
+  }
+  if (body.vote !== "yes" && body.vote !== "no") return { error: "vote must be 'yes', 'no' or null." };
+  await env.DB.prepare(`
+    INSERT INTO proposal_votes (proposal_id, player_id, vote) VALUES (?, ?, ?)
+    ON CONFLICT (proposal_id, player_id) DO UPDATE SET vote = excluded.vote, voted_at = datetime('now')
+  `).bind(p.id, session.playerId, body.vote).run();
+  return { ok: true };
+}
+
+async function addProposalPoint(env, session, body) {
+  const p = await loadProposal(env, body.proposalId);
+  if (!p) return { error: "That proposal doesn't exist.", status: 404 };
+  if (p.status !== "open") return { error: "Pros and cons can only be added while voting is open.", status: 409 };
+  // Out/In are the rule being voted on, so only pros and cons can be added
+  // after posting -- the rule itself can't change under people's votes.
+  if (body.side !== "pro" && body.side !== "con") return { error: "Only pros and cons can be added after posting." };
+  const text = cleanProposalText(body.text, PROPOSAL_POINT_MAX);
+  if (!text) return { error: `A bullet needs text, up to ${PROPOSAL_POINT_MAX} characters.` };
+  const count = await env.DB.prepare("SELECT COUNT(*) AS n FROM proposal_points WHERE proposal_id = ? AND side = ?")
+    .bind(p.id, body.side).first();
+  if (count.n >= PROPOSAL_ADDED_POINTS_MAX) return { error: "This list is full." };
+  await env.DB.prepare("INSERT INTO proposal_points (proposal_id, side, text, added_by_player_id) VALUES (?, ?, ?, ?)")
+    .bind(p.id, body.side, text, session.playerId).run();
+  return { ok: true };
+}
+
+// A shelved proposal gets a fresh vote: votes cleared, bullets kept, a new
+// 14 days. Only whoever posted it, or the admin, so one person can't keep
+// reopening someone else's rejected idea.
+async function reopenProposal(env, session, body) {
+  const p = await loadProposal(env, body.proposalId);
+  if (!p) return { error: "That proposal doesn't exist.", status: 404 };
+  if (p.status !== "shelved") return { error: "Only a shelved proposal can be reopened.", status: 409 };
+  if (p.proposed_by_player_id !== session.playerId && !(await isAdmin(env, session))) {
+    return { error: "Only the person who posted it, or the admin, can reopen it.", status: 403 };
+  }
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM proposal_votes WHERE proposal_id = ?").bind(p.id),
+    env.DB.prepare(`
+      UPDATE proposals SET status = 'open', shelved_reason = NULL, decided_at = NULL,
+        trial_after_game_id = NULL, reopen_count = reopen_count + 1,
+        voting_closes_at = datetime('now', '+${PROPOSAL_VOTING_DAYS} days')
+      WHERE id = ?
+    `).bind(p.id),
+  ]);
+  return { ok: true };
+}
+
+async function setProposalTrialGames(env, session, body) {
+  if (!(await isAdmin(env, session))) return { error: "Only the admin can set a trial's length.", status: 403 };
+  const p = await loadProposal(env, body.proposalId);
+  if (!p) return { error: "That proposal doesn't exist.", status: 404 };
+  if (p.status !== "open" && p.status !== "trial") return { error: "This proposal is already decided.", status: 409 };
+  if (!Number.isInteger(body.trialGames) || body.trialGames < 1 || body.trialGames > PROPOSAL_TRIAL_GAMES_MAX) {
+    return { error: `Trial length must be 1 to ${PROPOSAL_TRIAL_GAMES_MAX} games.` };
+  }
+  await env.DB.prepare("UPDATE proposals SET trial_games = ? WHERE id = ?").bind(body.trialGames, p.id).run();
+  return { ok: true };
+}
+
 // ---------- router ----------
 
 export default {
@@ -3611,7 +3994,19 @@ export default {
     }
 
     if (request.method === "GET" && url.pathname === "/players") {
-      return handlePlayers(env);
+      return handlePlayers(env, session);
+    }
+
+    if (request.method === "POST" && url.pathname === "/players/active") {
+      return handlePlayerActiveWrite(request, env, session);
+    }
+
+    if (request.method === "GET" && url.pathname === "/proposals") {
+      return handleProposalsRead(env, session);
+    }
+
+    if (request.method === "POST" && url.pathname.startsWith("/proposals")) {
+      return handleProposalsWrite(request, env, session, url.pathname);
     }
 
     if (request.method === "GET" && url.pathname === "/games") {
