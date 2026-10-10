@@ -2641,8 +2641,8 @@ const POD_ORB_HTML =
   '<svg class="pod-orb-crack" viewBox="0 0 40 40" aria-hidden="true"><polyline points="15,2 19,12 13,18 21,25 17,38" fill="none" stroke="rgba(255,230,200,.75)" stroke-width="1.3" stroke-linejoin="round"/><polyline points="19,12 27,14" fill="none" stroke="rgba(255,230,200,.6)" stroke-width="1"/><polyline points="21,25 28,29" fill="none" stroke="rgba(255,230,200,.5)" stroke-width="0.9"/></svg>' +
   '<span class="pod-orb-gloss"></span><span class="pod-orb-sweep"></span></span>' +
   '<span class="pod-flame"><i class="pod-pf pod-pf2"><i></i></i><i class="pod-pf pod-pf3"><i></i></i><i class="pod-pf pod-pf1"><i></i></i></span>' +
-  ["e1", "e2", "e3", "e4", "e5", "e6"].map(e => `<i class="pod-ember ${e}"></i>`).join("") +
-  '<i class="pod-ember spark s1"></i><i class="pod-ember spark s2"></i></span>';
+  ["e1", "e2", "e3", "e4"].map(e => `<i class="pod-ember ${e}"></i>`).join("") +
+  '<i class="pod-ember spark s1"></i></span>';
 
 // playerId -> { chair, plate } for every seat currently at the table.
 const podSeatEls = new Map();
@@ -2747,7 +2747,7 @@ function buildPodTable(container) {
     .map(z => `<div class="pod-table-layer${z === 2 ? " edge" : ""}" style="transform: translateZ(-${z}px)"></div>`)
     .join("");
   scene.innerHTML = `
-    <div class="pod-rig">
+    <div class="pod-rig"><div class="pod-turn">
       <div class="pod-floor-sigil" aria-hidden="true"><svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="48"/><circle cx="50" cy="50" r="45" stroke-dasharray="0.8 2.2"/><circle cx="50" cy="50" r="40"/><path d="${marks}"/></svg></div>
       <div class="pod-floor-shadow"></div>
       <div class="pod-table" aria-hidden="true">
@@ -2762,14 +2762,15 @@ function buildPodTable(container) {
         </div>
       </div>
       <div class="pod-chairs"></div>
-    </div>
+    </div></div>
     <div class="pod-plates"></div>
     <p class="pod-scene-empty">Tap a member below to pull up a chair.</p>`;
   container.appendChild(scene);
 
   ui.scene = scene;
   ui.rig = scene.querySelector(".pod-rig");
-  ui.rig.addEventListener("transitionend", e => { if (e.target === ui.rig) positionPodPlates(); });
+  const turn = scene.querySelector(".pod-turn");
+  turn.addEventListener("transitionend", e => { if (e.target === turn) positionPodPlates(); });
   document.addEventListener("visibilitychange", () => { if (!document.hidden) trackPodPlates(900); });
   ui.chairs = scene.querySelector(".pod-chairs");
   ui.plates = scene.querySelector(".pod-plates");
@@ -2835,7 +2836,10 @@ function buildPodChair(playerId) {
   if (Number(playerId) % 2 === 0) chair.classList.add("crest");
   // Desyncs this seat's bob and flame from its neighbours'.
   chair.style.setProperty("--pod-d", `${(-Math.random() * 3.2).toFixed(2)}s`);
+  // .pod-chair carries the throne's place round the table, .pod-throne its
+  // slide out from the table's edge; each glides as its own transform.
   chair.innerHTML =
+    '<div class="pod-throne">' +
     '<div class="pod-chair-shadow"></div>' +
     '<div class="pod-chair-legs back"></div><div class="pod-chair-legs front"></div>' +
     '<div class="pod-chair-side left"></div><div class="pod-chair-side right"></div>' +
@@ -2844,13 +2848,18 @@ function buildPodChair(playerId) {
     '<div class="pod-chair-light seat"></div><div class="pod-chair-light table"></div>' +
     '<div class="pod-chair-arm left"></div><div class="pod-chair-arm right"></div>' +
     '<div class="pod-chair-back"><span class="pod-chair-glow"></span><span class="pod-chair-gem"></span></div>' +
-    `<div class="pod-bb"><span class="pod-orb-hit" aria-hidden="true">${POD_ORB_HTML}</span><span class="pod-plate-anchor"></span></div>`;
+    '<div class="pod-bb"><div class="pod-bb-a"><div class="pod-bb-spin"><div class="pod-bb-face">' +
+    `<span class="pod-orb-hit" aria-hidden="true">${POD_ORB_HTML}</span><span class="pod-plate-anchor"></span>` +
+    "</div></div></div></div></div>";
   // The orb is a pointer shortcut; the nameplate is the real (focusable) control.
   chair.querySelector(".pod-orb-hit").addEventListener("click", () => tapPodSeat(playerId));
   // Re-pin the nameplates when a glide actually finishes. The timers in
   // trackPodPlates can run out while a hidden page holds the transition at
   // its start, leaving plates pinned where the throne started, not ended.
-  chair.addEventListener("transitionend", e => { if (e.target === chair) positionPodPlates(); });
+  const throne = chair.firstChild;
+  chair.addEventListener("transitionend", e => {
+    if ((e.target === chair || e.target === throne) && e.propertyName === "transform") positionPodPlates();
+  });
   return chair;
 }
 
@@ -2940,7 +2949,7 @@ function renderPodChairs() {
         // don't swing in lockstep), straightening as it reaches its seat.
         chair.style.setProperty("--pod-sw", `${chair.classList.contains("crest") ? -16 : 16}deg`);
         // Commit the tucked start before moving to the seat, so it slides.
-        getComputedStyle(chair).getPropertyValue("--pod-r");
+        getComputedStyle(chair.firstChild).transform;
         chair.style.setProperty("--pod-r", `${POD_SEAT_RADIUS}px`);
         chair.style.setProperty("--pod-sw", "0deg");
         chair.style.opacity = "1";

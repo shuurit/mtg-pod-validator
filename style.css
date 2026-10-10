@@ -3408,15 +3408,15 @@ input.gtu-in-prefilled {
    table, so your eye left the seat you tapped -- here the table turns that
    seat to face you and the deck panel docks right under it.
 
-   No library: perspective + preserve-3d, and three registered properties
-   so the throne angles and the table's turn interpolate as real angles.
-   Without @property support everything still lands in place, it just
-   doesn't glide. */
-@property --pod-spin { syntax: "<angle>"; inherits: true; initial-value: 0deg; }
-@property --pod-a { syntax: "<angle>"; inherits: true; initial-value: 0deg; }
-/* A throne's swivel as it's pulled out or pushed in (see renderPodChairs). */
-@property --pod-sw { syntax: "<angle>"; inherits: true; initial-value: 0deg; }
-@property --pod-r { syntax: "<length>"; inherits: false; initial-value: 0px; }
+   No library: perspective + preserve-3d. Every glide -- the table's turn
+   (--pod-spin), a throne's place round it (--pod-a), and its slide and
+   swivel in and out (--pod-r, --pod-sw) -- is a plain transform transition
+   on its own wrapper, so the GPU runs it. These were registered
+   @property angles once; transitioning those restyled ~200 elements on
+   the main thread every frame of every turn, the lag on a phone. Each
+   orb's billboard undoes them the same way: one wrapper per turn, with
+   the same duration and curve as the turn it cancels, so they stay in
+   lockstep (see .pod-bb). */
 
 /* Scales with --pod-fit (set by fitPodScene from the card's width) so a
    narrow phone doesn't leave a band of empty space under a shrunk table. */
@@ -3435,12 +3435,21 @@ input.gtu-in-prefilled {
   width: 0;
   height: 0;
   transform-style: preserve-3d;
-  transform: scale3d(var(--pod-fit, 1), var(--pod-fit, 1), var(--pod-fit, 1)) rotateX(var(--pod-tilt)) rotateZ(var(--pod-spin));
-  /* The lazy-susan turn (see turnPodTable): fast off the mark, long settle. */
-  transition: --pod-spin 0.7s cubic-bezier(0.32, 0.72, 0, 1);
+  transform: scale3d(var(--pod-fit, 1), var(--pod-fit, 1), var(--pod-fit, 1)) rotateX(var(--pod-tilt));
+  /* The turn's timing, shared by everything that rides or undoes it. */
+  --pod-turn: 0.7s cubic-bezier(0.32, 0.72, 0, 1);
 }
-@media (prefers-reduced-motion: reduce) {
-  .pod-rig { transition: none; }
+/* The lazy-susan turn (see turnPodTable): fast off the mark, long settle.
+   Its own layer under the rig so a resize (--pod-fit) never animates. */
+.pod-turn {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  transform-style: preserve-3d;
+  transform: rotateZ(var(--pod-spin, 0deg));
+  transition: transform var(--pod-turn);
 }
 
 /* A faint summoning circle on the floor under everything. Static. */
@@ -3594,7 +3603,8 @@ input.gtu-in-prefilled {
   text-transform: uppercase;
   line-height: 1;
   text-shadow: 0 0 6px rgba(40, 20, 80, 0.95), 0 1px 2px rgba(0, 0, 0, 0.9);
-  transform: rotateZ(calc(-1 * var(--pod-spin)));
+  transform: rotateZ(calc(-1 * var(--pod-spin, 0deg)));
+  transition: transform var(--pod-turn);
 }
 .pod-slate-count { font-size: 1.45rem; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
 .pod-slate-word { font-size: 0.5rem; font-weight: 600; letter-spacing: 0.14em; color: rgba(251, 246, 255, 0.8); margin-top: 1px; }
@@ -3612,25 +3622,42 @@ input.gtu-in-prefilled {
   --c2: #d9ccff;
   --c3: #efe8ff;
   --ember: #c9b6ff;
+  /* The two glides, each shared with the billboard wrapper that undoes it:
+     moving round to a new place, and sliding in or out. */
+  --pod-move: 0.6s cubic-bezier(0.77, 0, 0.175, 1);
+  --pod-slide: 0.55s cubic-bezier(0.23, 1, 0.32, 1);
   position: absolute;
   left: 0;
   top: 0;
   width: 0;
   height: 0;
   transform-style: preserve-3d;
-  /* --pod-sw: pulled out at a slight angle, it straightens as it reaches
-     its place, the way a chair does when someone draws it back to sit. */
-  transform: rotateZ(var(--pod-a)) translateY(var(--pod-r)) rotateZ(var(--pod-sw, 0deg));
-  transition: --pod-a 0.6s cubic-bezier(0.77, 0, 0.175, 1), --pod-r 0.5s cubic-bezier(0.23, 1, 0.32, 1), --pod-sw 0.6s cubic-bezier(0.23, 1, 0.32, 1), opacity 0.3s ease-out;
+  transform: rotateZ(var(--pod-a, 0deg));
+  transition: transform var(--pod-move), opacity 0.3s ease-out;
+}
+/* Out from the table's edge to its place. --pod-sw: pulled out at a slight
+   angle, it straightens as it arrives, the way a chair does when someone
+   draws it back to sit. */
+.pod-throne {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  transform-style: preserve-3d;
+  transform: translateY(var(--pod-r, 132px)) rotateZ(var(--pod-sw, 0deg));
+  transition: transform var(--pod-slide);
 }
 /* Leaving is quicker than arriving, and accelerates away: pushed in under
    the table, turning a little as it goes. */
 .pod-chair.leaving {
-  transition: --pod-a 0.6s cubic-bezier(0.77, 0, 0.175, 1), --pod-r 0.3s cubic-bezier(0.5, 0, 0.75, 0), --pod-sw 0.3s cubic-bezier(0.5, 0, 0.75, 0), opacity 0.24s ease-in;
+  --pod-slide: 0.3s cubic-bezier(0.5, 0, 0.75, 0);
+  transition: transform var(--pod-move), opacity 0.24s ease-in;
   pointer-events: none;
 }
 @media (prefers-reduced-motion: reduce) {
   .pod-chair, .pod-chair.leaving { transition: opacity 0.15s ease; }
+  .pod-turn, .pod-slate-label, .pod-throne { transition: none; }
 }
 .pod-chair-shadow {
   position: absolute;
@@ -3656,32 +3683,21 @@ input.gtu-in-prefilled {
 /* Throne back: a tall back in the table's oak with a dark edge, a leather
    panel and one rune gem. Two carvings, alternating by player
    (buildPodChair): a pointed arch rising to a spire, or a rounded,
-   scalloped crest. Hinged on the seat's outer edge and folded up 90deg. */
+   scalloped crest. Hinged on the seat's outer edge and folded up 90deg.
+   Edge, oak face and leather are one small drawing per carving (the oak
+   and leather colours are fixed, see :root), not three clip-path layers:
+   clipping a layer in the 3D scene sends the GPU through an offscreen
+   pass for it on every frame the flames move -- 48 of the table's 64 per
+   frame at six seats, counting the frames below. */
 .pod-chair-back {
-  --pod-arch: polygon(50% 0, 53% 6%, 57% 8%, 65% 12%, 75% 19%, 85% 29%, 92% 40%, 97% 52%, 100% 63%, 100% 100%, 0 100%, 0 63%, 3% 52%, 8% 40%, 15% 29%, 25% 19%, 35% 12%, 43% 8%, 47% 6%);
   position: absolute;
   width: 50px;
   height: 60px;
   left: -25px;
   top: -39px;
-  clip-path: var(--pod-arch);
-  background: linear-gradient(180deg, var(--oak-lo), var(--oak-deep));
+  background: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 50 60'><defs><linearGradient id='e' x2='0' y2='1'><stop stop-color='%235e3d2a'/><stop offset='1' stop-color='%232f1d13'/></linearGradient><linearGradient id='o' x2='0' y2='1'><stop stop-color='%23bb8f6c'/><stop offset='.45' stop-color='%23976b4c'/><stop offset='1' stop-color='%235e3d2a'/></linearGradient><linearGradient id='l' x2='0' y2='1'><stop stop-color='%234c3066'/><stop offset='1' stop-color='%231d1229'/></linearGradient></defs><polygon fill='url(%23e)' points='25 0 26.5 3.6 28.5 4.8 32.5 7.2 37.5 11.4 42.5 17.4 46 24 48.5 31.2 50 37.8 50 60 0 60 0 37.8 1.5 31.2 4 24 7.5 17.4 12.5 11.4 17.5 7.2 21.5 4.8 23.5 3.6'/><polygon fill='url(%23o)' points='25 2 26.38 5.48 28.22 6.64 31.9 8.96 36.5 13.02 41.1 18.82 44.32 25.2 46.62 32.16 48 38.54 48 60 2 60 2 38.54 3.38 32.16 5.68 25.2 8.9 18.82 13.5 13.02 18.1 8.96 21.78 6.64 23.62 5.48'/><polygon fill='url(%23l)' points='25 9 26.02 11.76 27.38 12.68 30.1 14.52 33.5 17.74 36.9 22.34 39.28 27.4 40.98 32.92 42 37.98 42 55 8 55 8 37.98 9.02 32.92 10.72 27.4 13.1 22.34 16.5 17.74 19.9 14.52 22.62 12.68 23.98 11.76'/></svg>") 0 0 / 100% 100% no-repeat;
   transform-origin: 50% 100%;
   transform: translateZ(-22px) rotateX(-90deg);
-}
-.pod-chair-back::before {
-  content: "";
-  position: absolute;
-  inset: 2px 2px 0;
-  clip-path: var(--pod-arch);
-  background: linear-gradient(180deg, var(--oak-hi), var(--oak) 45%, var(--oak-lo));
-}
-.pod-chair-back::after {
-  content: "";
-  position: absolute;
-  inset: 9px 8px 5px;
-  clip-path: var(--pod-arch);
-  background: linear-gradient(180deg, var(--leather-hi), var(--leather-lo));
 }
 .pod-chair-gem {
   position: absolute;
@@ -3695,21 +3711,26 @@ input.gtu-in-prefilled {
   box-shadow: 0 0 6px 2px rgba(181, 156, 255, 0.85);
 }
 .pod-chair.crest .pod-chair-back {
-  --pod-arch: polygon(0 100%, 0 30%, 4% 24%, 12% 22%, 16% 15%, 26% 11%, 34% 6%, 42% 3%, 50% 0, 58% 3%, 66% 6%, 74% 11%, 84% 15%, 88% 22%, 96% 24%, 100% 30%, 100% 100%);
+  background-image: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 50 60'><defs><linearGradient id='e' x2='0' y2='1'><stop stop-color='%235e3d2a'/><stop offset='1' stop-color='%232f1d13'/></linearGradient><linearGradient id='o' x2='0' y2='1'><stop stop-color='%23bb8f6c'/><stop offset='.45' stop-color='%23976b4c'/><stop offset='1' stop-color='%235e3d2a'/></linearGradient><linearGradient id='l' x2='0' y2='1'><stop stop-color='%234c3066'/><stop offset='1' stop-color='%231d1229'/></linearGradient></defs><polygon fill='url(%23e)' points='0 60 0 18 2 14.4 6 13.2 8 9 13 6.6 17 3.6 21 1.8 25 0 29 1.8 33 3.6 37 6.6 42 9 44 13.2 48 14.4 50 18 50 60'/><polygon fill='url(%23o)' points='2 60 2 19.4 3.84 15.92 7.52 14.76 9.36 10.7 13.96 8.38 17.64 5.48 21.32 3.74 25 2 28.68 3.74 32.36 5.48 36.04 8.38 40.64 10.7 42.48 14.76 46.16 15.92 48 19.4 48 60'/><polygon fill='url(%23l)' points='8 55 8 22.8 9.36 20.04 12.08 19.12 13.44 15.9 16.84 14.06 19.56 11.76 22.28 10.38 25 9 27.72 10.38 30.44 11.76 33.16 14.06 36.56 15.9 37.92 19.12 40.64 20.04 42 22.8 42 55'/></svg>");
 }
 /* Legs to the floor and open armrests, each a frame-shaped panel folded up
    off the floor or seat. The back and front pairs face out and in; the
-   side panels are also turned 90deg to run along the seat's sides. */
+   side panels are also turned 90deg to run along the seat's sides. Each
+   frame -- a rail across the top on two posts -- is a border with the oak
+   gradient as its image (sliced at the rail's and posts' share of the
+   box, so the gradient runs top to bottom as one piece), which leaves the
+   middle open without a clip-path (see .pod-chair-back). */
 .pod-chair-legs, .pod-chair-side, .pod-chair-arm {
   position: absolute;
   transform-origin: 50% 100%;
-  clip-path: polygon(0 0, 100% 0, 100% 100%, 84% 100%, 84% 24%, 16% 24%, 16% 100%, 0 100%);
-  background: linear-gradient(180deg, var(--oak), var(--oak-lo));
+  border-style: solid;
+  border-width: 5.76px var(--post) 0;
+  border-image: linear-gradient(180deg, var(--oak), var(--oak-lo)) 24% 16% 0;
 }
-.pod-chair-legs { width: 44px; height: 24px; left: -22px; }
+.pod-chair-legs { width: 44px; height: 24px; left: -22px; --post: 7.04px; }
 .pod-chair-legs.back { top: -5px; transform: translateZ(-46px) rotateX(-90deg); }
 .pod-chair-legs.front { top: -43px; transform: translateZ(-46px) rotateX(-90deg); }
-.pod-chair-side { width: 38px; height: 24px; left: -19px; top: -24px; }
+.pod-chair-side { width: 38px; height: 24px; left: -19px; top: -24px; --post: 6.08px; }
 .pod-chair-side.left { transform: translate3d(-21px, 0, -46px) rotateZ(90deg) rotateX(-90deg); }
 .pod-chair-side.right { transform: translate3d(21px, 0, -46px) rotateZ(90deg) rotateX(-90deg); }
 .pod-chair-arm {
@@ -3717,8 +3738,8 @@ input.gtu-in-prefilled {
   height: 15px;
   left: -19px;
   top: -15px;
-  clip-path: polygon(0 0, 100% 0, 100% 100%, 88% 100%, 88% 30%, 12% 30%, 12% 100%, 0 100%);
-  background: linear-gradient(180deg, var(--oak-hi), var(--oak) 40%, var(--oak-lo));
+  border-width: 4.5px 4.56px 0;
+  border-image: linear-gradient(180deg, var(--oak-hi), var(--oak) 40%, var(--oak-lo)) 30% 12% 0;
 }
 .pod-chair-arm.left { transform: translate3d(-22px, 0, -22px) rotateZ(90deg) rotateX(-90deg); }
 .pod-chair-arm.right { transform: translate3d(22px, 0, -22px) rotateZ(90deg) rotateX(-90deg); }
@@ -3726,20 +3747,47 @@ input.gtu-in-prefilled {
 .pod-chair.is-flagged .pod-chair-gem { background: #ff8a5c; box-shadow: 0 0 6px 2px rgba(255, 80, 40, 0.9); }
 
 /* The billboard: undoes the table's tilt and every turn so the orb always
-   faces you, floating inside the throne level with its arch. */
+   faces you, floating inside the throne level with its arch. One wrapper
+   per turn it undoes -- the throne's swivel, its place round the table,
+   the table's own turn -- each on that turn's exact timing, so every frame
+   of a glide cancels out and the orb never wobbles. All rotate about the
+   same axis, so their order doesn't matter. */
+.pod-bb, .pod-bb-a, .pod-bb-spin {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+  transform-style: preserve-3d;
+}
 .pod-bb {
+  transform: translateZ(52px) rotateZ(calc(-1 * var(--pod-sw, 0deg)));
+  transition: transform var(--pod-slide);
+}
+.pod-bb-a {
+  transform: rotateZ(calc(-1 * var(--pod-a, 0deg)));
+  transition: transform var(--pod-move);
+}
+.pod-bb-spin {
+  transform: rotateZ(calc(-1 * var(--pod-spin, 0deg)));
+  transition: transform var(--pod-turn);
+}
+/* Here, after the rules it overrides: the turns these undo are instant
+   under reduced motion (see .pod-chair), so these must be too. */
+@media (prefers-reduced-motion: reduce) {
+  .pod-bb, .pod-bb-a, .pod-bb-spin { transition: none; }
+}
+/* Opacity here, never on the wrappers: below 1 it would flatten their 3D. */
+.pod-bb-face {
   position: absolute;
   left: 0;
   top: 0;
   transform-origin: 0 0;
-  transform:
-    translateZ(52px)
-    rotateZ(calc(-1 * (var(--pod-a) + var(--pod-spin) + var(--pod-sw, 0deg))))
-    rotateX(calc(-1 * var(--pod-tilt)))
-    translate(-50%, -50%);
+  transform: rotateX(calc(-1 * var(--pod-tilt))) translate(-50%, -50%);
   transition: opacity 0.2s ease;
 }
-.pod-scene.has-focus .pod-chair:not(.is-focus) .pod-bb { opacity: 0.45; }
+.pod-scene.has-focus .pod-chair:not(.is-focus) .pod-bb-face { opacity: 0.45; }
 /* The padding is room for the orb's halo, not just a bigger tap target:
    the billboard renders as its own 3D layer, and with a tight box the
    box-shadow glow came out clipped into a visible square (confirmed in
@@ -3781,7 +3829,11 @@ input.gtu-in-prefilled {
   .pod-chair.ignite .pod-orb-float::after { animation: none; }
 }
 
-/* A dark glass sphere in a thin brass setting, so the fire is the light. */
+/* A dark glass sphere in a thin brass setting, so the fire is the light.
+   No overflow clip: everything inside is already round or sits inside the
+   circle, and clipping a handful of always-moving layers to a rounded edge
+   cost the GPU an extra offscreen pass per orb, every frame. Only the
+   reveal's sweep clips itself (.pod-orb-sweep), and only while it runs. */
 .pod-orb {
   --halo: rgba(164, 139, 255, 0.45);
   position: relative;
@@ -3789,7 +3841,6 @@ input.gtu-in-prefilled {
   width: 40px;
   height: 40px;
   border-radius: 50%;
-  overflow: hidden;
   background: radial-gradient(circle at 50% 64%, rgba(40, 20, 60, 0.6), rgba(8, 6, 14, 0.94) 72%);
   box-shadow:
     inset 0 -6px 10px rgba(0, 0, 0, 0.55),
@@ -3808,11 +3859,13 @@ input.gtu-in-prefilled {
 }
 @keyframes pod-fade-in { from { opacity: 0; } }
 
-/* Fire: five teardrop tongues over a hot core, each flickering on its own
-   clock so the flame never visibly repeats. Each tongue is hot at the base
-   and fades to its edge colour at the tip. The flames are the one
-   deliberate loop on this screen: scoped to the orbs, desynced per seat
-   (--pod-d), and frozen under reduced motion. */
+/* Fire: five teardrop tongues over a hot core, the three in front each
+   flickering on its own clock so the flame never visibly repeats; the two
+   small side tongues behind them hold still (one fewer thing per orb for
+   the phone to animate, and the front three hide that they don't move).
+   Each tongue is hot at the base and fades to its edge colour at the tip.
+   The flames are the one deliberate loop on this screen: scoped to the
+   orbs, desynced per seat (--pod-d), and frozen under reduced motion. */
 .pod-fire {
   position: absolute;
   inset: 0;
@@ -3845,8 +3898,8 @@ input.gtu-in-prefilled {
 .pod-tw1 { width: 25px; height: 25px; margin-left: -12.5px; bottom: 5px; animation-duration: 1.3s; animation-delay: var(--pod-d, 0s); }
 .pod-tw2 { width: 18px; height: 18px; margin-left: -9px; bottom: 4px; animation-duration: 0.95s; animation-delay: calc(var(--pod-d, 0s) - 0.35s); }
 .pod-tw3 { width: 11px; height: 11px; margin-left: -5.5px; bottom: 4px; animation-duration: 0.7s; animation-delay: calc(var(--pod-d, 0s) - 0.2s); }
-.pod-tw4 { width: 13px; height: 13px; margin-left: -14px; bottom: 4px; rotate: -16deg; animation-duration: 0.85s; animation-delay: calc(var(--pod-d, 0s) - 0.5s); }
-.pod-tw5 { width: 12px; height: 12px; margin-left: 2px; bottom: 4px; rotate: 18deg; animation-duration: 1.05s; animation-delay: calc(var(--pod-d, 0s) - 0.15s); }
+.pod-tw4 { width: 13px; height: 13px; margin-left: -14px; bottom: 4px; rotate: -16deg; animation: none; }
+.pod-tw5 { width: 12px; height: 12px; margin-left: 2px; bottom: 4px; rotate: 18deg; animation: none; }
 .pod-tw1 > i { background: linear-gradient(45deg, var(--c1) 8%, var(--e1) 55%, rgba(0, 0, 0, 0) 100%); opacity: 0.95; }
 .pod-tw2 > i { background: linear-gradient(45deg, var(--c2) 10%, var(--e2) 60%, rgba(0, 0, 0, 0) 100%); }
 .pod-tw3 > i { background: linear-gradient(45deg, #ffffff 10%, var(--c3) 55%, rgba(0, 0, 0, 0) 100%); }
@@ -3874,8 +3927,6 @@ input.gtu-in-prefilled {
 .pod-chair.is-flagged .pod-tw1 { animation-duration: 0.55s; }
 .pod-chair.is-flagged .pod-tw2 { animation-duration: 0.45s; }
 .pod-chair.is-flagged .pod-tw3 { animation-duration: 0.35s; }
-.pod-chair.is-flagged .pod-tw4 { animation-duration: 0.4s; }
-.pod-chair.is-flagged .pod-tw5 { animation-duration: 0.5s; }
 /* Revealed: each tongue burns in one of the deck's colours (setPodRevealFire
    writes the --r-* values), flaring once, front seat first. */
 .pod-chair.is-revealed { --e1: var(--r-e1); --c1: var(--r-c1); --e2: var(--r-e2); --c2: var(--r-c2); --c3: var(--r-c3); --ember: var(--r-c1); }
@@ -3892,7 +3943,7 @@ input.gtu-in-prefilled {
 }
 /* A re-render after a data refresh rebuilds nothing, but a restored pod
    that's already revealed shouldn't replay the flare on load either. */
-.pod-chair.no-enter .pod-fire, .pod-chair.no-enter .pod-orb-sweep { animation: none; }
+.pod-chair.no-enter .pod-fire, .pod-chair.no-enter .pod-orb-sweep::before { animation: none; }
 
 .pod-orb-crack {
   position: absolute;
@@ -3913,15 +3964,23 @@ input.gtu-in-prefilled {
     radial-gradient(circle at 50% 120%, rgba(0, 0, 0, 0) 45%, rgba(0, 0, 0, 0.3) 78%);
   pointer-events: none;
 }
-/* The foil sweep, once per orb at the reveal -- the app's signature moment. */
+/* The foil sweep, once per orb at the reveal -- the app's signature moment.
+   It clips itself to the glass (the orb doesn't, see .pod-orb). */
 .pod-orb-sweep {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  overflow: hidden;
+  pointer-events: none;
+}
+.pod-orb-sweep::before {
+  content: "";
   position: absolute;
   inset: 0;
   background: linear-gradient(115deg, transparent 40%, rgba(255, 255, 255, 0.55) 50%, transparent 60%);
   transform: translateX(-160%);
-  pointer-events: none;
 }
-.pod-chair.is-revealed .pod-orb-sweep {
+.pod-chair.is-revealed .pod-orb-sweep::before {
   animation: pod-orb-sweep 0.9s ease-in-out both;
   animation-delay: calc(var(--pod-i, 0) * 90ms + 300ms);
 }
@@ -3976,29 +4035,19 @@ input.gtu-in-prefilled {
   .pod-orb-aura { animation: none; }
 }
 
-/* Breathing: a slow swell of the whole glass. On the individual `scale`
-   property so it never fights the transform the ignite and seal pulses use. */
-.pod-orb { animation: pod-orb-breathe 4.3s ease-in-out infinite; animation-delay: var(--pod-d, 0s); }
-.pod-chair.ignite .pod-orb { animation: pod-orb-ignite 0.5s cubic-bezier(0.23, 1, 0.32, 1), pod-orb-breathe 4.3s ease-in-out infinite; }
-@keyframes pod-orb-breathe {
-  0%, 100% { scale: 1; }
-  50% { scale: 1.05; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .pod-orb { animation: none; }
-  .pod-chair.ignite .pod-orb { animation: pod-fade-in 0.2s ease; }
-}
-
 /* The living thing inside the glass: a slow swirl of plasma under the fire,
-   churning faster when the orb is agitated. */
+   churning faster when the orb is agitated. It fades into the dark glass
+   by painting that glass over its own rim (the top layer, which looks the
+   same at any angle, so it can turn with the swirl) -- a mask and a blur
+   did this once, and cost the GPU two offscreen passes per orb, every
+   frame, on the one layer that never stops turning. */
 .pod-plasma {
   position: absolute;
   inset: 4px;
   border-radius: 50%;
-  background: conic-gradient(from 0deg, rgba(0, 0, 0, 0), var(--c2) 14%, rgba(0, 0, 0, 0) 32%, var(--e2) 52%, rgba(0, 0, 0, 0) 70%, var(--c1) 88%, rgba(0, 0, 0, 0));
-  -webkit-mask: radial-gradient(circle closest-side, #000 35%, rgba(0, 0, 0, 0) 100%);
-  mask: radial-gradient(circle closest-side, #000 35%, rgba(0, 0, 0, 0) 100%);
-  filter: blur(2.5px);
+  background:
+    radial-gradient(circle closest-side, rgba(8, 6, 14, 0) 30%, rgba(8, 6, 14, 0.6) 72%, rgba(8, 6, 14, 0.94) 100%),
+    conic-gradient(from 0deg, rgba(0, 0, 0, 0), var(--c2) 14%, rgba(0, 0, 0, 0) 32%, var(--e2) 52%, rgba(0, 0, 0, 0) 70%, var(--c1) 88%, rgba(0, 0, 0, 0));
   opacity: calc(var(--energy) * 0.85);
   animation: pod-plasma-swirl 7s linear infinite;
   animation-delay: var(--pod-d, 0s);
@@ -4013,10 +4062,10 @@ input.gtu-in-prefilled {
 
 /* The flame that rises out of the glass: three tall tongues, hot at the
    base and tearing off at the tip, leaning with a slow wind. Standing
-   height follows the state (--flame-h) and lifts with each glance. */
-/* Sized well past the tongues it holds: the mask and blur both clip to this
-   box, and a tight one cut the stretched tongues off square (confirmed in
-   testing). */
+   height follows the state (--flame-h) and lifts with each glance. The
+   two big ones flicker; the small one on the right holds still behind
+   them. Each tongue fades out toward its own tip -- a mask over the whole
+   flame did that once, and re-rendered all three offscreen every frame. */
 .pod-flame {
   position: absolute;
   left: 50%;
@@ -4026,8 +4075,6 @@ input.gtu-in-prefilled {
   margin-left: -24px;
   transform-origin: 50% 100%;
   scale: var(--flame-h);
-  -webkit-mask: linear-gradient(to top, #000 40%, rgba(0, 0, 0, 0) 92%);
-  mask: linear-gradient(to top, #000 40%, rgba(0, 0, 0, 0) 92%);
   pointer-events: none;
   animation: pod-flame-wind 5.3s ease-in-out infinite alternate, pod-flame-glance var(--glance) ease-in-out infinite;
   animation-delay: var(--pod-d, 0s), var(--pod-d, 0s);
@@ -4057,9 +4104,9 @@ input.gtu-in-prefilled {
 }
 .pod-pf1 { width: 18px; height: 18px; margin-left: -9px; animation-delay: var(--pod-d, 0s); }
 .pod-pf2 { width: 12px; height: 12px; margin-left: -10px; animation-duration: calc(var(--flick) * 0.8); animation-delay: calc(var(--pod-d, 0s) - 0.4s); }
-.pod-pf3 { width: 11px; height: 11px; margin-left: -1px; animation-duration: calc(var(--flick) * 1.2); animation-delay: calc(var(--pod-d, 0s) - 0.7s); }
-.pod-pf1 > i { background: linear-gradient(45deg, var(--c1) 6%, var(--e1) 55%, rgba(0, 0, 0, 0) 100%); opacity: 0.85; }
-.pod-pf2 > i, .pod-pf3 > i { background: linear-gradient(45deg, var(--c2) 6%, var(--e2) 55%, rgba(0, 0, 0, 0) 100%); opacity: 0.75; }
+.pod-pf3 { width: 11px; height: 11px; margin-left: -1px; animation: none; }
+.pod-pf1 > i { background: linear-gradient(45deg, var(--c1) 6%, var(--e1) 55%, rgba(0, 0, 0, 0) 100%); opacity: 0.8; }
+.pod-pf2 > i, .pod-pf3 > i { background: linear-gradient(45deg, var(--c2) 6%, var(--e2) 55%, rgba(0, 0, 0, 0) 100%); opacity: 0.7; }
 @keyframes pod-pf-flick {
   0%, 100% { transform: scale(1, 1) skewX(0deg); }
   18% { transform: scale(0.9, 1.18) skewX(6deg); }
@@ -4073,8 +4120,9 @@ input.gtu-in-prefilled {
 }
 
 /* Embers curl up out of the flame on paths that widen as they rise; sparks
-   are smaller, hotter and quicker. Sealed throws a few embers, revealed
-   more, flagged everything at once. A waiting pilot flame throws none. */
+   are smaller, hotter and quicker. Sealed throws two embers, revealed and
+   flagged four and a spark (flagged's come quicker). A waiting pilot flame
+   throws none. */
 .pod-ember {
   position: absolute;
   left: 50%;
@@ -4090,8 +4138,8 @@ input.gtu-in-prefilled {
   pointer-events: none;
 }
 .pod-ember.spark { width: 2px; height: 2px; margin-left: -1px; background: var(--c3); box-shadow: 0 0 3px 1px var(--c3); }
-.pod-chair.is-sealed .pod-ember:is(.e1, .e2, .e3, .e4),
-.pod-chair.is-revealed .pod-ember:not(.s2),
+.pod-chair.is-sealed .pod-ember:is(.e1, .e3),
+.pod-chair.is-revealed .pod-ember,
 .pod-chair.is-flagged .pod-ember {
   display: block;
   animation: pod-ember-curl var(--ember-dur) ease-out infinite;
@@ -4100,13 +4148,10 @@ input.gtu-in-prefilled {
 .pod-chair.is-flagged .pod-ember.spark { animation-name: pod-spark-fly; animation-duration: calc(var(--ember-dur) * 0.5); }
 /* !important: the state rules' animation shorthand above resets the delay. */
 .pod-ember.e1 { --dx: -7px; animation-delay: calc(var(--pod-d, 0s) - 0.2s) !important; }
-.pod-ember.e2 { --dx: 6px; animation-delay: calc(var(--pod-d, 0s) - 0.9s) !important; }
-.pod-ember.e3 { --dx: -3px; animation-delay: calc(var(--pod-d, 0s) - 1.6s) !important; }
-.pod-ember.e4 { --dx: 9px; animation-delay: calc(var(--pod-d, 0s) - 0.55s) !important; }
-.pod-ember.e5 { --dx: -10px; animation-delay: calc(var(--pod-d, 0s) - 1.25s) !important; }
-.pod-ember.e6 { --dx: 4px; animation-delay: calc(var(--pod-d, 0s) - 1.9s) !important; }
+.pod-ember.e2 { --dx: 6px; animation-delay: calc(var(--pod-d, 0s) - 0.75s) !important; }
+.pod-ember.e3 { --dx: -3px; animation-delay: calc(var(--pod-d, 0s) - 1.3s) !important; }
+.pod-ember.e4 { --dx: 9px; animation-delay: calc(var(--pod-d, 0s) - 1.85s) !important; }
 .pod-ember.s1 { --dx: -14px; animation-delay: calc(var(--pod-d, 0s) - 0.3s) !important; }
-.pod-ember.s2 { --dx: 15px; animation-delay: calc(var(--pod-d, 0s) - 0.75s) !important; }
 @keyframes pod-ember-curl {
   0% { translate: 0 0; scale: 1; opacity: 0; }
   12% { opacity: 1; }
@@ -4125,8 +4170,9 @@ input.gtu-in-prefilled {
 
 /* The orb lights its surroundings: a pool of its colour on the seat, a
    wash up the throne back's leather, and a glow on the table in front of
-   it, all flickering with the flame. Their strength follows the state
-   (--light): faint for a pilot flame, strongest at the reveal. */
+   it. The two you can see flicker with the flame; the seat's pool, mostly
+   under the orb, holds steady. Their strength follows the state (--light):
+   faint for a pilot flame, strongest at the reveal. */
 .pod-chair-light {
   position: absolute;
   border-radius: 50%;
@@ -4136,7 +4182,7 @@ input.gtu-in-prefilled {
   animation: pod-light-flicker 2.3s ease-in-out infinite;
   animation-delay: var(--pod-d, 0s);
 }
-.pod-chair-light.seat { --lk: calc(var(--light) * 0.6); width: 74px; height: 66px; left: -37px; top: -33px; transform: translateZ(-21px); }
+.pod-chair-light.seat { --lk: calc(var(--light) * 0.6); width: 74px; height: 66px; left: -37px; top: -33px; transform: translateZ(-21px); animation: none; }
 .pod-chair-light.table { --lk: calc(var(--light) * 0.5); width: 92px; height: 64px; left: -46px; top: -78px; transform: translateZ(1.5px); }
 .pod-chair-glow {
   --lk: calc(var(--light) * 0.75);
