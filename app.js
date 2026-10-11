@@ -7152,7 +7152,8 @@ function syncViewportHeight() {
 
   const root = document.documentElement;
   if ((window.scrollY || root.scrollTop) > 0) {
-    root.style.setProperty("--app-vh", `${readViewportHeight()}px`);
+    syncedViewportHeight = readViewportHeight();
+    root.style.setProperty("--app-vh", `${syncedViewportHeight}px`);
     return;
   }
 
@@ -7161,7 +7162,8 @@ function syncViewportHeight() {
   const finish = () => {
     if (finished) return; // the resize listener and the safety-net timeout below can both fire
     finished = true;
-    root.style.setProperty("--app-vh", `${readViewportHeight()}px`);
+    syncedViewportHeight = readViewportHeight();
+    root.style.setProperty("--app-vh", `${syncedViewportHeight}px`);
     root.style.minHeight = "";
     syncingViewportHeight = false;
   };
@@ -7189,12 +7191,26 @@ function syncViewportHeight() {
   setTimeout(finish, 500);
 }
 
+// Only a change in height re-syncs. On a desktop with classic scrollbars,
+// the 4000px stretch above makes a scrollbar appear, which narrows the
+// visual viewport and fires its resize; the stretch ending removes the
+// scrollbar and fires it again -- which, before this check, started the
+// next stretch, forever. On any page short enough to fit the window that
+// flipped the scrollbar on and off every frame and shook the whole page
+// sideways (seen on two PCs, Oct 2026; phones overlay their scrollbars,
+// so they never showed it). --app-vh only cares about height anyway.
+let syncedViewportHeight = null;
+function onViewportResize() {
+  if (readViewportHeight() === syncedViewportHeight) return;
+  syncViewportHeight();
+}
+
 function initViewportHeight() {
   syncViewportHeight();
-  window.addEventListener("resize", syncViewportHeight);
-  window.addEventListener("orientationchange", syncViewportHeight);
+  window.addEventListener("resize", onViewportResize);
+  window.addEventListener("orientationchange", onViewportResize);
   if (window.visualViewport) {
-    window.visualViewport.addEventListener("resize", syncViewportHeight);
+    window.visualViewport.addEventListener("resize", onViewportResize);
   }
 }
 
