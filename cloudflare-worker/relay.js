@@ -110,6 +110,7 @@
  *              wrangler secret put DISCORD_CLIENT_SECRET
  *              wrangler secret put INTERNAL_API_KEY
  *              wrangler secret put SEASON_ANNOUNCE_API_KEY
+ *              wrangler secret put POD_BRIDGE_KEY   (shared with archidekt-trading-app: GET /internal/player-decks)
  * Bindings:    KV namespace bound as DECK_CACHE
  *              D1 database bound as DB
  */
@@ -2034,6 +2035,50 @@ async function computeDeckWinRatesData(env, seasonId) {
   return { generated_at: new Date().toISOString(), players };
 }
 
+// ---------- GET /internal/player-decks (Amass pod bridge) ----------
+// For archidekt-trading-app's "Your pod decks" card: one player's decks
+// this season with their records, looked up by Discord id (both apps sign
+// in with Discord). Guarded by POD_BRIDGE_KEY in X-Pod-Bridge-Key -- a
+// secret only the two workers hold, the reverse direction of
+// SEASON_ANNOUNCE_API_KEY. Read-only, one player at a time.
+async function handleInternalPlayerDecks(request, env, url) {
+  const key = request.headers.get("X-Pod-Bridge-Key");
+  if (!key || !env.POD_BRIDGE_KEY || key !== env.POD_BRIDGE_KEY) {
+    return jsonResponse({ error: "Not allowed" }, 401);
+  }
+  const discordId = url.searchParams.get("discordId") || "";
+  if (!/^[0-9]{5,25}$/.test(discordId)) return jsonResponse({ error: "Bad discordId" }, 400);
+  const player = await env.DB.prepare("SELECT id, name FROM players WHERE discord_user_id = ?").bind(discordId).first();
+  if (!player) return jsonResponse({ player: null, decks: [] }, 200, { "Cache-Control": "no-store" });
+
+  const seasonId = await getCurrentSeasonId(env);
+  const { results } = await env.DB.prepare(`
+    SELECT d.id AS deck_id, d.name, d.color_identity,
+           COUNT(gr.result) AS games_played,
+           COALESCE(SUM(CASE WHEN gr.result = 1 THEN 1 ELSE 0 END), 0) AS wins,
+           AVG(g.pod_size) AS avg_pod_size
+    FROM decks d
+    LEFT JOIN game_results gr ON gr.deck_id = d.id
+      AND gr.game_id IN (SELECT id FROM games WHERE season_id = ?)
+    LEFT JOIN games g ON g.id = gr.game_id
+    WHERE d.player_id = ? AND d.archived = 0
+    GROUP BY d.id
+    ORDER BY games_played DESC, d.name
+  `).bind(seasonId, player.id).all();
+
+  return jsonResponse({
+    player: { name: player.name },
+    decks: results.map((d) => ({
+      podDeckId: d.deck_id,
+      name: d.name,
+      colorIdentity: d.color_identity || null,
+      gamesPlayed: d.games_played,
+      wins: d.wins,
+      avgPodSize: d.avg_pod_size ? Math.round(d.avg_pod_size * 10) / 10 : null,
+    })),
+  }, 200, { "Cache-Control": "no-store" });
+}
+
 async function handleDeckWinRates(env) {
   let data;
   try {
@@ -3945,6 +3990,11 @@ export default {
 
     if (request.method === "GET" && url.pathname === "/auth/me") {
       return handleAuthMe(request, env);
+    }
+
+    // Amass pod bridge: its own shared key, checked inside the handler.
+    if (request.method === "GET" && url.pathname === "/internal/player-decks") {
+      return handleInternalPlayerDecks(request, env, url);
     }
 
     // Everything below requires a valid Discord session -- the whole app,
