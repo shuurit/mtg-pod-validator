@@ -137,14 +137,17 @@ works without one.
   playgroup.gg's active league moves on. The first read of a finished
   season also locks its winners and runner-ups into `season_awards` for
   good. Powers the Trophies tab's Season Standings view.
-- `POST /achievements/backfill[?force=true]` — one-time (safe-to-rerun)
-  pass that fills in `game_event_stats` for games logged before that table
-  existed, by re-fetching each one's event log from playgroup.gg. Capped
-  per call (`MAX_EVENT_STATS_BACKFILL_PER_RUN`); call again if the
-  response says `remaining: true`. `force=true` reprocesses every game
-  regardless of whether it already has a stats row — needed whenever a new
-  column gets added to what's captured, since the default run only looks
-  at games with no row at all.
+- `POST /achievements/backfill[?force=true][&season=<id>][&after=<game id>]`
+  — one-time (safe-to-rerun) pass that fills in `game_event_stats` (plus
+  `games.duration_seconds`/`total_rounds` and the league Elo on
+  `game_results`) for games logged before those existed, by re-fetching
+  each one's event log from playgroup.gg. Only ever touches one season:
+  `season` if given, otherwise the current one. Capped per call
+  (`MAX_EVENT_STATS_BACKFILL_PER_RUN`); call again if the response says
+  `remaining: true`, passing its `nextAfter` as `after`. `force=true`
+  reprocesses every game in the season regardless of whether it already
+  has a stats row — needed whenever a new column gets added to what's
+  captured, since the default run only looks at games with no row at all.
 - `POST /achievements/backfill-runner-ups[?dryRun=true]` — fills the
   runner-up columns on `season_awards` rows locked in before those columns
   existed. Safe to rerun: it only touches rows that have no runner-up yet

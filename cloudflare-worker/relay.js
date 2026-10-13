@@ -150,11 +150,12 @@ const MAX_COMMANDER_LOOKUPS_PER_RUN = 12;
 const COMMANDER_NAME_MAX_AGE_MS = 21 * 24 * 60 * 60 * 1000; // 21 days
 
 // POST /achievements/backfill's own per-run cap, same reasoning as the two
-// above -- each game backfilled is one pgFetch call, well under Workers'
-// 50-subrequest limit even on its own, but capped so this stays callable
-// again rather than assuming the whole historical backlog always fits in
-// one run.
-const MAX_EVENT_STATS_BACKFILL_PER_RUN = 30;
+// above. Each game is one pgFetch for its event log plus one elo_history
+// call per deck not already fetched this run (getLeagueEloHistory's
+// cache) -- 12 games of a ~15-deck league stays under Workers'
+// 50-subrequest limit. Capped so this stays callable again rather than
+// assuming the whole backlog always fits in one run.
+const MAX_EVENT_STATS_BACKFILL_PER_RUN = 12;
 
 // See computePlaygroupGames -- a game's league classification is trusted
 // forever once it's older than this, but stays open to correction while
@@ -915,11 +916,15 @@ function emptyEventTotals() {
   return {
     damage_dealt: 0, healing_done: 0, knockouts: 0, damage_taken: 0, healing_received: 0, self_rating: null,
     pauses_called: 0, pause_seconds: 0, undos: 0, longest_turn_seconds: 0, shortest_turn_seconds: null,
-    turn_count: 0, total_turn_seconds: 0,
+    turn_count: 0, total_turn_seconds: 0, life_lost: 0, poison_received: 0, cards_milled: 0,
+    mulligan_events: 0, kept_hand: false,
   };
 }
 
-async function computeAndStoreGameEventStats(env, gameId, playgroupGameId) {
+// eloCache (optional) is shared across calls in one backfill run: a deck's
+// league elo_history covers every game it played that league, so it only
+// needs fetching once per run, not once per game.
+async function computeAndStoreGameEventStats(env, gameId, playgroupGameId, eloCache = new Map()) {
   if (!playgroupGameId) return;
 
   const res = await pgFetch(`/playgroups/${PLAYGROUP_ID}/games/${playgroupGameId}?include_events=true`, env);
@@ -971,6 +976,20 @@ async function computeAndStoreGameEventStats(env, gameId, playgroupGameId) {
       if (playerId) get(playerId).undos += 1;
     } else if (e.kind === "pause_start") {
       if (playerId) get(playerId).pauses_called += 1;
+    } else if (e.kind === "life_loss" || e.kind === "poison_tokens" || e.kind === "mill") {
+      // Credited to whoever lost the life / took the poison / got milled.
+      // Not yet seen in a real Amass game, so which side playgroup.gg puts
+      // the affected player on isn't confirmed -- receiver first, then the
+      // event's own user_id for a self-inflicted event with no receiver.
+      const affected = e.receiver_user_id != null ? receiverPlayerId : playerId;
+      if (affected) {
+        const field = e.kind === "life_loss" ? "life_lost" : e.kind === "poison_tokens" ? "poison_received" : "cards_milled";
+        get(affected)[field] += e.amount || 0;
+      }
+    } else if (e.kind === "mulligan") {
+      if (playerId) get(playerId).mulligan_events += 1;
+    } else if (e.kind === "keep_hand") {
+      if (playerId) get(playerId).kept_hand = true;
     }
   }
   for (const [playerId, receivers] of Object.entries(knockoutReceiversByPlayer)) {
@@ -1028,17 +1047,22 @@ async function computeAndStoreGameEventStats(env, gameId, playgroupGameId) {
     if (!playerId) continue;
     const t = get(playerId);
     const endingLife = typeof raw.life_amount === "number"
-      ? raw.life_amount - t.damage_taken + t.healing_received
+      ? raw.life_amount - t.damage_taken - t.life_lost + t.healing_received
       : null;
+    // participations' mulligans_taken is often null even when the event
+    // log has the whole opening-hand sequence. A keep_hand event means that
+    // sequence was recorded, so the mulligan events before it are a real
+    // count (0 included); no keep_hand means no way to tell, so null.
+    const mulligans = p.mulligans_taken ?? (t.kept_hand ? t.mulligan_events : null);
     stmts.push(env.DB.prepare(`
       INSERT INTO game_event_stats (
         game_id, player_id, damage_dealt, healing_done, knockouts,
         fun_rating, salt_rating, mulligans_taken, self_rating,
         damage_taken, healing_received, ending_life,
         pauses_called, pause_seconds, undos, longest_turn_seconds, shortest_turn_seconds,
-        turn_count, total_turn_seconds
+        turn_count, total_turn_seconds, life_lost, poison_received, cards_milled
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (game_id, player_id) DO UPDATE SET
         damage_dealt = excluded.damage_dealt, healing_done = excluded.healing_done, knockouts = excluded.knockouts,
         fun_rating = excluded.fun_rating, salt_rating = excluded.salt_rating, mulligans_taken = excluded.mulligans_taken,
@@ -1046,22 +1070,71 @@ async function computeAndStoreGameEventStats(env, gameId, playgroupGameId) {
         healing_received = excluded.healing_received, ending_life = excluded.ending_life,
         pauses_called = excluded.pauses_called, pause_seconds = excluded.pause_seconds, undos = excluded.undos,
         longest_turn_seconds = excluded.longest_turn_seconds, shortest_turn_seconds = excluded.shortest_turn_seconds,
-        turn_count = excluded.turn_count, total_turn_seconds = excluded.total_turn_seconds
+        turn_count = excluded.turn_count, total_turn_seconds = excluded.total_turn_seconds,
+        life_lost = excluded.life_lost, poison_received = excluded.poison_received, cards_milled = excluded.cards_milled
     `).bind(
       gameId, playerId, t.damage_dealt, t.healing_done, t.knockouts,
-      p.fun_rating ?? null, p.salt_rating ?? null, p.mulligans_taken ?? null, t.self_rating,
+      p.fun_rating ?? null, p.salt_rating ?? null, mulligans, t.self_rating,
       t.damage_taken, t.healing_received, endingLife,
       t.pauses_called, t.pause_seconds, t.undos, t.longest_turn_seconds, t.shortest_turn_seconds,
-      t.turn_count, t.total_turn_seconds
+      t.turn_count, t.total_turn_seconds, t.life_lost, t.poison_received, t.cards_milled
     ));
   }
 
+  // League Elo per participant, scoped to the league of the season this
+  // game is logged under -- never global, never the currently active
+  // league (a backfilled Season 3 game must not get Season 4 ratings).
+  // A season with no playgroup_league_id (spreadsheet-migrated) gets none.
+  const seasonRow = await env.DB.prepare(
+    "SELECT s.playgroup_league_id FROM games g JOIN seasons s ON s.id = g.season_id WHERE g.id = ?"
+  ).bind(gameId).first();
+  const leagueId = seasonRow && seasonRow.playgroup_league_id;
+  if (leagueId) {
+    await Promise.all((raw.participations || []).map(async p => {
+      const playerId = userIdToPlayerId[p.user_id];
+      if (!playerId || !p.deck_id) return;
+      const history = await getLeagueEloHistory(env, p.deck_id, leagueId, eloCache);
+      const entry = history && history.find(h => h.game_id === Number(playgroupGameId));
+      if (!entry) return;
+      stmts.push(env.DB.prepare("UPDATE game_results SET elo_rating = ?, elo_delta = ? WHERE game_id = ? AND player_id = ?")
+        .bind(entry.rating ?? null, entry.delta ?? null, gameId, playerId));
+    }));
+  }
+
+  // Raw wall-clock length, pauses included. Same Date parsing of
+  // playgroup.gg's "YYYY-MM-DD HH:MM:SS +ZZZZ" timestamps the pass above
+  // already relies on for happened_at.
+  const startedMs = new Date(raw.started_at).getTime();
+  const endedMs = new Date(raw.ended_at).getTime();
+  const durationSeconds = Number.isFinite(startedMs) && Number.isFinite(endedMs) && endedMs >= startedMs
+    ? Math.round((endedMs - startedMs) / 1000)
+    : null;
+
   // Game-level facts (not per-player) -- one UPDATE alongside the
   // per-participant INSERTs above, same batch/transaction.
-  stmts.push(env.DB.prepare("UPDATE games SET win_con = ?, starting_player_id = ? WHERE id = ?")
-    .bind(raw.win_con ?? null, startingPlayerId, gameId));
+  stmts.push(env.DB.prepare("UPDATE games SET win_con = ?, starting_player_id = ?, duration_seconds = ?, total_rounds = ? WHERE id = ?")
+    .bind(raw.win_con ?? null, startingPlayerId, durationSeconds, raw.total_rounds ?? null, gameId));
 
   if (stmts.length > 0) await env.DB.batch(stmts);
+}
+
+// One deck's Elo history within one league, fetched at most once per
+// eloCache. null on any failure -- Elo is a nice-to-have, never a reason
+// to fail the rest of a game's stats.
+async function getLeagueEloHistory(env, pgDeckId, leagueId, eloCache) {
+  const key = `${pgDeckId}:${leagueId}`;
+  if (!eloCache.has(key)) {
+    eloCache.set(key, (async () => {
+      const res = await pgFetch(
+        `/decks/${pgDeckId}/elo_history?playgroup_id=${PLAYGROUP_ID}&league_id=${leagueId}&include_archived=true`,
+        env
+      );
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.history || [];
+    })().catch(() => null));
+  }
+  return eloCache.get(key);
 }
 
 // New players + new decks for existing players, in one combined write --
@@ -1574,11 +1647,25 @@ function toCanonicalColorString(colors) {
 // handleGamesWrite's post-discord dispatch): this is a GET endpoint, so a
 // slow or failed write here should never affect the response app.js is
 // waiting on. Only writes rows that actually changed, not a blind rewrite of
-// every tracked deck on every request. Named for both fields now, not just
-// the one it originally shipped for.
+// every tracked deck on every request. Also carries the deck-identity
+// columns in SYNCED_DECK_DETAIL_FIELDS (commander art, partner, decklist
+// link, playgroup.gg bracket).
+// The deck-identity columns synced straight across, as {D1 column:
+// computeRosterDiff field}. Unlike color_identity, a null here is a real
+// value (a partner removed, a decklist link cleared) and is written as one.
+const SYNCED_DECK_DETAIL_FIELDS = {
+  commander_scryfall_id: "commander_scryfall_id",
+  commander_art_url: "commander_art_url",
+  partner_name: "partner_name",
+  partner_art_url: "partner_art_url",
+  decklist_url: "decklist_url",
+  playgroup_bracket: "bracket",
+};
+
 async function syncDecksFromPlaygroup(env, decksByUsername) {
   const { results: tracked } = await env.DB.prepare(
-    "SELECT id, playgroup_deck_id, archived, color_identity FROM decks WHERE playgroup_deck_id IS NOT NULL"
+    `SELECT id, playgroup_deck_id, archived, color_identity, ${Object.keys(SYNCED_DECK_DETAIL_FIELDS).join(", ")}
+     FROM decks WHERE playgroup_deck_id IS NOT NULL`
   ).all();
   const byPgId = new Map(tracked.map(d => [d.playgroup_deck_id, d]));
 
@@ -1587,19 +1674,21 @@ async function syncDecksFromPlaygroup(env, decksByUsername) {
     for (const d of decks) {
       const row = byPgId.get(String(d.id));
       if (!row) continue;
+      const changes = {};
       const liveArchived = d.archived ? 1 : 0;
+      if (row.archived !== liveArchived) changes.archived = liveArchived;
       // d.color_identity here is already the canonical string (see
       // computeRosterDiff below) -- compared directly against the stored
       // value, no re-derivation.
-      const archivedChanged = row.archived !== liveArchived;
-      const colorChanged = d.color_identity !== null && d.color_identity !== row.color_identity;
-      if (archivedChanged && colorChanged) {
-        stmts.push(env.DB.prepare("UPDATE decks SET archived = ?, color_identity = ? WHERE id = ?").bind(liveArchived, d.color_identity, row.id));
-      } else if (archivedChanged) {
-        stmts.push(env.DB.prepare("UPDATE decks SET archived = ? WHERE id = ?").bind(liveArchived, row.id));
-      } else if (colorChanged) {
-        stmts.push(env.DB.prepare("UPDATE decks SET color_identity = ? WHERE id = ?").bind(d.color_identity, row.id));
+      if (d.color_identity !== null && d.color_identity !== row.color_identity) changes.color_identity = d.color_identity;
+      for (const [column, field] of Object.entries(SYNCED_DECK_DETAIL_FIELDS)) {
+        const live = d[field] ?? null;
+        if (live !== row[column]) changes[column] = live;
       }
+      const columns = Object.keys(changes);
+      if (columns.length === 0) continue;
+      stmts.push(env.DB.prepare(`UPDATE decks SET ${columns.map(c => `${c} = ?`).join(", ")} WHERE id = ?`)
+        .bind(...columns.map(c => changes[c]), row.id));
     }
   }
   if (stmts.length) await env.DB.batch(stmts);
@@ -1641,6 +1730,11 @@ async function computeRosterDiff(env, ctx) {
       bracket: d.bracket ?? null,
       archived: !!d.archived,
       color_identity: toCanonicalColorString(d.color_identity),
+      commander_scryfall_id: (d.commander && d.commander.scryfall_id) || null,
+      commander_art_url: (d.commander && d.commander.art_crop_url) || null,
+      partner_name: (d.partner && d.partner.name) || null,
+      partner_art_url: (d.partner && d.partner.art_crop_url) || null,
+      decklist_url: d.decklist_url || null,
     }));
   }));
 
@@ -1992,15 +2086,35 @@ async function computeDeckWinRatesData(env, seasonId) {
   const { results: deckRows } = await env.DB.prepare(`
     SELECT d.id AS deck_id, d.player_id, p.name AS player, d.name AS deck,
            COUNT(gr.result) AS games_played,
-           COALESCE(SUM(CASE WHEN gr.result = 1 THEN 1 ELSE 0 END), 0) AS wins
+           COALESCE(SUM(CASE WHEN gr.result = 1 THEN 1 ELSE 0 END), 0) AS wins,
+           AVG(s.mulligans_taken) AS avg_mulligans,
+           AVG(CASE WHEN gr.result = 1 THEN g.total_rounds END) AS avg_winning_turn,
+           MAX(g.played_at) AS last_played,
+           (SELECT gr2.elo_rating FROM game_results gr2 JOIN games g2 ON g2.id = gr2.game_id
+             WHERE gr2.deck_id = d.id AND g2.season_id = ? AND gr2.elo_rating IS NOT NULL
+             ORDER BY g2.played_at DESC, g2.id DESC LIMIT 1) AS elo_rating
     FROM decks d
     JOIN players p ON p.id = d.player_id
     LEFT JOIN game_results gr ON gr.deck_id = d.id
       AND gr.game_id IN (SELECT id FROM games WHERE season_id = ?)
+    LEFT JOIN games g ON g.id = gr.game_id
+    LEFT JOIN game_event_stats s ON s.game_id = gr.game_id AND s.player_id = gr.player_id
     WHERE p.playgroup_user_id IS NOT NULL AND p.active = 1
     GROUP BY d.id
     ORDER BY d.id
+  `).bind(seasonId, seasonId).all();
+
+  // Each deck's most common way of winning this season. Ties go to the
+  // win_con that came up first alphabetically, just so it's stable.
+  const { results: winConRows } = await env.DB.prepare(`
+    SELECT gr.deck_id, g.win_con, COUNT(*) AS n
+    FROM game_results gr JOIN games g ON g.id = gr.game_id
+    WHERE g.season_id = ? AND gr.result = 1 AND g.win_con IS NOT NULL
+    GROUP BY gr.deck_id, g.win_con
+    ORDER BY gr.deck_id, n DESC, g.win_con
   `).bind(seasonId).all();
+  const topWinConByDeck = {};
+  for (const r of winConRows) if (!(r.deck_id in topWinConByDeck)) topWinConByDeck[r.deck_id] = r.win_con;
 
   const { results: playerRows } = await env.DB.prepare(`
     SELECT p.id AS player_id, p.name AS player,
@@ -2021,6 +2135,13 @@ async function computeDeckWinRatesData(env, seasonId) {
       gamesPlayed: d.games_played,
       wins: d.wins,
       winRate: d.games_played ? d.wins / d.games_played : 0,
+      // Season-only, from this season's logged games -- not playgroup.gg's
+      // own Deck averages, which span every game the deck ever played.
+      avgMulligans: d.avg_mulligans,
+      avgWinningTurn: d.avg_winning_turn,
+      topWinCon: topWinConByDeck[d.deck_id] ?? null,
+      lastPlayed: d.last_played,
+      eloRating: d.elo_rating,
     });
   }
 
@@ -3253,28 +3374,41 @@ async function handleRunnerUpBackfill(env, dryRun) {
 // the default NOT EXISTS check would otherwise skip every game that
 // already ran once. Safe either way: computeAndStoreGameEventStats's own
 // ON CONFLICT DO UPDATE overwrites in place, never duplicates.
-async function handleAchievementsBackfill(env, force) {
+//
+// Scoped to one season (?season=<id>, default the current one), so a
+// forced rerun only ever touches that league's games. `after` is the last
+// game id a forced run processed -- force has no "already done" check to
+// page by, so the caller passes back the `nextAfter` it was given.
+async function handleAchievementsBackfill(env, force, seasonParam, afterParam) {
+  const seasonId = seasonParam ? Number(seasonParam) : await getCurrentSeasonId(env);
+  if (!Number.isInteger(seasonId)) return jsonResponse({ error: "?season must be a season id" }, 400);
+  const after = afterParam ? Number(afterParam) : 0;
   const { results: rows } = await env.DB.prepare(`
     SELECT g.id AS game_id, g.playgroup_game_id
     FROM games g
-    WHERE g.playgroup_game_id IS NOT NULL
+    WHERE g.season_id = ? AND g.playgroup_game_id IS NOT NULL AND g.id > ?
       ${force ? "" : "AND NOT EXISTS (SELECT 1 FROM game_event_stats s WHERE s.game_id = g.id)"}
     ORDER BY g.id
     LIMIT ?
-  `).bind(MAX_EVENT_STATS_BACKFILL_PER_RUN).all();
+  `).bind(seasonId, after, MAX_EVENT_STATS_BACKFILL_PER_RUN).all();
 
   let processed = 0;
   const errors = [];
+  const eloCache = new Map();
   for (const row of rows) {
     try {
-      await computeAndStoreGameEventStats(env, row.game_id, row.playgroup_game_id);
+      await computeAndStoreGameEventStats(env, row.game_id, row.playgroup_game_id, eloCache);
       processed++;
     } catch (err) {
       errors.push({ gameId: row.game_id, error: String(err.message || err) });
     }
   }
 
-  return jsonResponse({ processed, remaining: rows.length === MAX_EVENT_STATS_BACKFILL_PER_RUN, errors }, 200);
+  const remaining = rows.length === MAX_EVENT_STATS_BACKFILL_PER_RUN;
+  return jsonResponse({
+    seasonId, processed, remaining, errors,
+    nextAfter: remaining ? rows[rows.length - 1].game_id : null,
+  }, 200);
 }
 
 // Run just before a season's trophies are locked in at close: fetch event
@@ -4076,7 +4210,9 @@ export default {
     }
 
     if (request.method === "POST" && url.pathname === "/achievements/backfill") {
-      return handleAchievementsBackfill(env, url.searchParams.get("force") === "true");
+      return handleAchievementsBackfill(
+        env, url.searchParams.get("force") === "true", url.searchParams.get("season"), url.searchParams.get("after")
+      );
     }
 
     if (request.method === "POST" && url.pathname === "/achievements/backfill-runner-ups") {
