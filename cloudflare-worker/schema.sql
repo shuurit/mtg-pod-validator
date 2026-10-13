@@ -106,7 +106,20 @@ CREATE TABLE decks (
   -- opportunistically off the same /users/{id}/decks read syncDecksFromPlaygroup
   -- already does for `archived`, and set directly at write time for a deck
   -- added fresh via Update the App -- never guessed or computed here.
-  color_identity TEXT
+  color_identity TEXT,
+  -- Deck identity from playgroup.gg's Deck record, synced the same way as
+  -- archived/color_identity above (syncDecksFromPlaygroup). Not stats, so
+  -- not season-scoped -- a deck's commander art doesn't change per league.
+  -- partner_* is NULL for a single-commander deck.
+  commander_scryfall_id TEXT,
+  commander_art_url TEXT,
+  partner_name TEXT,
+  partner_art_url TEXT,
+  decklist_url TEXT,
+  -- The bracket the deck's owner set on playgroup.gg itself. Kept apart
+  -- from `bracket` above (this app's own manual declaration) and never
+  -- copied into it -- the two are compared, not merged.
+  playgroup_bracket INTEGER
 );
 
 CREATE TABLE games (
@@ -137,6 +150,12 @@ CREATE TABLE games (
   -- (GET /achievements); neither feeds the power-spread math.
   win_con TEXT,
   starting_player_id INTEGER REFERENCES players(id),
+  -- Also from playgroup.gg's game record, same computeAndStoreGameEventStats
+  -- pass: ended_at minus started_at (raw wall-clock, pauses included), and
+  -- playgroup.gg's own total_rounds (which can under-report the last turn
+  -- by one -- see deriveGameFieldsFromRawGame in app.js).
+  duration_seconds INTEGER,
+  total_rounds INTEGER,
   UNIQUE(season_id, game_num)
 );
 
@@ -176,6 +195,12 @@ CREATE TABLE game_results (
   -- badge (see app.js's buildComboBadge) -- read-time only, never writes
   -- decks.bracket and never resets power.
   early_two_card_combo INTEGER NOT NULL DEFAULT 0,
+  -- playgroup.gg's league-scoped Elo for this deck after this game, and the
+  -- change from the game before (elo_history?league_id=<the game's own
+  -- season's playgroup_league_id>). Never global Elo, never another
+  -- league's. NULL for seasons with no playgroup_league_id.
+  elo_rating INTEGER,
+  elo_delta INTEGER,
   PRIMARY KEY (game_id, player_id)
 );
 
@@ -258,6 +283,12 @@ CREATE TABLE game_event_stats (
   -- shortest_turn_seconds above.
   turn_count INTEGER NOT NULL DEFAULT 0,
   total_turn_seconds INTEGER NOT NULL DEFAULT 0,
+  -- life_loss / poison_tokens / mill events, summed by receiver (falling
+  -- back to user_id when an event has no receiver). life_lost also comes
+  -- off ending_life above, alongside damage_taken.
+  life_lost INTEGER NOT NULL DEFAULT 0,
+  poison_received INTEGER NOT NULL DEFAULT 0,
+  cards_milled INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (game_id, player_id)
 );
 
