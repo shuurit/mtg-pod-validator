@@ -17,7 +17,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="style.css?v=60">
+<link rel="stylesheet" href="style.css?v=61">
 
 <!-- Home-screen icon (iOS "Add to Home Screen" + Android/Chrome install).
      Generated from icon-source.png via scripts/generate_icons.py -- rerun
@@ -53,6 +53,10 @@
 <!-- Reuses bg-validator.webp (the Pod tab's table art) until Proposals
      gets artwork of its own -- house rules belong to the table. -->
 <div class="tab-bg" id="bg-proposals"></div>
+<!-- Frosted band behind the iOS status bar, shown only once the page has
+     scrolled under it -- see .scroll-edge in style.css, initScrollEdge in
+     app.js. -->
+<div class="scroll-edge" aria-hidden="true"></div>
 <!-- Visible by default, hidden once a signed-in session is confirmed --
      fails closed: nothing else on the page loads or fetches live data
      until then (see renderAuthGate/checkAuthSession in app.js), rather
@@ -456,6 +460,6 @@
   </div>
 </div>
 
-<script src="app.js?v=66"></script>
+<script src="app.js?v=67"></script>
 </body>
 </html>

@@ -46,6 +46,14 @@
      than the artwork fighting the theme. */
   --bg-scrim: rgba(243, 239, 229, 0.86);
   --card-bg-translucent: rgba(255, 255, 255, 0.25);
+  /* Floating chrome (bottom tab bar, avatar menu, the status-bar scroll
+     edge): a translucent material the page scrolls under, rather than an
+     opaque strip. Heavier than --card-bg-translucent on purpose -- it sits
+     over text and over those cards, and a light material stacked on a
+     light material stops being legible. --chrome-edge is the bright top
+     rim where light catches it. */
+  --chrome-bg: rgba(253, 251, 247, 0.74);
+  --chrome-edge: rgba(255, 255, 255, 0.7);
 
   /* Magic's own five mana colors -- see buildIdentityCoin in app.js.
      Deliberately the same in light and dark theme: these are brand-accurate
@@ -108,6 +116,8 @@
     --shadow-md: 0 14px 36px -16px rgba(0, 0, 0, 0.65);
     --bg-scrim: rgba(11, 10, 16, 0.88);
     --card-bg-translucent: rgba(20, 18, 28, 0.30);
+    --chrome-bg: rgba(20, 18, 28, 0.72);
+    --chrome-edge: rgba(255, 255, 255, 0.07);
   }
 }
 
@@ -142,6 +152,8 @@
   --shadow-md: 0 14px 36px -16px rgba(0, 0, 0, 0.65);
   --bg-scrim: rgba(11, 10, 16, 0.88);
   --card-bg-translucent: rgba(20, 18, 28, 0.30);
+  --chrome-bg: rgba(20, 18, 28, 0.72);
+  --chrome-edge: rgba(255, 255, 255, 0.07);
 }
 
 * { box-sizing: border-box; }
@@ -277,8 +289,10 @@ body {
 .tab-panel.tab-entering #tonight-body > * {
   animation: tab-content-in 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
+/* --tab-enter-x/-y are set per switch by playTabEnter: from the side of
+   the tab you moved to, or up from below when there's no side to it. */
 @keyframes tab-content-in {
-  from { opacity: 0; transform: translateY(6px); }
+  from { opacity: 0; transform: translate3d(var(--tab-enter-x, 0px), var(--tab-enter-y, 6px), 0); }
 }
 @media (prefers-reduced-motion: reduce) {
   .tab-panel.tab-entering > .card > *,
@@ -390,13 +404,18 @@ body {
   overflow: hidden;
   color: var(--muted);
 }
-.pull-refresh.settling {
-  transition: height 0.2s ease;
-}
 .pull-refresh-icon {
   display: inline-block;
   font-size: 1.3rem;
   line-height: 1;
+  /* Rotation and scale follow the finger from initPullToRefresh; only the
+     colour change at the threshold eases. */
+  transition: color 0.12s ease;
+}
+/* Past the threshold: letting go now refreshes. */
+.pull-refresh.armed,
+.pull-refresh.refreshing {
+  color: var(--accent);
 }
 .pull-refresh.refreshing .pull-refresh-icon {
   animation: global-refresh-spin 0.8s linear infinite;
@@ -460,20 +479,51 @@ body {
 }
 
 /* Click-to-reveal, not hover -- matches every other menu/modal pattern in
-   this app, and works the same on touch as it does with a mouse. */
+   this app, and works the same on touch as it does with a mouse.
+   A floating material over the page (--chrome-bg), and it grows out of the
+   avatar that opened it and shrinks back into it: transform-origin sits
+   on the avatar's centre, not the menu's own corner. Enter via
+   @starting-style, exit via display allow-discrete; a browser without
+   either just shows and hides it instantly, which is still correct. */
 .auth-menu {
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
   min-width: 140px;
-  background: var(--card-bg);
+  background: var(--chrome-bg);
+  -webkit-backdrop-filter: blur(24px) saturate(170%);
+  backdrop-filter: blur(24px) saturate(170%);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-md);
+  border-radius: var(--radius-md);
+  box-shadow: inset 0 1px 0 var(--chrome-edge), var(--shadow-md);
   padding: 6px;
   z-index: 101;
+  transform-origin: calc(100% - 20px) -28px;
+  transition:
+    opacity 0.16s ease-out,
+    transform 0.24s cubic-bezier(0.2, 0.8, 0.2, 1),
+    display 0.24s allow-discrete;
 }
-.auth-menu[hidden] { display: none; }
+.auth-menu[hidden] {
+  display: none;
+  opacity: 0;
+  transform: scale(0.9);
+  transition-duration: 0.14s;
+  transition-timing-function: ease-in;
+}
+@starting-style {
+  .auth-menu:not([hidden]) {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .auth-menu,
+  .auth-menu[hidden] {
+    transform: none;
+    transition: opacity 0.15s ease, display 0.15s allow-discrete;
+  }
+}
 
 .auth-menu-item {
   display: block;
@@ -553,6 +603,7 @@ body {
    existed (see applyTheme in app.js). Three options, not a single on/off
    switch, so picking a side never gives up following the system setting. */
 .theme-toggle {
+  position: relative;
   display: flex;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -666,6 +717,7 @@ header h1 {
 }
 
 .tabs {
+  position: relative;
   display: flex;
   gap: 6px;
   margin-bottom: 20px;
@@ -697,6 +749,25 @@ header h1 {
 .tab-btn.active {
   color: var(--ink);
   border-bottom-color: var(--accent);
+}
+
+/* The underline slides from the old tab to the new one, stretching to
+   each label's width (attachSelectionIndicator in app.js) -- once it's
+   there, the per-button border above stands down so there's only one. */
+.tabs.has-indicator .tab-btn.active {
+  border-bottom-color: transparent;
+}
+.tab-indicator {
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  width: 1px;
+  height: 2px;
+  background: var(--accent);
+  transform-origin: 0 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
 }
 
 .tab-badge {
@@ -749,9 +820,14 @@ header h1 {
     right: 0;
     bottom: 0;
     z-index: 100;
-    background: var(--card-bg);
+    /* Translucent: the page scrolls on under the bar instead of stopping
+       at an opaque strip, so the bar reads as floating chrome above the
+       content rather than a slice cut out of it. */
+    background: var(--chrome-bg);
+    -webkit-backdrop-filter: blur(22px) saturate(180%);
+    backdrop-filter: blur(22px) saturate(180%);
     border-top: 1px solid var(--border);
-    box-shadow: var(--shadow-md);
+    box-shadow: inset 0 1px 0 var(--chrome-edge), var(--shadow-md);
     padding: 6px max(6px, env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom)) max(6px, env(safe-area-inset-left));
     /* Same iOS Safari/PWA quirk already worked around on .tab-bg and
        .auth-control above (position:fixed layers detaching from the real
@@ -786,11 +862,40 @@ header h1 {
   color: var(--bg);
   box-shadow: var(--shadow-md);
   font-size: 0.9rem;
-  /* Same WebKit fixed-layer fix as .bottom-tabs; the translateX centres it. */
-  -webkit-transform: translateX(-50%) translateZ(0);
-  transform: translateX(-50%) translateZ(0);
+  /* Same WebKit fixed-layer fix as .bottom-tabs (translate3d forces the
+     layer); the -50% centres it. */
+  -webkit-transform: translate3d(-50%, 0, 0) scale(1);
+  transform: translate3d(-50%, 0, 0) scale(1);
+  /* Rises out of the bottom edge and sinks back the same way. Enter via
+     @starting-style, exit via display allow-discrete -- without support it
+     simply appears and disappears, and showUndoToast never waits on it. */
+  transition:
+    opacity 0.2s ease-out,
+    transform 0.32s cubic-bezier(0.2, 0.8, 0.2, 1),
+    display 0.32s allow-discrete;
 }
-.undo-toast[hidden] { display: none; }
+.undo-toast[hidden] {
+  display: none;
+  opacity: 0;
+  -webkit-transform: translate3d(-50%, 24px, 0) scale(0.96);
+  transform: translate3d(-50%, 24px, 0) scale(0.96);
+  transition-duration: 0.18s;
+  transition-timing-function: ease-in;
+}
+@starting-style {
+  .undo-toast:not([hidden]) {
+    opacity: 0;
+    transform: translate3d(-50%, 24px, 0) scale(0.96);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .undo-toast,
+  .undo-toast[hidden] {
+    -webkit-transform: translate3d(-50%, 0, 0);
+    transform: translate3d(-50%, 0, 0);
+    transition: opacity 0.18s ease, display 0.18s allow-discrete;
+  }
+}
 @media (pointer: coarse) {
   .undo-toast { bottom: calc(76px + env(safe-area-inset-bottom)); }
 }
@@ -826,6 +931,43 @@ header h1 {
 
 .bottom-tab-btn.active {
   color: var(--accent);
+}
+
+/* Pressed: the icon gives under the thumb instead of the whole button
+   shifting -- the button is the size of a thumb, so moving it reads as the
+   bar wobbling. Fast in, eased out on release. */
+.bottom-tab-btn:active {
+  transform: none;
+}
+.bottom-tab-icon {
+  transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.bottom-tab-btn:active .bottom-tab-icon {
+  transform: scale(0.86);
+  transition-duration: 0.08s;
+}
+
+/* A soft capsule behind the active tab that slides to the next one
+   (attachSelectionIndicator in app.js), so the move between tabs is
+   something the eye can follow. Sized to the button by JS; the visible
+   pill is the ::before, inset so neighbouring capsules never touch. */
+.bottom-tab-btn {
+  z-index: 1;
+}
+.bottom-tab-indicator {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.bottom-tab-indicator::before {
+  content: "";
+  position: absolute;
+  inset: 0 max(4px, calc(50% - 38px));
+  border-radius: 16px;
+  background: var(--accent-soft);
 }
 
 /* Drawn SVG now (see index.html) rather than an emoji glyph, so this
@@ -1544,6 +1686,41 @@ header h1 {
   color: var(--accent-ink);
 }
 
+/* Segmented controls (.view-toggle, .theme-toggle): the filled segment
+   slides to the new choice instead of one segment going dark while
+   another lights up (attachSelectionIndicator in app.js). Labels sit
+   above the thumb and fade colour as it passes under them. */
+.view-toggle {
+  position: relative;
+}
+.view-toggle.has-indicator > .view-toggle-btn,
+.theme-toggle.has-indicator > .theme-toggle-btn {
+  position: relative;
+  z-index: 1;
+  transition: color 0.2s ease, transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.view-toggle.has-indicator > .view-toggle-btn.active,
+.theme-toggle.has-indicator > .theme-toggle-btn.active {
+  background: transparent;
+}
+/* No divider cutting into the thumb's edges, as on iOS. */
+.view-toggle.has-indicator > .view-toggle-btn.active,
+.view-toggle.has-indicator > .view-toggle-btn.active + .view-toggle-btn,
+.theme-toggle.has-indicator > .theme-toggle-btn.active,
+.theme-toggle.has-indicator > .theme-toggle-btn.active + .theme-toggle-btn {
+  border-left-color: transparent;
+}
+.segment-thumb {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 0;
+  background: var(--accent);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
 /* Stand-in for an achievement with no badge art yet (see
    renderAchievements in app.js) -- a drawn sigil sized to sit where the
    emblem would, so a card without art still holds the grid's rhythm. */
@@ -1738,7 +1915,8 @@ button {
   font-size: 0.9rem;
   font-weight: 500;
   cursor: pointer;
-  transition: border-color 0.15s ease, background-color 0.15s ease, transform 0.05s ease, box-shadow 0.15s ease;
+  /* transform eases out slowly on release; :active below snaps it in. */
+  transition: border-color 0.15s ease, background-color 0.15s ease, transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.15s ease;
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -1748,7 +1926,23 @@ button {
   }
 }
 
-button:active { transform: translateY(1px); }
+/* Feedback on press, not on release: the moment a finger or mouse goes
+   down, the button gives, and it settles back as it's let go. */
+button:active {
+  transform: translateY(1px);
+  transition-duration: 0.06s;
+}
+
+/* On touch the finger hides a 1px nudge, so the button gives under it
+   instead -- and this is the feedback, so the grey iOS tap flash goes. */
+@media (pointer: coarse) {
+  button {
+    -webkit-tap-highlight-color: transparent;
+  }
+  button:active {
+    transform: scale(0.97);
+  }
+}
 
 button.primary {
   background: var(--accent);
@@ -2344,18 +2538,28 @@ td.num {
 }
 
 /* Popped open by showRevealModal once a pod fully passes -- see
-   runValidation. One persistent node in index.html, toggled via [hidden]. */
+   runValidation. One persistent node in index.html, toggled via [hidden].
+   Every modal opens and closes through presentModal/dismissModal in
+   app.js, which springs the card in and fades this scrim with it. */
 .modal-overlay {
   position: fixed;
   inset: 0;
   z-index: 200;
-  background: rgba(0, 0, 0, 0.6);
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 20px;
 }
 .modal-overlay[hidden] { display: none; }
+/* The dim, on its own layer so it can fade with the card's progress
+   (--scrim-opacity, set by renderSheet) without fading the card too. */
+.modal-overlay::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  opacity: var(--scrim-opacity, 1);
+}
 
 .modal-card {
   position: relative;
@@ -2371,6 +2575,44 @@ td.num {
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-md);
   padding: 26px 24px 24px;
+}
+/* Focused by presentModal so keyboard and screen-reader users land inside
+   the dialog; it's a container, not a control, so no ring of its own. */
+.modal-card:focus {
+  outline: none;
+}
+
+/* Touch: every modal is a bottom sheet -- it rises from the bottom edge,
+   leaves the same way, and can be dragged down to dismiss (wireSheetDrag
+   in app.js). The grabber says so. The second, solid shadow 160px below
+   the card fills the gap when the sheet is pulled up past its rest
+   (rubber-banded) or overshoots a little settling back, so the bottom
+   edge never comes loose from the screen. */
+@media (pointer: coarse) {
+  .modal-overlay {
+    align-items: flex-end;
+    padding: max(16px, env(safe-area-inset-top)) 0 0;
+  }
+  .modal-card {
+    border-bottom: 0;
+    border-radius: calc(var(--radius-lg) + 6px) calc(var(--radius-lg) + 6px) 0 0;
+    padding-top: 30px;
+    padding-bottom: max(24px, calc(env(safe-area-inset-bottom) + 14px));
+    box-shadow: 0 -12px 40px -20px rgba(0, 0, 0, 0.5), 0 160px 0 var(--card-bg);
+    overscroll-behavior: contain;
+  }
+  .modal-card::before {
+    content: "";
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    width: 36px;
+    height: 5px;
+    margin-left: -18px;
+    border-radius: 999px;
+    background: var(--muted);
+    opacity: 0.4;
+  }
 }
 
 .modal-card h2 {
@@ -4959,3 +5201,83 @@ input.gtu-in-prefilled {
   font-size: 0.85rem;
 }
 .proposal-form-error[hidden] { display: none; }
+
+/* ---------- Scroll edge ----------
+   Content scrolls up under the iOS status bar (viewport-fit=cover). Once
+   the page has scrolled (html.is-scrolled, initScrollEdge in app.js), a
+   frosted band fades in behind the clock so text never collides with it,
+   fading out into the page instead of ending on a hard line. Only as tall
+   as the top safe area, so it's zero-height everywhere there isn't one. */
+.scroll-edge {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 90;
+  height: calc(env(safe-area-inset-top, 0px) * 1.4);
+  background: var(--chrome-bg);
+  -webkit-backdrop-filter: blur(16px) saturate(170%);
+  backdrop-filter: blur(16px) saturate(170%);
+  -webkit-mask-image: linear-gradient(to bottom, #000 65%, transparent);
+  mask-image: linear-gradient(to bottom, #000 65%, transparent);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  /* Same WebKit fixed-layer fix as .bottom-tabs. */
+  -webkit-transform: translateZ(0);
+  transform: translateZ(0);
+}
+html.is-scrolled .scroll-edge {
+  opacity: 1;
+}
+
+/* ---------- Headings and copy ----------
+   Balanced headings don't leave one word stranded on a second line at
+   phone width; pretty hint text avoids a lone last word. Ignored where
+   unsupported. */
+header h1,
+.card h2,
+.modal-card h2 {
+  text-wrap: balance;
+}
+.hint {
+  text-wrap: pretty;
+}
+
+/* ---------- Reduced transparency / increased contrast ----------
+   The translucent materials (cards over the tab artwork, the tab bar, the
+   avatar menu, the scroll edge) go solid for anyone who's asked their
+   system for less transparency; increased contrast also gets solid
+   surfaces plus a border that actually reads as an edge. Last in the file
+   so they win over every surface rule above. */
+@media (prefers-reduced-transparency: reduce) {
+  .card,
+  .bottom-tabs,
+  .auth-menu,
+  .scroll-edge {
+    background: var(--card-bg);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+@media (prefers-contrast: more) {
+  .card,
+  .bottom-tabs,
+  .auth-menu,
+  .scroll-edge {
+    background: var(--card-bg);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .card,
+  .bottom-tabs,
+  .auth-menu,
+  .modal-card,
+  .view-toggle,
+  .theme-toggle {
+    border-color: var(--muted);
+  }
+  .modal-overlay::before {
+    background: rgba(0, 0, 0, 0.75);
+  }
+}
