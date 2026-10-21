@@ -862,6 +862,8 @@ header h1 {
   color: var(--bg);
   box-shadow: var(--shadow-md);
   font-size: 0.9rem;
+  /* It can be flicked away in any direction (wireUndoToastSwipe). */
+  touch-action: none;
   /* Same WebKit fixed-layer fix as .bottom-tabs (translate3d forces the
      layer); the -50% centres it. */
   -webkit-transform: translate3d(-50%, 0, 0) scale(1);
@@ -1399,6 +1401,21 @@ header h1 {
 .tc-card:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* Trophy Case cards and Most Decorated rows are role="button" divs, so the
+   button press rules don't reach them -- same give under the finger. */
+@media (pointer: coarse) {
+  .tc-card,
+  .tl-row {
+    -webkit-tap-highlight-color: transparent;
+    transition: border-color 0.15s ease, transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  .tc-card:active,
+  .tl-row:active {
+    transform: scale(0.97);
+    transition-duration: 0.06s;
+  }
 }
 
 /* Prestige frames for repeat wins: silver for two, gold foil for three+.
@@ -2068,6 +2085,41 @@ tbody tr {
 }
 @media (prefers-reduced-motion: reduce) {
   .player-block-chevron { transition: none; }
+}
+
+/* renderPlayersTable rebuilds the header on every tap, so the transition
+   above has no "before" to turn from. .is-opening/.is-closing (set only on
+   the row just tapped) replay the turn from where it was. Only a `from`
+   frame: the end state is the rule above either way. */
+.player-block-header.is-opening .player-block-chevron {
+  animation: chevron-turn-open 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.player-block-header.is-closing .player-block-chevron {
+  animation: chevron-turn-close 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes chevron-turn-open { from { transform: rotate(0deg); } }
+@keyframes chevron-turn-close { from { transform: rotate(90deg); } }
+
+/* The player just opened deals their decks in, top to bottom, a few px
+   down into place -- the list grows out of the row you tapped rather than
+   appearing all at once. Staggered by --deal-index (capped at 8 in app.js
+   so a long list never makes you wait). backwards fill only covers each
+   plate's own short delay. */
+.player-block.is-dealing .sort-bar,
+.player-block.is-dealing .deck-plate {
+  animation: deck-deal-in 0.24s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+  animation-delay: calc(var(--deal-index, 0) * 30ms);
+}
+@keyframes deck-deal-in {
+  from { opacity: 0; transform: translate3d(0, -6px, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .player-block-header.is-opening .player-block-chevron,
+  .player-block-header.is-closing .player-block-chevron,
+  .player-block.is-dealing .sort-bar,
+  .player-block.is-dealing .deck-plate {
+    animation: none;
+  }
 }
 
 /* Deck count and power range, pushed to the row's right edge. */
@@ -2800,6 +2852,9 @@ td.num {
   gap: 10px;
   padding: 20px 0;
   cursor: pointer; /* the whole step is a tap-to-advance target */
+  /* Horizontal drags turn the page (wireCeremonySwipe in app.js);
+     vertical ones still scroll the sheet or drag it down. */
+  touch-action: pan-y;
 }
 
 .ceremony-art {
@@ -2833,6 +2888,7 @@ td.num {
 }
 
 #ceremony-recap {
+  touch-action: pan-y;
   text-align: center;
 }
 #ceremony-recap-canvas {

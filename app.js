@@ -206,6 +206,12 @@ let podUi = null;
 // bounded regardless of how many players get tracked over time. null means
 // everyone's collapsed.
 let expandedPlayerId = null;
+
+// Set by a player row's own tap and consumed by the very next render, so
+// only that tap plays the chevron turn and the decks dealing in -- a data
+// refresh re-rendering an already-open player plays nothing
+// (web-animation rule 7).
+let playerBlockToggle = null; // { id, opening }
 let rosterDiffData = null; // raw playgroup.gg roster/decks from loadRosterDiff, used for the Playgroup Power comparison column too
 let bracketEditingDeckIds = new Set(); // deck ids currently showing the inline "set new bracket" form instead of their power chip
 
@@ -2277,6 +2283,8 @@ function findPlaygroupPowerLevel(playerName, deck) {
 function renderPlayersTable() {
   const container = document.getElementById("players-table");
   container.innerHTML = "";
+  const toggle = playerBlockToggle;
+  playerBlockToggle = null;
 
   if (podPlayers.length === 0) {
     const empty = document.createElement("p");
@@ -2304,9 +2312,16 @@ function renderPlayersTable() {
     header.className = "player-block-header";
     header.setAttribute("aria-expanded", isExpanded ? "true" : "false");
     header.addEventListener("click", () => {
+      playerBlockToggle = { id: player.id, opening: !isExpanded };
       expandedPlayerId = isExpanded ? null : player.id;
       renderPlayersTable();
     });
+    // The header is rebuilt on every render, so the chevron's own
+    // transition never sees a "before" -- these replay the turn from where
+    // it was instead.
+    if (toggle && toggle.id === player.id) {
+      header.classList.add(toggle.opening ? "is-opening" : "is-closing");
+    }
 
     const chevron = document.createElement("span");
     chevron.className = "player-block-chevron";
@@ -2381,9 +2396,13 @@ function renderPlayersTable() {
 
     const plateList = document.createElement("div");
     plateList.className = "deck-plate-list";
-    for (const { deck, pgPower } of deckRows) {
-      plateList.appendChild(buildDeckPlate(deck, pgPower));
-    }
+    deckRows.forEach(({ deck, pgPower }, i) => {
+      const plate = buildDeckPlate(deck, pgPower);
+      plate.style.setProperty("--deal-index", String(Math.min(i, 8)));
+      plateList.appendChild(plate);
+    });
+    // Decks deal in under the row that was just opened, top to bottom.
+    if (toggle && toggle.id === player.id && toggle.opening) block.classList.add("is-dealing");
     block.appendChild(plateList);
     container.appendChild(block);
   }
@@ -2563,10 +2582,124 @@ function showUndoToast(message, onUndo) {
     hideUndoToast();
     onUndo();
   };
+  resetUndoToastSwipe();
   toast.hidden = false;
   clearTimeout(undoToastTimer);
   undoToastTimer = setTimeout(hideUndoToast, 8000);
 }
+
+// Flick the toast away -- sideways or down -- instead of waiting out its
+// timer, like a notification. X and Y are separate springs (one spring on
+// the 2D distance drifts off-line when the two velocities differ). Up
+// rubber-bands: there's nowhere to go that way. While a finger or a spring
+// is driving it, its CSS enter/exit transition is switched off so the two
+// don't fight; resetUndoToastSwipe hands it back.
+let undoSwipeX = 0;
+let undoSwipeY = 0;
+const renderUndoToastSwipe = () => {
+  const toast = document.getElementById("undo-toast");
+  if (!toast) return;
+  toast.style.transition = "none";
+  toast.style.transform = `translate3d(calc(-50% + ${undoSwipeX}px), ${undoSwipeY}px, 0)`;
+  toast.style.opacity = String(Math.max(0, 1 - Math.max(Math.abs(undoSwipeX) / 220, undoSwipeY / 90)));
+};
+// Created on first use: Spring is defined further down this file.
+let undoSprings = null;
+function undoSpring(axis) {
+  undoSprings ||= {
+    x: new Spring(0, v => { undoSwipeX = v; renderUndoToastSwipe(); }),
+    y: new Spring(0, v => { undoSwipeY = v; renderUndoToastSwipe(); }),
+  };
+  return undoSprings[axis];
+}
+
+function resetUndoToastSwipe() {
+  undoSpring("x").stop();
+  undoSpring("y").stop();
+  undoSwipeX = 0;
+  undoSwipeY = 0;
+  const toast = document.getElementById("undo-toast");
+  if (!toast) return;
+  toast.style.transition = "";
+  toast.style.transform = "";
+  toast.style.opacity = "";
+}
+
+function wireUndoToastSwipe() {
+  const toast = document.getElementById("undo-toast");
+  if (!toast) return;
+  const trackX = createVelocityTracker();
+  const trackY = createVelocityTracker();
+  let start = null;
+  let tracking = false;
+  let suppressClickUntil = 0;
+
+  toast.addEventListener("touchstart", (e) => {
+    start = e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY, ox: undoSwipeX, oy: undoSwipeY } : null;
+    tracking = false;
+  }, { passive: true });
+
+  toast.addEventListener("touchmove", (e) => {
+    if (!start) return;
+    const t = e.touches[0];
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    if (!tracking) {
+      if (Math.hypot(dx, dy) < 10) return;
+      tracking = true;
+      undoSpring("x").stop();
+      undoSpring("y").stop();
+      // Holding it keeps it: the auto-hide waits until it's let go.
+      clearTimeout(undoToastTimer);
+      start = { x: t.clientX, y: t.clientY, ox: undoSwipeX, oy: undoSwipeY };
+      trackX.reset();
+      trackY.reset();
+    }
+    e.preventDefault();
+    const rawY = start.oy + (t.clientY - start.y);
+    undoSwipeX = start.ox + (t.clientX - start.x);
+    undoSwipeY = rawY >= 0 ? rawY : -rubberband(-rawY, 120);
+    trackX.add(t.clientX, e.timeStamp);
+    trackY.add(t.clientY, e.timeStamp);
+    renderUndoToastSwipe();
+  }, { passive: false });
+
+  const release = () => {
+    start = null;
+    if (!tracking) return;
+    tracking = false;
+    suppressClickUntil = performance.now() + 350;
+    const vx = trackX.velocity();
+    const vy = trackY.velocity();
+    const landX = undoSwipeX + projectMomentum(vx);
+    const landY = undoSwipeY + projectMomentum(vy);
+    undoSpring("x").value = undoSwipeX;
+    undoSpring("y").value = undoSwipeY;
+    if (Math.abs(landX) > 90 || landY > 50) {
+      // Leaves the way it was thrown; whichever spring is actually
+      // travelling decides when it's gone.
+      const sideways = Math.abs(landX) > 90 && Math.abs(landX) >= landY;
+      const gone = () => { hideUndoToast(); resetUndoToastSwipe(); };
+      undoSpring("x").to(sideways ? Math.sign(landX) * window.innerWidth : undoSwipeX, { response: 0.3, velocity: vx, onRest: sideways ? gone : null });
+      undoSpring("y").to(sideways ? undoSwipeY : 160, { response: 0.3, velocity: vy, onRest: sideways ? null : gone });
+    } else {
+      const bounce = REDUCED_MOTION.matches ? 1 : 0.8;
+      undoSpring("x").to(0, { dampingRatio: bounce, response: 0.32, velocity: vx });
+      undoSpring("y").to(0, { dampingRatio: bounce, response: 0.32, velocity: vy, onRest: resetUndoToastSwipe });
+      undoToastTimer = setTimeout(hideUndoToast, 4000);
+    }
+  };
+  toast.addEventListener("touchend", release);
+  toast.addEventListener("touchcancel", release);
+  // A drag that ends on Undo isn't a tap on Undo.
+  toast.addEventListener("click", (e) => {
+    if (performance.now() < suppressClickUntil) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+  }, true);
+}
+wireUndoToastSwipe();
 
 function hideUndoToast() {
   const toast = document.getElementById("undo-toast");
@@ -3724,7 +3857,9 @@ function showClosingCeremonyModal(achievements, seasonLabel) {
   ceremonyIndex = 0;
   const title = document.getElementById("ceremony-title");
   if (title) title.textContent = `${seasonLabel} Closing Ceremony`;
+  ceremonyTransitionTarget = null;
   renderCeremonyStep(0);
+  ceremonySpring().jump(0);
   presentModal(modal);
 }
 
@@ -3799,8 +3934,150 @@ function renderCeremonyStep(index) {
   step.appendChild(winnerRow);
 }
 
-function advanceCeremony(delta) {
-  renderCeremonyStep(ceremonyIndex + delta);
+// Steps slide like pages: forward leaves to the left and the next trophy
+// arrives from the right, back does the mirror image, whether that was a
+// swipe, a tap, Next/Previous or an arrow key -- one spatial model for
+// all of them. A swipe hands its release velocity to the slide so the
+// page carries on at the finger's speed.
+let ceremonyTransitionTarget = null; // set while the old step slides out
+// Created on first use: Spring is defined further down this file.
+let ceremonySpringInstance = null;
+function ceremonySpring() {
+  return ceremonySpringInstance ||= new Spring(0, x => renderCeremonyOffset(x));
+}
+
+// The step or the recap, whichever is showing.
+function ceremonyPane() {
+  const step = document.getElementById("ceremony-step");
+  return step && !step.hidden ? step : document.getElementById("ceremony-recap");
+}
+
+function renderCeremonyOffset(x) {
+  const pane = ceremonyPane();
+  if (!pane) return;
+  if (!x) {
+    pane.style.transform = "";
+    pane.style.opacity = "";
+    return;
+  }
+  // Fades as it travels, gone by the time it's swapped for the next step,
+  // so the swap itself is never seen.
+  const fadeDistance = (pane.offsetWidth || 300) * 0.6;
+  pane.style.transform = `translate3d(${x}px, 0, 0)`;
+  pane.style.opacity = String(Math.max(0, 1 - Math.abs(x) / fadeDistance));
+}
+
+function clearCeremonyOffsets() {
+  for (const id of ["ceremony-step", "ceremony-recap"]) {
+    const el = document.getElementById(id);
+    if (el) { el.style.transform = ""; el.style.opacity = ""; }
+  }
+}
+
+// A slide already under way lands at once, so the next one starts from a
+// settled step rather than chaining onto a half-finished one.
+function finishCeremonyTransition() {
+  if (ceremonyTransitionTarget === null) return;
+  const target = ceremonyTransitionTarget;
+  ceremonyTransitionTarget = null;
+  clearCeremonyOffsets();
+  renderCeremonyStep(target);
+  ceremonySpring().jump(0);
+}
+
+function advanceCeremony(delta, velocity = 0) {
+  finishCeremonyTransition();
+  const next = Math.max(0, Math.min(ceremonyIndex + delta, ceremonySteps.length));
+  if (next === ceremonyIndex) {
+    // Nothing further this way: settle back to rest.
+    ceremonySpring().to(0, { response: 0.3, velocity });
+    return;
+  }
+  const pane = ceremonyPane();
+  if (REDUCED_MOTION.matches || !pane) {
+    renderCeremonyStep(next);
+    ceremonySpring().jump(0);
+    return;
+  }
+  const direction = Math.sign(delta);
+  const travel = pane.offsetWidth * 0.6;
+  ceremonyTransitionTarget = next;
+  ceremonySpring().to(-direction * travel, {
+    response: 0.24,
+    velocity,
+    onRest: () => {
+      if (ceremonyTransitionTarget !== next) return;
+      ceremonyTransitionTarget = null;
+      clearCeremonyOffsets();
+      renderCeremonyStep(next);
+      ceremonySpring().jump(direction * travel);
+      ceremonySpring().to(0, { response: 0.38 });
+    },
+  });
+}
+
+// Swipe between trophies: the step follows the finger 1:1 once the drag is
+// clearly sideways (a vertical drag belongs to the sheet), resists at the
+// first trophy and the recap, and on release the flick's projected landing
+// point -- not where the finger let go -- decides whether to turn the page.
+function wireCeremonySwipe() {
+  const tracker = createVelocityTracker();
+  let start = null;
+  let tracking = false;
+  let grabX = 0;
+  let grabOffset = 0;
+  let suppressClickUntil = 0;
+
+  for (const pane of [document.getElementById("ceremony-step"), document.getElementById("ceremony-recap")]) {
+    if (!pane) continue;
+    pane.addEventListener("touchstart", (e) => {
+      start = null;
+      if (e.touches.length !== 1) return;
+      start = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      tracking = false;
+    }, { passive: true });
+
+    pane.addEventListener("touchmove", (e) => {
+      if (!start) return;
+      const t = e.touches[0];
+      const dx = t.clientX - start.x;
+      const dy = t.clientY - start.y;
+      if (!tracking) {
+        if (Math.abs(dy) > 10 && Math.abs(dy) >= Math.abs(dx)) { start = null; return; }
+        if (Math.abs(dx) < 10) return;
+        tracking = true;
+        finishCeremonyTransition();
+        ceremonySpring().stop();
+        grabX = t.clientX;
+        grabOffset = ceremonySpring().value;
+        tracker.reset();
+      }
+      e.preventDefault();
+      const raw = grabOffset + (t.clientX - grabX);
+      const width = ceremonyPane()?.offsetWidth || 300;
+      const atStart = ceremonyIndex === 0 && raw > 0;
+      const atEnd = ceremonyIndex === ceremonySteps.length && raw < 0;
+      const x = atStart || atEnd ? Math.sign(raw) * rubberband(Math.abs(raw), width) : raw;
+      tracker.add(t.clientX, e.timeStamp);
+      ceremonySpring().set(x);
+    }, { passive: false });
+
+    const release = () => {
+      start = null;
+      if (!tracking) return;
+      tracking = false;
+      suppressClickUntil = performance.now() + 350;
+      const velocity = tracker.velocity();
+      const width = ceremonyPane()?.offsetWidth || 300;
+      const projected = ceremonySpring().value + projectMomentum(velocity);
+      if (projected < -width * 0.25) advanceCeremony(1, velocity);
+      else if (projected > width * 0.25) advanceCeremony(-1, velocity);
+      else ceremonySpring().to(0, { dampingRatio: REDUCED_MOTION.matches ? 1 : 0.8, response: 0.3, velocity });
+    };
+    pane.addEventListener("touchend", release);
+    pane.addEventListener("touchcancel", release);
+  }
+  return () => performance.now() < suppressClickUntil;
 }
 
 // One layout, used both for the on-screen preview (drawn straight into
@@ -3879,7 +4156,10 @@ document.getElementById("ceremony-prev")?.addEventListener("click", () => advanc
 document.getElementById("ceremony-next")?.addEventListener("click", () => advanceCeremony(1));
 // Tap-to-advance anywhere on the step itself, not just the Next button --
 // this is meant to be flicked through at a table, one thumb.
-document.getElementById("ceremony-step")?.addEventListener("click", () => advanceCeremony(1));
+const ceremonyJustSwiped = wireCeremonySwipe();
+document.getElementById("ceremony-step")?.addEventListener("click", () => {
+  if (!ceremonyJustSwiped()) advanceCeremony(1);
+});
 
 function hideComboTrackModal() {
   const modal = document.getElementById("combo-track-modal");
@@ -4673,7 +4953,9 @@ function activateTab(tabName) {
   // Same id scheme as the tab panel (#bg-<tab> next to #tab-<tab>).
   const bgEl = document.getElementById(`bg-${tabName}`);
   crossfadeTabBackground(bgEl);
-  window.scrollTo({ top: 0 });
+  // Re-tapping the tab you're already on glides back to the top, as every
+  // iOS tab bar does; an actual switch lands there instantly.
+  window.scrollTo({ top: 0, behavior: switching || REDUCED_MOTION.matches ? "auto" : "smooth" });
   if (switching) playTabEnter(panel, previous);
   // Nameplates are pinned by measuring the 3D scene, which measures as
   // nothing while its tab is hidden.
