@@ -227,457 +227,6 @@ const PLAYER_DECK_COLUMNS = [
   { key: "pgPower", label: "Playgroup Power", defaultDir: "desc", numeric: true },
 ];
 
-// ---------- fluid motion: springs, momentum, haptics ----------
-// Anything a finger can grab (sheets, pull-to-refresh) or that slides
-// between places (the tab and segmented-control indicators) runs on these
-// instead of CSS transitions. A CSS transition restarts from its target
-// when interrupted; a spring re-targeted mid-flight keeps its current value
-// AND velocity, so it can be grabbed, reversed or redirected at any moment
-// without a jump. Hand-rolled rather than a library (web-animation rule 9).
-//
-// Tuned in Apple's two designer-facing terms rather than mass/stiffness:
-// dampingRatio 1 settles with no overshoot, below 1 overshoots (keep that
-// for releases that carried momentum, e.g. a flicked sheet); response is
-// roughly how long it takes to get there, in seconds -- not a duration.
-class Spring {
-  constructor(value, onUpdate, precision = 0.25) {
-    this.value = value;
-    this.target = value;
-    this.velocity = 0;
-    this.onUpdate = onUpdate;
-    this.precision = precision; // "close enough to rest", in value units
-    this.raf = 0;
-    this.safety = 0;
-    this.onRest = null;
-  }
-
-  to(target, { dampingRatio = 1, response = 0.35, velocity, onRest = null } = {}) {
-    this.stop();
-    this.target = target;
-    if (velocity !== undefined) this.velocity = velocity;
-    this.onRest = onRest;
-    const stiffness = (2 * Math.PI / response) ** 2;
-    const damping = 4 * Math.PI * dampingRatio / response;
-    let last = performance.now();
-    const tick = (now) => {
-      // Clamped: a long frame (or the first one, whose timestamp can
-      // predate `last`) shouldn't fling the integrator.
-      const dt = Math.min(Math.max(0, now - last) / 1000, 1 / 30);
-      last = now;
-      const steps = 4;
-      for (let i = 0; i < steps; i++) {
-        const accel = -stiffness * (this.value - this.target) - damping * this.velocity;
-        this.velocity += accel * (dt / steps);
-        this.value += this.velocity * (dt / steps);
-      }
-      if (Math.abs(this.value - this.target) < this.precision && Math.abs(this.velocity) < this.precision * 10) {
-        this.settle();
-        return;
-      }
-      this.onUpdate(this.value);
-      this.raf = requestAnimationFrame(tick);
-    };
-    this.raf = requestAnimationFrame(tick);
-    // rAF stops in a background tab, and nothing may wait on a spring
-    // landing (web-animation rule 2) -- by 2.5x response even an
-    // under-damped spring is within a fraction of a pixel, so land it.
-    this.safety = setTimeout(() => this.settle(), (response * 2.5 + 0.2) * 1000);
-  }
-
-  // Follow a finger: no physics, just the value. Keeps the last velocity so
-  // a later to() can be handed the release velocity explicitly.
-  set(value) {
-    this.stop();
-    this.value = value;
-    this.target = value;
-    this.onUpdate(value);
-  }
-
-  jump(value) {
-    this.set(value);
-    this.velocity = 0;
-  }
-
-  stop() {
-    cancelAnimationFrame(this.raf);
-    clearTimeout(this.safety);
-    this.raf = 0;
-    this.safety = 0;
-  }
-
-  settle() {
-    this.stop();
-    this.value = this.target;
-    this.velocity = 0;
-    this.onUpdate(this.value);
-    const done = this.onRest;
-    this.onRest = null;
-    if (done) done();
-  }
-}
-
-// Release velocity from the last ~100ms of a drag, in px/s. Just the last
-// two events would be noisy; the whole gesture would lag a late flick.
-function createVelocityTracker() {
-  const samples = [];
-  return {
-    reset() { samples.length = 0; },
-    add(pos, time) {
-      samples.push({ pos, time });
-      while (samples.length > 2 && time - samples[0].time > 100) samples.shift();
-    },
-    velocity() {
-      if (samples.length < 2) return 0;
-      const a = samples[0];
-      const b = samples[samples.length - 1];
-      const dt = (b.time - a.time) / 1000;
-      return dt > 0 ? (b.pos - a.pos) / dt : 0;
-    },
-  };
-}
-
-// Where a flick would coast to under scroll-like deceleration -- Apple's
-// own projection (Designing Fluid Interfaces), not v^2/2a. Deciding from
-// the projected point rather than the release point is what lets a short,
-// fast flick dismiss a sheet that's barely moved.
-function projectMomentum(velocity, decelerationRate = 0.998) {
-  return (velocity / 1000) * decelerationRate / (1 - decelerationRate);
-}
-
-// Past a boundary the element follows less and less the further it's
-// pulled, instead of stopping dead -- "responsive, but nothing more here".
-function rubberband(overshoot, dimension, constant = 0.55) {
-  return (overshoot * dimension * constant) / (dimension + constant * Math.abs(overshoot));
-}
-
-// Android only in practice (iOS Safari has no Vibration API), and only on
-// the few commit moments that earn it: a pull crossing the refresh
-// threshold, and a pod passing. Fired on the same frame as the visual.
-function haptic(pattern) {
-  try {
-    if (navigator.vibrate) navigator.vibrate(pattern);
-  } catch {
-    // Blocked without a prior user gesture -- the visual still lands.
-  }
-}
-
-// ---------- selection indicators ----------
-// One highlight that slides from the old choice to the new one, instead of
-// the old one switching off and a new one switching on somewhere else --
-// the eye follows it, so where you went is never in doubt. Used for both
-// tab bars and every segmented control (.view-toggle, .theme-toggle).
-//
-// Whoever owns the control keeps toggling .active exactly as before; a
-// MutationObserver notices and moves the indicator, so no call site had to
-// change. Resizes and the first showing (a control inside a hidden panel
-// measures as nothing) jump straight to place rather than animating.
-function attachSelectionIndicator(group, { itemSelector, className, stretch = false }) {
-  const indicator = document.createElement("span");
-  indicator.className = className;
-  indicator.setAttribute("aria-hidden", "true");
-  group.appendChild(indicator);
-  group.classList.add("has-indicator");
-
-  let x = 0;
-  let width = 0;
-  let visible = false;
-  const render = () => {
-    // stretch: a thin bar whose width follows the item (top tab underline,
-    // items differ in width) -- scaleX of a 1px box, so it stays a
-    // transform. Otherwise items are equal width, so only x moves.
-    indicator.style.transform = stretch
-      ? `translate3d(${x}px, 0, 0) scaleX(${width})`
-      : `translate3d(${x}px, 0, 0)`;
-    if (!stretch) indicator.style.width = `${width}px`;
-  };
-  const xSpring = new Spring(0, v => { x = v; render(); });
-  const wSpring = new Spring(0, v => { width = v; render(); });
-
-  const update = (animate) => {
-    const active = group.querySelector(`${itemSelector}.active`);
-    if (!active || !active.offsetWidth) {
-      if (visible) indicator.style.opacity = "0";
-      visible = false;
-      return;
-    }
-    const nextX = active.offsetLeft;
-    const nextW = active.offsetWidth;
-    if (!stretch) {
-      indicator.style.top = `${active.offsetTop}px`;
-      indicator.style.height = `${active.offsetHeight}px`;
-    }
-    if (!animate || !visible || REDUCED_MOTION.matches) {
-      xSpring.jump(nextX);
-      wSpring.jump(nextW);
-    } else {
-      xSpring.to(nextX, { response: 0.38 });
-      if (stretch) wSpring.to(nextW, { response: 0.38 });
-      else wSpring.jump(nextW);
-    }
-    if (!visible) indicator.style.opacity = "1";
-    visible = true;
-  };
-
-  let queued = false;
-  new MutationObserver(() => {
-    if (queued) return;
-    queued = true;
-    // Batched to the next frame: one tab switch flips .active on several
-    // buttons, which should read as one move, not a tug-of-war.
-    requestAnimationFrame(() => { queued = false; update(true); });
-  }).observe(group, { subtree: true, attributes: true, attributeFilter: ["class"] });
-  if ("ResizeObserver" in window) new ResizeObserver(() => update(false)).observe(group);
-  update(false);
-}
-
-function initSelectionIndicators() {
-  const topTabs = document.getElementById("main-tabs");
-  if (topTabs) attachSelectionIndicator(topTabs, { itemSelector: ".tab-btn", className: "tab-indicator", stretch: true });
-  const bottomTabs = document.getElementById("bottom-tabs");
-  if (bottomTabs) attachSelectionIndicator(bottomTabs, { itemSelector: ".bottom-tab-btn", className: "bottom-tab-indicator" });
-  document.querySelectorAll(".view-toggle").forEach(group => {
-    attachSelectionIndicator(group, { itemSelector: ".view-toggle-btn", className: "segment-thumb" });
-  });
-  document.querySelectorAll(".theme-toggle").forEach(group => {
-    attachSelectionIndicator(group, { itemSelector: ".theme-toggle-btn", className: "segment-thumb" });
-  });
-  // Saira Condensed arriving (display=swap) re-measures every tab label.
-  if (document.fonts && document.fonts.ready) {
-    document.fonts.ready.then(() => window.dispatchEvent(new Event("resize")));
-  }
-}
-
-// ---------- sheets (every .modal-overlay) ----------
-// On touch every modal is a bottom sheet: it rises from the bottom edge
-// and leaves the same way (enter and exit along one path), and it can be
-// dragged down to dismiss -- 1:1 with the finger from wherever it was
-// grabbed, rubber-banding if pushed up, and on release it projects the
-// flick's momentum to decide between closing and snapping back, then hands
-// the finger's velocity to the spring so there's no seam. A closing sheet
-// can be grabbed again mid-flight. With a mouse it stays a centred dialog
-// that grows from the control that opened it and shrinks back into it.
-//
-// Every show*/hide* modal function goes through presentModal/dismissModal
-// instead of flipping [hidden] itself. The end state never waits on the
-// animation: dismissModal's [hidden] lands from the spring's own safety
-// timeout even if rAF never runs (web-animation rule 2).
-const SHEET_LAYOUT = window.matchMedia("(pointer: coarse)");
-const sheetStates = new Map();
-
-function sheetFor(overlay) {
-  let s = sheetStates.get(overlay);
-  if (s) return s;
-  const card = overlay.querySelector(".modal-card");
-  s = { overlay, card, open: false, dragging: false, opener: null, height: 1, suppressClickUntil: 0 };
-  s.spring = new Spring(0, p => renderSheet(s, p), 0.0005);
-  card.setAttribute("role", "dialog");
-  card.setAttribute("aria-modal", "true");
-  card.tabIndex = -1;
-  wireSheetDrag(s);
-  sheetStates.set(overlay, s);
-  return s;
-}
-
-function renderSheet(s, p) {
-  const { overlay, card } = s;
-  const shown = Math.min(1, Math.max(0, p));
-  overlay.style.setProperty("--scrim-opacity", String(shown));
-  if (p === 1 && !s.dragging) {
-    card.style.transform = "";
-    card.style.opacity = "";
-    return;
-  }
-  if (REDUCED_MOTION.matches) {
-    // A cross-fade, not a slide: no vestibular motion, same timing.
-    card.style.transform = "";
-    card.style.opacity = String(shown);
-  } else if (SHEET_LAYOUT.matches) {
-    card.style.opacity = "";
-    card.style.transform = `translate3d(0, ${(1 - p) * s.height}px, 0)`;
-  } else {
-    card.style.opacity = String(shown);
-    card.style.transform = `scale(${0.9 + 0.1 * p})`;
-  }
-}
-
-function isModalOpen(overlay) {
-  const s = overlay && sheetStates.get(overlay);
-  return !!overlay && !overlay.hidden && (!s || s.open);
-}
-
-function presentModal(overlay) {
-  if (!overlay) return;
-  const s = sheetFor(overlay);
-  const wasHidden = overlay.hidden;
-  if (!s.open && (wasHidden || !s.opener)) s.opener = document.activeElement;
-  s.open = true;
-  overlay.hidden = false;
-  syncModalInert();
-  const heading = s.card.querySelector("h2");
-  if (heading) {
-    if (!heading.id) heading.id = `${overlay.id}-title`;
-    s.card.setAttribute("aria-labelledby", heading.id);
-  }
-  if (wasHidden) {
-    s.card.style.transform = "";
-    s.height = s.card.offsetHeight || 1;
-    // Grow out of whatever opened it (dialog layout only -- a sheet always
-    // comes from the bottom edge).
-    const opener = s.opener instanceof Element && s.opener !== document.body ? s.opener.getBoundingClientRect() : null;
-    const card = s.card.getBoundingClientRect();
-    s.card.style.transformOrigin = opener && opener.width
-      ? `${opener.left + opener.width / 2 - card.left}px ${opener.top + opener.height / 2 - card.top}px`
-      : "";
-    s.spring.jump(0);
-    s.card.focus({ preventScroll: true });
-  }
-  s.spring.to(1, { dampingRatio: 1, response: SHEET_LAYOUT.matches ? 0.42 : 0.3 });
-}
-
-function dismissModal(overlay, { velocity = 0 } = {}) {
-  if (!overlay || overlay.hidden) return;
-  const s = sheetStates.get(overlay);
-  if (!s) { overlay.hidden = true; return; }
-  if (!s.open) return;
-  s.open = false;
-  s.spring.to(0, {
-    dampingRatio: 1,
-    response: SHEET_LAYOUT.matches ? 0.36 : 0.22,
-    velocity,
-    onRest: () => {
-      if (s.open) return; // grabbed again and re-opened mid-flight
-      overlay.hidden = true;
-      s.card.style.transform = "";
-      s.card.style.opacity = "";
-      syncModalInert();
-      const opener = s.opener;
-      s.opener = null;
-      if (opener && opener.isConnected && typeof opener.focus === "function") opener.focus({ preventScroll: true });
-    },
-  });
-}
-
-// While any modal is up, the page behind it can't be tabbed into or read
-// out -- the focus containment aria-modal promises. Derived from the DOM
-// every time rather than counted, so it can't drift out of step.
-function syncModalInert() {
-  const anyOpen = [...document.querySelectorAll(".modal-overlay")].some(o => !o.hidden);
-  for (const el of [document.querySelector(".wrap"), document.getElementById("bottom-tabs")]) {
-    if (el) el.inert = anyOpen;
-  }
-}
-
-function wireSheetDrag(s) {
-  const { card, overlay } = s;
-  const tracker = createVelocityTracker();
-  let start = null;
-  let tracking = false;
-  let grabY = 0;
-  let grabOffset = 0;
-
-  const offsetFromValue = () => (1 - s.spring.value) * s.height;
-
-  card.addEventListener("touchstart", (e) => {
-    start = null;
-    if (!SHEET_LAYOUT.matches || e.touches.length !== 1 || overlay.hidden) return;
-    if (e.target.closest("input, select, textarea")) return;
-    // Content scrolled down inside the sheet: this drag scrolls it back up
-    // first. Only once it's at the top does dragging down move the sheet.
-    for (let el = e.target; el && el !== overlay; el = el.parentElement) {
-      if (el.scrollTop > 0) return;
-    }
-    const t = e.touches[0];
-    start = { x: t.clientX, y: t.clientY };
-    tracking = false;
-  }, { passive: true });
-
-  card.addEventListener("touchmove", (e) => {
-    if (!start) return;
-    const t = e.touches[0];
-    const dx = t.clientX - start.x;
-    const dy = t.clientY - start.y;
-    if (!tracking) {
-      if (dy <= 0 || Math.abs(dx) > Math.abs(dy)) {
-        // Up or sideways: not a dismiss. Hand it back to native scrolling
-        // once it's clearly meant (10px), not on the first jitter.
-        if (Math.hypot(dx, dy) > 10) start = null;
-        return;
-      }
-      // Downward at the top of the sheet: nothing native to lose (it would
-      // only overscroll), so claim it now and commit after 10px.
-      e.preventDefault();
-      if (dy < 10) return;
-      tracking = true;
-      s.dragging = true;
-      s.spring.stop();
-      s.height = s.card.offsetHeight || 1;
-      // Respect where it was grabbed -- including a sheet caught halfway
-      // through closing.
-      grabY = t.clientY;
-      grabOffset = offsetFromValue();
-      tracker.reset();
-    }
-    e.preventDefault();
-    const raw = grabOffset + (t.clientY - grabY);
-    const offset = raw >= 0 ? raw : -rubberband(-raw, s.height);
-    tracker.add(t.clientY, e.timeStamp);
-    s.spring.set(1 - offset / s.height);
-  }, { passive: false });
-
-  const release = () => {
-    start = null;
-    if (!tracking) return;
-    tracking = false;
-    s.dragging = false;
-    s.suppressClickUntil = performance.now() + 350;
-    const velocity = tracker.velocity(); // px/s, + is downward
-    const offset = offsetFromValue();
-    const projected = offset + projectMomentum(velocity);
-    // The spring works in "fraction open", so velocity converts the same way.
-    const springVelocity = -velocity / s.height;
-    if (projected > s.height * 0.5) {
-      s.open = true; // so dismissModal doesn't treat it as already closing
-      dismissModal(overlay, { velocity: springVelocity });
-    } else {
-      s.open = true;
-      overlay.hidden = false;
-      // Settles back with a little give -- the release carried momentum.
-      s.spring.to(1, { dampingRatio: REDUCED_MOTION.matches ? 1 : 0.8, response: 0.32, velocity: springVelocity });
-    }
-  };
-  card.addEventListener("touchend", release);
-  card.addEventListener("touchcancel", release);
-
-  // A drag that ends over a button (or the ceremony's tap-to-advance step)
-  // mustn't also count as a tap on it.
-  card.addEventListener("click", (e) => {
-    if (performance.now() < s.suppressClickUntil) {
-      e.stopPropagation();
-      e.preventDefault();
-    }
-  }, true);
-}
-
-// ---------- scroll edge ----------
-// Content scrolls up under the iOS status bar (viewport-fit=cover). Once it
-// does, a soft frosted band fades in behind the clock so the two never
-// collide -- only where floating chrome actually overlaps content, and
-// only while it does, instead of a permanent bar. Zero height (inert)
-// wherever there's no top safe area.
-function initScrollEdge() {
-  let queued = false;
-  const sync = () => {
-    queued = false;
-    document.documentElement.classList.toggle("is-scrolled", (window.scrollY || document.documentElement.scrollTop) > 4);
-  };
-  window.addEventListener("scroll", () => {
-    if (queued) return;
-    queued = true;
-    requestAnimationFrame(sync);
-  }, { passive: true });
-  sync();
-}
-
 // ---------- deriving players/decks from source data ----------
 // Current Deck Strength (deck-strength.xlsx) is the only source for this --
 // nothing in the UI edits it. IDs are derived from the name text itself
@@ -3054,12 +2603,19 @@ const renderUndoToastSwipe = () => {
   toast.style.transform = `translate3d(calc(-50% + ${undoSwipeX}px), ${undoSwipeY}px, 0)`;
   toast.style.opacity = String(Math.max(0, 1 - Math.max(Math.abs(undoSwipeX) / 220, undoSwipeY / 90)));
 };
-const undoSpringX = new Spring(0, v => { undoSwipeX = v; renderUndoToastSwipe(); });
-const undoSpringY = new Spring(0, v => { undoSwipeY = v; renderUndoToastSwipe(); });
+// Created on first use: Spring is defined further down this file.
+let undoSprings = null;
+function undoSpring(axis) {
+  undoSprings ||= {
+    x: new Spring(0, v => { undoSwipeX = v; renderUndoToastSwipe(); }),
+    y: new Spring(0, v => { undoSwipeY = v; renderUndoToastSwipe(); }),
+  };
+  return undoSprings[axis];
+}
 
 function resetUndoToastSwipe() {
-  undoSpringX.stop();
-  undoSpringY.stop();
+  undoSpring("x").stop();
+  undoSpring("y").stop();
   undoSwipeX = 0;
   undoSwipeY = 0;
   const toast = document.getElementById("undo-toast");
@@ -3091,8 +2647,8 @@ function wireUndoToastSwipe() {
     if (!tracking) {
       if (Math.hypot(dx, dy) < 10) return;
       tracking = true;
-      undoSpringX.stop();
-      undoSpringY.stop();
+      undoSpring("x").stop();
+      undoSpring("y").stop();
       // Holding it keeps it: the auto-hide waits until it's let go.
       clearTimeout(undoToastTimer);
       start = { x: t.clientX, y: t.clientY, ox: undoSwipeX, oy: undoSwipeY };
@@ -3117,19 +2673,19 @@ function wireUndoToastSwipe() {
     const vy = trackY.velocity();
     const landX = undoSwipeX + projectMomentum(vx);
     const landY = undoSwipeY + projectMomentum(vy);
-    undoSpringX.value = undoSwipeX;
-    undoSpringY.value = undoSwipeY;
+    undoSpring("x").value = undoSwipeX;
+    undoSpring("y").value = undoSwipeY;
     if (Math.abs(landX) > 90 || landY > 50) {
       // Leaves the way it was thrown; whichever spring is actually
       // travelling decides when it's gone.
       const sideways = Math.abs(landX) > 90 && Math.abs(landX) >= landY;
       const gone = () => { hideUndoToast(); resetUndoToastSwipe(); };
-      undoSpringX.to(sideways ? Math.sign(landX) * window.innerWidth : undoSwipeX, { response: 0.3, velocity: vx, onRest: sideways ? gone : null });
-      undoSpringY.to(sideways ? undoSwipeY : 160, { response: 0.3, velocity: vy, onRest: sideways ? null : gone });
+      undoSpring("x").to(sideways ? Math.sign(landX) * window.innerWidth : undoSwipeX, { response: 0.3, velocity: vx, onRest: sideways ? gone : null });
+      undoSpring("y").to(sideways ? undoSwipeY : 160, { response: 0.3, velocity: vy, onRest: sideways ? null : gone });
     } else {
       const bounce = REDUCED_MOTION.matches ? 1 : 0.8;
-      undoSpringX.to(0, { dampingRatio: bounce, response: 0.32, velocity: vx });
-      undoSpringY.to(0, { dampingRatio: bounce, response: 0.32, velocity: vy, onRest: resetUndoToastSwipe });
+      undoSpring("x").to(0, { dampingRatio: bounce, response: 0.32, velocity: vx });
+      undoSpring("y").to(0, { dampingRatio: bounce, response: 0.32, velocity: vy, onRest: resetUndoToastSwipe });
       undoToastTimer = setTimeout(hideUndoToast, 4000);
     }
   };
@@ -4303,7 +3859,7 @@ function showClosingCeremonyModal(achievements, seasonLabel) {
   if (title) title.textContent = `${seasonLabel} Closing Ceremony`;
   ceremonyTransitionTarget = null;
   renderCeremonyStep(0);
-  ceremonySpring.jump(0);
+  ceremonySpring().jump(0);
   presentModal(modal);
 }
 
@@ -4384,7 +3940,11 @@ function renderCeremonyStep(index) {
 // all of them. A swipe hands its release velocity to the slide so the
 // page carries on at the finger's speed.
 let ceremonyTransitionTarget = null; // set while the old step slides out
-const ceremonySpring = new Spring(0, x => renderCeremonyOffset(x));
+// Created on first use: Spring is defined further down this file.
+let ceremonySpringInstance = null;
+function ceremonySpring() {
+  return ceremonySpringInstance ||= new Spring(0, x => renderCeremonyOffset(x));
+}
 
 // The step or the recap, whichever is showing.
 function ceremonyPane() {
@@ -4422,7 +3982,7 @@ function finishCeremonyTransition() {
   ceremonyTransitionTarget = null;
   clearCeremonyOffsets();
   renderCeremonyStep(target);
-  ceremonySpring.jump(0);
+  ceremonySpring().jump(0);
 }
 
 function advanceCeremony(delta, velocity = 0) {
@@ -4430,19 +3990,19 @@ function advanceCeremony(delta, velocity = 0) {
   const next = Math.max(0, Math.min(ceremonyIndex + delta, ceremonySteps.length));
   if (next === ceremonyIndex) {
     // Nothing further this way: settle back to rest.
-    ceremonySpring.to(0, { response: 0.3, velocity });
+    ceremonySpring().to(0, { response: 0.3, velocity });
     return;
   }
   const pane = ceremonyPane();
   if (REDUCED_MOTION.matches || !pane) {
     renderCeremonyStep(next);
-    ceremonySpring.jump(0);
+    ceremonySpring().jump(0);
     return;
   }
   const direction = Math.sign(delta);
   const travel = pane.offsetWidth * 0.6;
   ceremonyTransitionTarget = next;
-  ceremonySpring.to(-direction * travel, {
+  ceremonySpring().to(-direction * travel, {
     response: 0.24,
     velocity,
     onRest: () => {
@@ -4450,8 +4010,8 @@ function advanceCeremony(delta, velocity = 0) {
       ceremonyTransitionTarget = null;
       clearCeremonyOffsets();
       renderCeremonyStep(next);
-      ceremonySpring.jump(direction * travel);
-      ceremonySpring.to(0, { response: 0.38 });
+      ceremonySpring().jump(direction * travel);
+      ceremonySpring().to(0, { response: 0.38 });
     },
   });
 }
@@ -4487,9 +4047,9 @@ function wireCeremonySwipe() {
         if (Math.abs(dx) < 10) return;
         tracking = true;
         finishCeremonyTransition();
-        ceremonySpring.stop();
+        ceremonySpring().stop();
         grabX = t.clientX;
-        grabOffset = ceremonySpring.value;
+        grabOffset = ceremonySpring().value;
         tracker.reset();
       }
       e.preventDefault();
@@ -4499,7 +4059,7 @@ function wireCeremonySwipe() {
       const atEnd = ceremonyIndex === ceremonySteps.length && raw < 0;
       const x = atStart || atEnd ? Math.sign(raw) * rubberband(Math.abs(raw), width) : raw;
       tracker.add(t.clientX, e.timeStamp);
-      ceremonySpring.set(x);
+      ceremonySpring().set(x);
     }, { passive: false });
 
     const release = () => {
@@ -4509,10 +4069,10 @@ function wireCeremonySwipe() {
       suppressClickUntil = performance.now() + 350;
       const velocity = tracker.velocity();
       const width = ceremonyPane()?.offsetWidth || 300;
-      const projected = ceremonySpring.value + projectMomentum(velocity);
+      const projected = ceremonySpring().value + projectMomentum(velocity);
       if (projected < -width * 0.25) advanceCeremony(1, velocity);
       else if (projected > width * 0.25) advanceCeremony(-1, velocity);
-      else ceremonySpring.to(0, { dampingRatio: REDUCED_MOTION.matches ? 1 : 0.8, response: 0.3, velocity });
+      else ceremonySpring().to(0, { dampingRatio: REDUCED_MOTION.matches ? 1 : 0.8, response: 0.3, velocity });
     };
     pane.addEventListener("touchend", release);
     pane.addEventListener("touchcancel", release);
@@ -4919,6 +4479,457 @@ function schedulePodReveal(checkId) {
 // seat, pick your deck, check the spread, or clear the table. See
 // renderPodCta for its label.
 document.getElementById("validate-btn").addEventListener("click", handlePodCta);
+
+// ---------- fluid motion: springs, momentum, haptics ----------
+// Anything a finger can grab (sheets, pull-to-refresh) or that slides
+// between places (the tab and segmented-control indicators) runs on these
+// instead of CSS transitions. A CSS transition restarts from its target
+// when interrupted; a spring re-targeted mid-flight keeps its current value
+// AND velocity, so it can be grabbed, reversed or redirected at any moment
+// without a jump. Hand-rolled rather than a library (web-animation rule 9).
+//
+// Tuned in Apple's two designer-facing terms rather than mass/stiffness:
+// dampingRatio 1 settles with no overshoot, below 1 overshoots (keep that
+// for releases that carried momentum, e.g. a flicked sheet); response is
+// roughly how long it takes to get there, in seconds -- not a duration.
+class Spring {
+  constructor(value, onUpdate, precision = 0.25) {
+    this.value = value;
+    this.target = value;
+    this.velocity = 0;
+    this.onUpdate = onUpdate;
+    this.precision = precision; // "close enough to rest", in value units
+    this.raf = 0;
+    this.safety = 0;
+    this.onRest = null;
+  }
+
+  to(target, { dampingRatio = 1, response = 0.35, velocity, onRest = null } = {}) {
+    this.stop();
+    this.target = target;
+    if (velocity !== undefined) this.velocity = velocity;
+    this.onRest = onRest;
+    const stiffness = (2 * Math.PI / response) ** 2;
+    const damping = 4 * Math.PI * dampingRatio / response;
+    let last = performance.now();
+    const tick = (now) => {
+      // Clamped: a long frame (or the first one, whose timestamp can
+      // predate `last`) shouldn't fling the integrator.
+      const dt = Math.min(Math.max(0, now - last) / 1000, 1 / 30);
+      last = now;
+      const steps = 4;
+      for (let i = 0; i < steps; i++) {
+        const accel = -stiffness * (this.value - this.target) - damping * this.velocity;
+        this.velocity += accel * (dt / steps);
+        this.value += this.velocity * (dt / steps);
+      }
+      if (Math.abs(this.value - this.target) < this.precision && Math.abs(this.velocity) < this.precision * 10) {
+        this.settle();
+        return;
+      }
+      this.onUpdate(this.value);
+      this.raf = requestAnimationFrame(tick);
+    };
+    this.raf = requestAnimationFrame(tick);
+    // rAF stops in a background tab, and nothing may wait on a spring
+    // landing (web-animation rule 2) -- by 2.5x response even an
+    // under-damped spring is within a fraction of a pixel, so land it.
+    this.safety = setTimeout(() => this.settle(), (response * 2.5 + 0.2) * 1000);
+  }
+
+  // Follow a finger: no physics, just the value. Keeps the last velocity so
+  // a later to() can be handed the release velocity explicitly.
+  set(value) {
+    this.stop();
+    this.value = value;
+    this.target = value;
+    this.onUpdate(value);
+  }
+
+  jump(value) {
+    this.set(value);
+    this.velocity = 0;
+  }
+
+  stop() {
+    cancelAnimationFrame(this.raf);
+    clearTimeout(this.safety);
+    this.raf = 0;
+    this.safety = 0;
+  }
+
+  settle() {
+    this.stop();
+    this.value = this.target;
+    this.velocity = 0;
+    this.onUpdate(this.value);
+    const done = this.onRest;
+    this.onRest = null;
+    if (done) done();
+  }
+}
+
+// Release velocity from the last ~100ms of a drag, in px/s. Just the last
+// two events would be noisy; the whole gesture would lag a late flick.
+function createVelocityTracker() {
+  const samples = [];
+  return {
+    reset() { samples.length = 0; },
+    add(pos, time) {
+      samples.push({ pos, time });
+      while (samples.length > 2 && time - samples[0].time > 100) samples.shift();
+    },
+    velocity() {
+      if (samples.length < 2) return 0;
+      const a = samples[0];
+      const b = samples[samples.length - 1];
+      const dt = (b.time - a.time) / 1000;
+      return dt > 0 ? (b.pos - a.pos) / dt : 0;
+    },
+  };
+}
+
+// Where a flick would coast to under scroll-like deceleration -- Apple's
+// own projection (Designing Fluid Interfaces), not v^2/2a. Deciding from
+// the projected point rather than the release point is what lets a short,
+// fast flick dismiss a sheet that's barely moved.
+function projectMomentum(velocity, decelerationRate = 0.998) {
+  return (velocity / 1000) * decelerationRate / (1 - decelerationRate);
+}
+
+// Past a boundary the element follows less and less the further it's
+// pulled, instead of stopping dead -- "responsive, but nothing more here".
+function rubberband(overshoot, dimension, constant = 0.55) {
+  return (overshoot * dimension * constant) / (dimension + constant * Math.abs(overshoot));
+}
+
+// Android only in practice (iOS Safari has no Vibration API), and only on
+// the few commit moments that earn it: a pull crossing the refresh
+// threshold, and a pod passing. Fired on the same frame as the visual.
+function haptic(pattern) {
+  try {
+    if (navigator.vibrate) navigator.vibrate(pattern);
+  } catch {
+    // Blocked without a prior user gesture -- the visual still lands.
+  }
+}
+
+// ---------- selection indicators ----------
+// One highlight that slides from the old choice to the new one, instead of
+// the old one switching off and a new one switching on somewhere else --
+// the eye follows it, so where you went is never in doubt. Used for both
+// tab bars and every segmented control (.view-toggle, .theme-toggle).
+//
+// Whoever owns the control keeps toggling .active exactly as before; a
+// MutationObserver notices and moves the indicator, so no call site had to
+// change. Resizes and the first showing (a control inside a hidden panel
+// measures as nothing) jump straight to place rather than animating.
+function attachSelectionIndicator(group, { itemSelector, className, stretch = false }) {
+  const indicator = document.createElement("span");
+  indicator.className = className;
+  indicator.setAttribute("aria-hidden", "true");
+  group.appendChild(indicator);
+  group.classList.add("has-indicator");
+
+  let x = 0;
+  let width = 0;
+  let visible = false;
+  const render = () => {
+    // stretch: a thin bar whose width follows the item (top tab underline,
+    // items differ in width) -- scaleX of a 1px box, so it stays a
+    // transform. Otherwise items are equal width, so only x moves.
+    indicator.style.transform = stretch
+      ? `translate3d(${x}px, 0, 0) scaleX(${width})`
+      : `translate3d(${x}px, 0, 0)`;
+    if (!stretch) indicator.style.width = `${width}px`;
+  };
+  const xSpring = new Spring(0, v => { x = v; render(); });
+  const wSpring = new Spring(0, v => { width = v; render(); });
+
+  const update = (animate) => {
+    const active = group.querySelector(`${itemSelector}.active`);
+    if (!active || !active.offsetWidth) {
+      if (visible) indicator.style.opacity = "0";
+      visible = false;
+      return;
+    }
+    const nextX = active.offsetLeft;
+    const nextW = active.offsetWidth;
+    if (!stretch) {
+      indicator.style.top = `${active.offsetTop}px`;
+      indicator.style.height = `${active.offsetHeight}px`;
+    }
+    if (!animate || !visible || REDUCED_MOTION.matches) {
+      xSpring.jump(nextX);
+      wSpring.jump(nextW);
+    } else {
+      xSpring.to(nextX, { response: 0.38 });
+      if (stretch) wSpring.to(nextW, { response: 0.38 });
+      else wSpring.jump(nextW);
+    }
+    if (!visible) indicator.style.opacity = "1";
+    visible = true;
+  };
+
+  let queued = false;
+  new MutationObserver(() => {
+    if (queued) return;
+    queued = true;
+    // Batched to the next frame: one tab switch flips .active on several
+    // buttons, which should read as one move, not a tug-of-war.
+    requestAnimationFrame(() => { queued = false; update(true); });
+  }).observe(group, { subtree: true, attributes: true, attributeFilter: ["class"] });
+  if ("ResizeObserver" in window) new ResizeObserver(() => update(false)).observe(group);
+  update(false);
+}
+
+function initSelectionIndicators() {
+  const topTabs = document.getElementById("main-tabs");
+  if (topTabs) attachSelectionIndicator(topTabs, { itemSelector: ".tab-btn", className: "tab-indicator", stretch: true });
+  const bottomTabs = document.getElementById("bottom-tabs");
+  if (bottomTabs) attachSelectionIndicator(bottomTabs, { itemSelector: ".bottom-tab-btn", className: "bottom-tab-indicator" });
+  document.querySelectorAll(".view-toggle").forEach(group => {
+    attachSelectionIndicator(group, { itemSelector: ".view-toggle-btn", className: "segment-thumb" });
+  });
+  document.querySelectorAll(".theme-toggle").forEach(group => {
+    attachSelectionIndicator(group, { itemSelector: ".theme-toggle-btn", className: "segment-thumb" });
+  });
+  // Saira Condensed arriving (display=swap) re-measures every tab label.
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(() => window.dispatchEvent(new Event("resize")));
+  }
+}
+
+// ---------- sheets (every .modal-overlay) ----------
+// On touch every modal is a bottom sheet: it rises from the bottom edge
+// and leaves the same way (enter and exit along one path), and it can be
+// dragged down to dismiss -- 1:1 with the finger from wherever it was
+// grabbed, rubber-banding if pushed up, and on release it projects the
+// flick's momentum to decide between closing and snapping back, then hands
+// the finger's velocity to the spring so there's no seam. A closing sheet
+// can be grabbed again mid-flight. With a mouse it stays a centred dialog
+// that grows from the control that opened it and shrinks back into it.
+//
+// Every show*/hide* modal function goes through presentModal/dismissModal
+// instead of flipping [hidden] itself. The end state never waits on the
+// animation: dismissModal's [hidden] lands from the spring's own safety
+// timeout even if rAF never runs (web-animation rule 2).
+const SHEET_LAYOUT = window.matchMedia("(pointer: coarse)");
+const sheetStates = new Map();
+
+function sheetFor(overlay) {
+  let s = sheetStates.get(overlay);
+  if (s) return s;
+  const card = overlay.querySelector(".modal-card");
+  s = { overlay, card, open: false, dragging: false, opener: null, height: 1, suppressClickUntil: 0 };
+  s.spring = new Spring(0, p => renderSheet(s, p), 0.0005);
+  card.setAttribute("role", "dialog");
+  card.setAttribute("aria-modal", "true");
+  card.tabIndex = -1;
+  wireSheetDrag(s);
+  sheetStates.set(overlay, s);
+  return s;
+}
+
+function renderSheet(s, p) {
+  const { overlay, card } = s;
+  const shown = Math.min(1, Math.max(0, p));
+  overlay.style.setProperty("--scrim-opacity", String(shown));
+  if (p === 1 && !s.dragging) {
+    card.style.transform = "";
+    card.style.opacity = "";
+    return;
+  }
+  if (REDUCED_MOTION.matches) {
+    // A cross-fade, not a slide: no vestibular motion, same timing.
+    card.style.transform = "";
+    card.style.opacity = String(shown);
+  } else if (SHEET_LAYOUT.matches) {
+    card.style.opacity = "";
+    card.style.transform = `translate3d(0, ${(1 - p) * s.height}px, 0)`;
+  } else {
+    card.style.opacity = String(shown);
+    card.style.transform = `scale(${0.9 + 0.1 * p})`;
+  }
+}
+
+function isModalOpen(overlay) {
+  const s = overlay && sheetStates.get(overlay);
+  return !!overlay && !overlay.hidden && (!s || s.open);
+}
+
+function presentModal(overlay) {
+  if (!overlay) return;
+  const s = sheetFor(overlay);
+  const wasHidden = overlay.hidden;
+  if (!s.open && (wasHidden || !s.opener)) s.opener = document.activeElement;
+  s.open = true;
+  overlay.hidden = false;
+  syncModalInert();
+  const heading = s.card.querySelector("h2");
+  if (heading) {
+    if (!heading.id) heading.id = `${overlay.id}-title`;
+    s.card.setAttribute("aria-labelledby", heading.id);
+  }
+  if (wasHidden) {
+    s.card.style.transform = "";
+    s.height = s.card.offsetHeight || 1;
+    // Grow out of whatever opened it (dialog layout only -- a sheet always
+    // comes from the bottom edge).
+    const opener = s.opener instanceof Element && s.opener !== document.body ? s.opener.getBoundingClientRect() : null;
+    const card = s.card.getBoundingClientRect();
+    s.card.style.transformOrigin = opener && opener.width
+      ? `${opener.left + opener.width / 2 - card.left}px ${opener.top + opener.height / 2 - card.top}px`
+      : "";
+    s.spring.jump(0);
+    s.card.focus({ preventScroll: true });
+  }
+  s.spring.to(1, { dampingRatio: 1, response: SHEET_LAYOUT.matches ? 0.42 : 0.3 });
+}
+
+function dismissModal(overlay, { velocity = 0 } = {}) {
+  if (!overlay || overlay.hidden) return;
+  const s = sheetStates.get(overlay);
+  if (!s) { overlay.hidden = true; return; }
+  if (!s.open) return;
+  s.open = false;
+  s.spring.to(0, {
+    dampingRatio: 1,
+    response: SHEET_LAYOUT.matches ? 0.36 : 0.22,
+    velocity,
+    onRest: () => {
+      if (s.open) return; // grabbed again and re-opened mid-flight
+      overlay.hidden = true;
+      s.card.style.transform = "";
+      s.card.style.opacity = "";
+      syncModalInert();
+      const opener = s.opener;
+      s.opener = null;
+      if (opener && opener.isConnected && typeof opener.focus === "function") opener.focus({ preventScroll: true });
+    },
+  });
+}
+
+// While any modal is up, the page behind it can't be tabbed into or read
+// out -- the focus containment aria-modal promises. Derived from the DOM
+// every time rather than counted, so it can't drift out of step.
+function syncModalInert() {
+  const anyOpen = [...document.querySelectorAll(".modal-overlay")].some(o => !o.hidden);
+  for (const el of [document.querySelector(".wrap"), document.getElementById("bottom-tabs")]) {
+    if (el) el.inert = anyOpen;
+  }
+}
+
+function wireSheetDrag(s) {
+  const { card, overlay } = s;
+  const tracker = createVelocityTracker();
+  let start = null;
+  let tracking = false;
+  let grabY = 0;
+  let grabOffset = 0;
+
+  const offsetFromValue = () => (1 - s.spring.value) * s.height;
+
+  card.addEventListener("touchstart", (e) => {
+    start = null;
+    if (!SHEET_LAYOUT.matches || e.touches.length !== 1 || overlay.hidden) return;
+    if (e.target.closest("input, select, textarea")) return;
+    // Content scrolled down inside the sheet: this drag scrolls it back up
+    // first. Only once it's at the top does dragging down move the sheet.
+    for (let el = e.target; el && el !== overlay; el = el.parentElement) {
+      if (el.scrollTop > 0) return;
+    }
+    const t = e.touches[0];
+    start = { x: t.clientX, y: t.clientY };
+    tracking = false;
+  }, { passive: true });
+
+  card.addEventListener("touchmove", (e) => {
+    if (!start) return;
+    const t = e.touches[0];
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    if (!tracking) {
+      if (dy <= 0 || Math.abs(dx) > Math.abs(dy)) {
+        // Up or sideways: not a dismiss. Hand it back to native scrolling
+        // once it's clearly meant (10px), not on the first jitter.
+        if (Math.hypot(dx, dy) > 10) start = null;
+        return;
+      }
+      // Downward at the top of the sheet: nothing native to lose (it would
+      // only overscroll), so claim it now and commit after 10px.
+      e.preventDefault();
+      if (dy < 10) return;
+      tracking = true;
+      s.dragging = true;
+      s.spring.stop();
+      s.height = s.card.offsetHeight || 1;
+      // Respect where it was grabbed -- including a sheet caught halfway
+      // through closing.
+      grabY = t.clientY;
+      grabOffset = offsetFromValue();
+      tracker.reset();
+    }
+    e.preventDefault();
+    const raw = grabOffset + (t.clientY - grabY);
+    const offset = raw >= 0 ? raw : -rubberband(-raw, s.height);
+    tracker.add(t.clientY, e.timeStamp);
+    s.spring.set(1 - offset / s.height);
+  }, { passive: false });
+
+  const release = () => {
+    start = null;
+    if (!tracking) return;
+    tracking = false;
+    s.dragging = false;
+    s.suppressClickUntil = performance.now() + 350;
+    const velocity = tracker.velocity(); // px/s, + is downward
+    const offset = offsetFromValue();
+    const projected = offset + projectMomentum(velocity);
+    // The spring works in "fraction open", so velocity converts the same way.
+    const springVelocity = -velocity / s.height;
+    if (projected > s.height * 0.5) {
+      s.open = true; // so dismissModal doesn't treat it as already closing
+      dismissModal(overlay, { velocity: springVelocity });
+    } else {
+      s.open = true;
+      overlay.hidden = false;
+      // Settles back with a little give -- the release carried momentum.
+      s.spring.to(1, { dampingRatio: REDUCED_MOTION.matches ? 1 : 0.8, response: 0.32, velocity: springVelocity });
+    }
+  };
+  card.addEventListener("touchend", release);
+  card.addEventListener("touchcancel", release);
+
+  // A drag that ends over a button (or the ceremony's tap-to-advance step)
+  // mustn't also count as a tap on it.
+  card.addEventListener("click", (e) => {
+    if (performance.now() < s.suppressClickUntil) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+  }, true);
+}
+
+// ---------- scroll edge ----------
+// Content scrolls up under the iOS status bar (viewport-fit=cover). Once it
+// does, a soft frosted band fades in behind the clock so the two never
+// collide -- only where floating chrome actually overlaps content, and
+// only while it does, instead of a permanent bar. Zero height (inert)
+// wherever there's no top safe area.
+function initScrollEdge() {
+  let queued = false;
+  const sync = () => {
+    queued = false;
+    document.documentElement.classList.toggle("is-scrolled", (window.scrollY || document.documentElement.scrollTop) > 4);
+  };
+  window.addEventListener("scroll", () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(sync);
+  }, { passive: true });
+  sync();
+}
 
 // ---------- tabs ----------
 
