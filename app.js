@@ -1813,7 +1813,7 @@ function initAchievementsTab() {
     ceremonyBtn.addEventListener("click", () => {
       if (!lastAchievementsData) return;
       const season = lastAchievementsData.seasons.find(s => s.id === lastAchievementsData.seasonId);
-      showClosingCeremonyModal(lastAchievementsData.achievements, season ? season.label : "");
+      showClosingCeremonyModal(lastAchievementsData.achievements, season ? season.label : "", lastAchievementsData.seasonId);
     });
   }
 
@@ -3855,11 +3855,45 @@ document.getElementById("reveal-modal")?.addEventListener("click", e => {
 let ceremonySteps = []; // achievements with a real winner, this season only
 let ceremonyIndex = 0;
 
+// Rendered recap videos (made with season-video/, compressed and committed
+// under videos/), keyed by season id. A season listed here opens its
+// ceremony on the video, with the paced steps one button away; any other
+// season opens straight on the steps, same as before.
+const CEREMONY_VIDEOS = {
+  3: { src: "videos/season-3.mp4", poster: "videos/season-3.jpg" },
+};
+
+// "film" shows the video; "steps" shows the paced trophy walk-through.
+function setCeremonyMode(mode) {
+  const film = document.getElementById("ceremony-film");
+  const video = document.getElementById("ceremony-video");
+  const showFilm = mode === "film";
+  if (film) film.hidden = !showFilm;
+  if (!showFilm && video) video.pause();
+  for (const id of ["ceremony-counter", "ceremony-nav"]) {
+    const el = document.getElementById(id);
+    if (el) el.hidden = showFilm;
+  }
+  const filmRow = document.getElementById("ceremony-film-row");
+  if (filmRow) filmRow.hidden = showFilm || !video?.getAttribute("src");
+  if (showFilm) {
+    document.getElementById("ceremony-step").hidden = true;
+    document.getElementById("ceremony-recap").hidden = true;
+  } else {
+    renderCeremonyStep(ceremonyIndex);
+  }
+}
+
+function isCeremonyFilmShowing() {
+  const film = document.getElementById("ceremony-film");
+  return !!film && !film.hidden;
+}
+
 // achievements: the same array loadAchievements() already rendered (see
 // lastAchievementsData) -- no separate fetch. Skips any achievement with
 // no winner: this is meant to feel like a celebration, not another list of
 // "no data yet" cards.
-function showClosingCeremonyModal(achievements, seasonLabel) {
+function showClosingCeremonyModal(achievements, seasonLabel, seasonId) {
   const modal = document.getElementById("ceremony-modal");
   if (!modal) return;
   ceremonySteps = achievements.filter(a => a.winner);
@@ -3867,8 +3901,25 @@ function showClosingCeremonyModal(achievements, seasonLabel) {
   const title = document.getElementById("ceremony-title");
   if (title) title.textContent = `${seasonLabel} Closing Ceremony`;
   ceremonyTransitionTarget = null;
-  renderCeremonyStep(0);
+  const film = CEREMONY_VIDEOS[seasonId];
+  const video = document.getElementById("ceremony-video");
+  if (video) {
+    // Only touch src when the season changes, so reopening the same
+    // season's ceremony keeps the buffered video instead of refetching it.
+    if (film && video.getAttribute("src") !== film.src) {
+      video.src = film.src;
+      video.poster = film.poster;
+    } else if (!film && video.getAttribute("src")) {
+      video.removeAttribute("src");
+      video.removeAttribute("poster");
+      video.load();
+    }
+  }
+  setCeremonyMode(film ? "film" : "steps");
   ceremonySpring().jump(0);
+  // Closing the sheet any way at all (X, backdrop, Escape, drag-down) must
+  // stop the soundtrack, or it keeps playing behind the app.
+  modal._beforeDismiss = () => video?.pause();
   presentModal(modal);
 }
 
@@ -4164,6 +4215,8 @@ document.getElementById("ceremony-modal-close")?.addEventListener("click", hideC
 document.getElementById("ceremony-modal")?.addEventListener("click", e => {
   if (e.target.id === "ceremony-modal") hideClosingCeremonyModal();
 });
+document.getElementById("ceremony-step-through")?.addEventListener("click", () => setCeremonyMode("steps"));
+document.getElementById("ceremony-watch-film")?.addEventListener("click", () => setCeremonyMode("film"));
 document.getElementById("ceremony-prev")?.addEventListener("click", () => advanceCeremony(-1));
 document.getElementById("ceremony-next")?.addEventListener("click", () => advanceCeremony(1));
 // Tap-to-advance anywhere on the step itself, not just the Next button --
@@ -4265,7 +4318,9 @@ document.addEventListener("keydown", e => {
   // Guarded on the modal actually being open so these never hijack arrow
   // keys anywhere else in the app (e.g. a select box, a number input).
   const ceremonyModal = document.getElementById("ceremony-modal");
-  if (isModalOpen(ceremonyModal)) {
+  // Not while the video is showing: there the arrows belong to the
+  // player's own seek controls.
+  if (isModalOpen(ceremonyModal) && !isCeremonyFilmShowing()) {
     if (e.key === "ArrowRight") advanceCeremony(1);
     else if (e.key === "ArrowLeft") advanceCeremony(-1);
   }

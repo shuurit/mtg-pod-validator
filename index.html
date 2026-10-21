@@ -17,7 +17,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="style.css?v=65">
+<link rel="stylesheet" href="style.css?v=66">
 
 <!-- Home-screen icon (iOS "Add to Home Screen" + Android/Chrome install).
      Generated from icon-source.png via scripts/generate_icons.py -- rerun
@@ -404,14 +404,24 @@
     <button id="ceremony-modal-close" class="icon-btn modal-close" aria-label="Close">&#10005;</button>
     <h2 id="ceremony-title">Closing Ceremony</h2>
     <p class="ceremony-counter" id="ceremony-counter"></p>
+    <!-- The rendered recap video (season-video/), for seasons listed in
+         CEREMONY_VIDEOS in app.js. Shown instead of the paced steps when
+         the modal opens; setCeremonyMode swaps between the two. -->
+    <div id="ceremony-film" class="ceremony-film" hidden>
+      <video id="ceremony-video" class="ceremony-video" controls playsinline preload="none"></video>
+      <button type="button" id="ceremony-step-through">Step through the trophies</button>
+    </div>
     <div id="ceremony-step" class="ceremony-step"></div>
-    <div class="row ceremony-nav">
+    <div class="row ceremony-nav" id="ceremony-nav">
       <button type="button" id="ceremony-prev">Previous</button>
       <button type="button" id="ceremony-next">Next</button>
     </div>
     <div id="ceremony-recap" hidden>
       <canvas id="ceremony-recap-canvas"></canvas>
       <a id="ceremony-recap-download" class="primary to-game-btn" download="season-recap.png">Download Recap</a>
+    </div>
+    <div class="row ceremony-film-row" id="ceremony-film-row" hidden>
+      <button type="button" id="ceremony-watch-film">Watch the video</button>
     </div>
   </div>
 </div>
@@ -468,6 +478,6 @@
   </div>
 </div>
 
-<script src="app.js?v=72"></script>
+<script src="app.js?v=73"></script>
 </body>
 </html>
