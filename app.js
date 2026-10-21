@@ -2216,6 +2216,7 @@ function buildBracketEditRow(deck) {
 function buildDeckPlate(deck, pgPower) {
   const plate = document.createElement("div");
   plate.className = `deck-plate ${powerTierClass(deck.power, "deck-plate")}`;
+  plate.dataset.flipKey = String(deck.id);
 
   const left = document.createElement("div");
   left.className = "deck-plate-left";
@@ -2390,7 +2391,7 @@ function renderPlayersTable() {
       } else {
         playerDeckSortState.set(player.id, { column: col.key, direction: col.defaultDir });
       }
-      renderPlayersTable();
+      glideReorder(container, renderPlayersTable);
     });
     block.appendChild(sortBar);
 
@@ -4931,6 +4932,64 @@ function initScrollEdge() {
   sync();
 }
 
+// ---------- re-sorts (FLIP) ----------
+// A sort re-renders the list from scratch, so every row used to jump to its
+// new place and the eye lost track of who moved where. glideReorder wraps
+// that re-render: it notes where each keyed row ([data-flip-key]) is on
+// screen, lets the render happen, then starts each row at its old spot and
+// springs it home -- reading the old spot from the live layout, so a second
+// sort mid-glide starts from wherever the rows actually are. Bars
+// ([data-flip-bar], a fill with a % width) stretch from their old length
+// to the new one the same way. Only for sorts the user asked for; a data
+// refresh re-renders in place (web-animation rule 7).
+function glideReorder(container, render) {
+  if (!container || REDUCED_MOTION.matches) { render(); return; }
+  const before = new Map();
+  container.querySelectorAll("[data-flip-key]").forEach(el => {
+    const fill = el.querySelector("[data-flip-bar]");
+    before.set(el.dataset.flipKey, {
+      top: el.getBoundingClientRect().top,
+      bar: fill ? fill.getBoundingClientRect().width : null,
+    });
+  });
+  render();
+  container.querySelectorAll("[data-flip-key]").forEach(el => {
+    const was = before.get(el.dataset.flipKey);
+    if (!was) return;
+    const dy = was.top - el.getBoundingClientRect().top;
+    if (Math.abs(dy) >= 1) {
+      // Rows crossing paths would pile up as unreadable overlapping text,
+      // so a travelling row dims toward the middle of its trip and is
+      // fully solid again at both ends (1 - 0.6 * 4p(1-p), p = progress).
+      new Spring(dy, v => {
+        const p = Math.min(1, Math.max(0, 1 - Math.abs(v / dy)));
+        el.style.transform = v ? `translate3d(0, ${v}px, 0)` : "";
+        el.style.opacity = v ? String(1 - 2.4 * p * (1 - p)) : "";
+      }).to(0, { response: 0.4 });
+    }
+    const fill = el.querySelector("[data-flip-bar]");
+    const now = fill ? fill.getBoundingClientRect().width : 0;
+    if (fill && was.bar !== null && now > 0 && Math.abs(was.bar - now) >= 1) {
+      fill.style.transformOrigin = "left center";
+      new Spring(was.bar / now, v => { fill.style.transform = v === 1 ? "" : `scaleX(${v})`; }, 0.002).to(1, { response: 0.45 });
+    }
+  });
+}
+
+// "No" -- the head-shake a Mac login window gives a wrong password: a
+// spring kicked sideways with nowhere to go but back, under-damped so it
+// shudders a couple of times and stops. Paired with a buzz on the same
+// frame; reduced motion keeps the buzz and the message, drops the shake.
+function shakeNo(el) {
+  haptic([18, 50, 18]);
+  if (!el || REDUCED_MOTION.matches) return;
+  const spring = el._shakeSpring ||= new Spring(0, v => { el.style.transform = Math.abs(v) < 0.1 ? "" : `translate3d(${v}px, 0, 0)`; });
+  // A button's own transform transition would smear the shake into a slow
+  // wobble; the spring is the only animator while it runs.
+  el.style.transition = "none";
+  spring.to(0, { dampingRatio: 0.22, response: 0.16, velocity: -650, onRest: () => { el.style.transition = ""; } });
+}
+
 // ---------- tabs ----------
 
 // Switches to a tab by name. Pulled out of initTabs' click handler so
@@ -5121,6 +5180,7 @@ const TREND_CLASS = { up: "trend-up", down: "trend-down", steady: "trend-steady"
 function buildWinRateCard(row, rank, sortKey, direction) {
   const card = document.createElement("div");
   card.className = "wr-card";
+  card.dataset.flipKey = row.name;
 
   const isAdjusted = sortKey === "adjPct";
   const primaryPct = isAdjusted ? row.adjPct : row.pgPct;
@@ -5180,6 +5240,7 @@ function buildWinRateCard(row, rank, sortKey, direction) {
     bar.className = "wr-bar";
     const fill = document.createElement("div");
     fill.className = "wr-bar-fill";
+    fill.dataset.flipBar = "";
     fill.style.width = `${Math.max(0, Math.min(100, primaryPct))}%`;
     bar.appendChild(fill);
     meter.appendChild(bar);
@@ -5298,7 +5359,7 @@ function renderWinRatesTable(data) {
       winRatesSortColumn = col.key;
       winRatesSortDirection = "desc";
     }
-    renderWinRatesTable(playgroupGamesData);
+    glideReorder(tableEl, () => renderWinRatesTable(playgroupGamesData));
   });
   tableEl.appendChild(sortBar);
 
@@ -7550,10 +7611,9 @@ function showProposalForm(show) {
   }
 }
 
-async function submitProposalForm(e) {
-  e.preventDefault();
-  const err = document.getElementById("proposal-form-error");
-  const fail = msg => { err.textContent = msg; err.hidden = false; };
+// What the form still needs before it can be posted, or null when it's
+// ready. Shared by the submit and by the live re-check as you type.
+function proposalFormPayload() {
   const payload = {
     kind: proposalsUi.formKind,
     title: document.getElementById("proposal-title").value.trim(),
@@ -7565,14 +7625,40 @@ async function submitProposalForm(e) {
     const text = input.value.trim();
     if (text) payload[input.dataset.side].push(text);
   });
-  if (!payload.title) return fail("Give it a title.");
-  if (payload.kind === "rule" && (!payload.out.length || !payload.in.length)) {
-    return fail("A rule change needs at least one Out bullet and one In bullet.");
+  let problem = null;
+  if (!payload.title) problem = "Give it a title.";
+  else if (payload.kind === "rule" && (!payload.out.length || !payload.in.length)) {
+    problem = "A rule change needs at least one Out bullet and one In bullet.";
+  } else if (payload.kind === "idea" && !payload.pro.length && !payload.con.length) {
+    problem = "An idea needs at least one pro or con.";
   }
-  if (payload.kind === "idea" && !payload.pro.length && !payload.con.length) {
-    return fail("An idea needs at least one pro or con.");
-  }
+  return { payload, problem };
+}
+
+// Once a submit has said what's missing, the message follows the form as
+// it's edited -- it updates to the next thing still needed and disappears
+// the moment the form is complete, instead of lingering until the next
+// submit. Never shown before a first submit: no scolding mid-sentence.
+function recheckProposalForm() {
+  const err = document.getElementById("proposal-form-error");
+  if (!err || err.hidden || err.dataset.source !== "validation") return;
+  const { problem } = proposalFormPayload();
+  if (problem) err.textContent = problem;
+  else err.hidden = true;
+}
+
+async function submitProposalForm(e) {
+  e.preventDefault();
+  const err = document.getElementById("proposal-form-error");
   const submit = document.getElementById("proposal-submit");
+  const fail = (msg, source) => {
+    err.textContent = msg;
+    err.dataset.source = source;
+    err.hidden = false;
+    shakeNo(submit);
+  };
+  const { payload, problem } = proposalFormPayload();
+  if (problem) return fail(problem, "validation");
   submit.disabled = true;
   submit.textContent = "Posting…";
   const ok = await proposalWrite("", payload);
@@ -7583,7 +7669,7 @@ async function submitProposalForm(e) {
     proposalsUi.filter = "active";
     renderProposals();
   } else {
-    fail(document.getElementById("proposals-status").textContent);
+    fail(document.getElementById("proposals-status").textContent, "server");
   }
 }
 
@@ -7602,13 +7688,17 @@ function initProposals() {
   document.querySelectorAll("[data-proposal-kind]").forEach(b => b.addEventListener("click", () => {
     proposalsUi.formKind = b.dataset.proposalKind;
     renderProposalFormLists();
+    recheckProposalForm();
   }));
   const newBtn = document.getElementById("proposals-new-btn");
   if (newBtn) newBtn.addEventListener("click", () => showProposalForm(true));
   const cancel = document.getElementById("proposal-cancel");
   if (cancel) cancel.addEventListener("click", () => showProposalForm(false));
   const form = document.getElementById("proposal-form");
-  if (form) form.addEventListener("submit", submitProposalForm);
+  if (form) {
+    form.addEventListener("submit", submitProposalForm);
+    form.addEventListener("input", recheckProposalForm);
+  }
 }
 
 // ---------- Discord sign-in ----------
