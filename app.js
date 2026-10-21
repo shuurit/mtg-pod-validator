@@ -1261,7 +1261,9 @@ function showTrophyDetailModal(id) {
   if (!slot.won && slot.runnerUp) body.appendChild(buildRunnerUpBox(slot, d));
   if (isOwnTrophyCase(d) && slot.won) body.appendChild(buildPinControls(slot, d));
 
+  const opening = modal.hidden;
   presentModal(modal);
+  if (opening) zoomTrophyDetail(modal, id);
 }
 
 function hideTrophyDetailModal() {
@@ -3780,9 +3782,12 @@ function showRevealModal(evaluated) {
   grid.style.gridTemplateColumns = `repeat(${columns}, 1fr)`;
   grid.style.setProperty("--reveal-img-height", `${imageHeight}px`);
 
-  for (const entry of evaluated) {
+  evaluated.forEach((entry, tileIndex) => {
     const tile = document.createElement("div");
     tile.className = "reveal-tile";
+    // Dealt face-down, then turned over one after another (see
+    // .reveal-tile's flip in style.css).
+    tile.style.setProperty("--flip-index", String(Math.min(tileIndex, 8)));
 
     const artSlot = document.createElement("div");
     artSlot.className = "reveal-tile-art-fallback";
@@ -3820,7 +3825,7 @@ function showRevealModal(evaluated) {
       }
       artSlot.replaceWith(pair);
     });
-  }
+  });
 
   // The pod passing is the moment worth a buzz -- only on the way in, not
   // when an already-open reveal re-renders.
@@ -3967,7 +3972,10 @@ function renderCeremonyOffset(x) {
   // Fades as it travels, gone by the time it's swapped for the next step,
   // so the swap itself is never seen.
   const fadeDistance = (pane.offsetWidth || 300) * 0.6;
-  pane.style.transform = `translate3d(${x}px, 0, 0)`;
+  // Turns on its vertical axis as it goes, like a card being flipped past
+  // -- the leading edge swings away in the direction of travel.
+  const turn = -x / (pane.offsetWidth || 300) * 30;
+  pane.style.transform = `perspective(900px) translate3d(${x}px, 0, 0) rotateY(${turn}deg)`;
   pane.style.opacity = String(Math.max(0, 1 - Math.abs(x) / fadeDistance));
 }
 
@@ -4628,7 +4636,7 @@ function haptic(pattern) {
 // MutationObserver notices and moves the indicator, so no call site had to
 // change. Resizes and the first showing (a control inside a hidden panel
 // measures as nothing) jump straight to place rather than animating.
-function attachSelectionIndicator(group, { itemSelector, className, stretch = false }) {
+function attachSelectionIndicator(group, { itemSelector, className, stretch = false, scrub = null }) {
   const indicator = document.createElement("span");
   indicator.className = className;
   indicator.setAttribute("aria-hidden", "true");
@@ -4685,13 +4693,109 @@ function attachSelectionIndicator(group, { itemSelector, className, stretch = fa
   }).observe(group, { subtree: true, attributes: true, attributeFilter: ["class"] });
   if ("ResizeObserver" in window) new ResizeObserver(() => update(false)).observe(group);
   update(false);
+  if (scrub) wireIndicatorScrub(group, itemSelector, xSpring, () => visible, scrub);
+}
+
+// Press and slide along the bar: the capsule leaves its tab and follows the
+// thumb 1:1, the tab under it lights up with a tick each time it crosses
+// into a new one, and letting go snaps it to the nearest tab -- with a
+// little of the flick's momentum, so a quick throw carries one tab further
+// -- and switches there. Pulling past either end rubber-bands. A plain tap
+// is untouched: the scrub only starts once a drag is clearly sideways.
+function wireIndicatorScrub(group, itemSelector, xSpring, isVisible, onPick) {
+  const tracker = createVelocityTracker();
+  let start = null;
+  let tracking = false;
+  let grabX = 0;
+  let fromX = 0;
+  let under = null;
+  let suppressClickUntil = 0;
+  const items = () => [...group.querySelectorAll(itemSelector)];
+  const nearest = (x) => {
+    let best = null;
+    let bestDistance = Infinity;
+    for (const item of items()) {
+      const distance = Math.abs(item.offsetLeft - x);
+      if (distance < bestDistance) { best = item; bestDistance = distance; }
+    }
+    return best;
+  };
+  const setUnder = (item) => {
+    if (item === under) return;
+    if (under) under.classList.remove("is-under");
+    if (item) item.classList.add("is-under");
+    if (under && item) haptic(4); // a detent each time it crosses into the next tab
+    under = item;
+  };
+
+  group.addEventListener("touchstart", (e) => {
+    start = e.touches.length === 1 && isVisible() ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
+    tracking = false;
+  }, { passive: true });
+
+  group.addEventListener("touchmove", (e) => {
+    if (!start) return;
+    const t = e.touches[0];
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    if (!tracking) {
+      if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { start = null; return; }
+      if (Math.abs(dx) < 10) return;
+      tracking = true;
+      xSpring.stop();
+      fromX = xSpring.value;
+      grabX = t.clientX;
+      group.classList.add("is-scrubbing");
+      tracker.reset();
+    }
+    e.preventDefault();
+    const list = items();
+    const min = list[0].offsetLeft;
+    const max = list[list.length - 1].offsetLeft;
+    let x = fromX + (t.clientX - grabX);
+    if (x < min) x = min - rubberband(min - x, group.offsetWidth);
+    else if (x > max) x = max + rubberband(x - max, group.offsetWidth);
+    tracker.add(t.clientX, e.timeStamp);
+    xSpring.set(x);
+    setUnder(nearest(x));
+  }, { passive: false });
+
+  const end = () => {
+    start = null;
+    if (!tracking) return;
+    tracking = false;
+    group.classList.remove("is-scrubbing");
+    setUnder(null);
+    suppressClickUntil = performance.now() + 350;
+    const velocity = tracker.velocity();
+    // A fraction of the full projection: the tabs sit close together, and
+    // a scroll-strength coast would fling it to the end of the bar.
+    const target = nearest(xSpring.value + projectMomentum(velocity) * 0.3);
+    xSpring.to(target.offsetLeft, { dampingRatio: REDUCED_MOTION.matches ? 1 : 0.8, response: 0.32, velocity });
+    if (!target.classList.contains("active")) onPick(target);
+  };
+  group.addEventListener("touchend", end);
+  group.addEventListener("touchcancel", end);
+  // Lifting the finger over a tab mustn't also count as tapping it.
+  group.addEventListener("click", (e) => {
+    if (performance.now() < suppressClickUntil) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+  }, true);
 }
 
 function initSelectionIndicators() {
   const topTabs = document.getElementById("main-tabs");
   if (topTabs) attachSelectionIndicator(topTabs, { itemSelector: ".tab-btn", className: "tab-indicator", stretch: true });
   const bottomTabs = document.getElementById("bottom-tabs");
-  if (bottomTabs) attachSelectionIndicator(bottomTabs, { itemSelector: ".bottom-tab-btn", className: "bottom-tab-indicator" });
+  if (bottomTabs) {
+    attachSelectionIndicator(bottomTabs, {
+      itemSelector: ".bottom-tab-btn",
+      className: "bottom-tab-indicator",
+      scrub: item => activateTab(item.dataset.tab),
+    });
+  }
   document.querySelectorAll(".view-toggle").forEach(group => {
     attachSelectionIndicator(group, { itemSelector: ".view-toggle-btn", className: "segment-thumb" });
   });
@@ -4797,6 +4901,9 @@ function dismissModal(overlay, { velocity = 0 } = {}) {
   if (!s) { overlay.hidden = true; return; }
   if (!s.open) return;
   s.open = false;
+  // A modal that borrowed something from the page (the trophy zoom) hands
+  // it back on its way out, however it was closed.
+  if (overlay._beforeDismiss) overlay._beforeDismiss();
   s.spring.to(0, {
     dampingRatio: 1,
     response: SHEET_LAYOUT.matches ? 0.36 : 0.22,
@@ -5108,7 +5215,16 @@ function syncCompactBar() {
   // The heading that names this screen: the tab's own card title, or the
   // app title on Tonight, which has none.
   const heading = panel && (panel.querySelector(".card h2") || document.querySelector("header h1"));
-  const show = !wrap.hidden && !!heading && heading.getBoundingClientRect().bottom < bar.offsetHeight;
+  // Scroll-linked rather than a switch: the bar fades in over the ~28px the
+  // heading takes to slide under it, so scrolling slowly scrubs the
+  // handover and scrolling back reverses it exactly.
+  const barHeight = bar.offsetHeight;
+  const progress = !wrap.hidden && heading
+    ? Math.min(1, Math.max(0, (barHeight + 8 - heading.getBoundingClientRect().bottom) / 28))
+    : 0;
+  const show = progress > 0;
+  bar.style.opacity = show ? String(progress) : "";
+  bar.style.transform = show && !REDUCED_MOTION.matches ? `translate3d(0, ${(1 - progress) * -10}px, 0)` : "";
   if (show) {
     document.getElementById("compact-bar-title").textContent = panelTitle(panel);
     const back = backTargetFor(panel);
@@ -5290,6 +5406,125 @@ function initTrophyTilt() {
     s.y.to(nx * MAX_TILT, { response: 0.3 });
   });
   document.addEventListener("pointerleave", () => { release(current); current = null; });
+}
+
+// ---------- shared-element zoom ----------
+// Opening a trophy's detail flies its emblem out of the card you tapped
+// and into the sheet, landing exactly where the sheet's own emblem sits;
+// closing flies it back into the card -- however the sheet is closed,
+// including a drag. A stand-in copy does the flying while both real
+// emblems are hidden, so neither is ever seen twice. It homes in on the
+// destination's live position every frame, so it tracks the sheet as it
+// rises or falls rather than aiming at where it will end up. Lands from
+// the spring's own safety timeout too, so neither emblem can stay hidden.
+function flyElement(from, to, { onLand } = {}) {
+  if (!from || !to || REDUCED_MOTION.matches || !from.isConnected || !to.isConnected) {
+    if (onLand) onLand();
+    return;
+  }
+  const start = from.getBoundingClientRect();
+  if (!start.width || !start.height) { if (onLand) onLand(); return; }
+  const ghost = from.cloneNode(true);
+  ghost.removeAttribute("id");
+  ghost.classList.add("flying-ghost");
+  Object.assign(ghost.style, {
+    visibility: "visible", // the original may already be hidden by its owner
+    left: `${start.left}px`,
+    top: `${start.top}px`,
+    width: `${start.width}px`,
+    height: `${start.height}px`,
+  });
+  document.body.appendChild(ghost);
+  from.style.visibility = "hidden";
+  to.style.visibility = "hidden";
+  const place = (q) => {
+    const end = to.getBoundingClientRect();
+    const x = (end.left - start.left) * q;
+    const y = (end.top - start.top) * q;
+    const sx = 1 + ((end.width || start.width) / start.width - 1) * q;
+    const sy = 1 + ((end.height || start.height) / start.height - 1) * q;
+    ghost.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${sx}, ${sy})`;
+  };
+  const spring = new Spring(0, place, 0.001);
+  spring.to(1, {
+    response: 0.46,
+    onRest: () => {
+      ghost.remove();
+      to.style.visibility = "";
+      from.style.visibility = "";
+      if (onLand) onLand();
+    },
+  });
+}
+
+function trophyEmblemIn(root) {
+  return root ? root.querySelector(".trophy-emblem, .trophy-icon") : null;
+}
+
+// Wired by showTrophyDetailModal on a fresh open from a card.
+function zoomTrophyDetail(modal, id) {
+  const card = document.querySelector(`.tc-card[data-id="${CSS.escape(String(id))}"]`);
+  const source = trophyEmblemIn(card);
+  const detailEmblem = () => trophyEmblemIn(document.querySelector("#trophy-detail-body .tc-detail-art"));
+  if (!source || !detailEmblem()) return;
+  // While the detail is open the card's emblem is "in" the sheet.
+  source.style.visibility = "hidden";
+  flyElement(source, detailEmblem(), { onLand: () => {
+    if (isModalOpen(modal)) source.style.visibility = "hidden";
+  } });
+  modal._beforeDismiss = () => {
+    modal._beforeDismiss = null;
+    const back = detailEmblem();
+    if (source.isConnected && back) flyElement(back, source);
+    else source.style.visibility = "";
+  };
+}
+
+// ---------- pointer hover highlight (mouse) ----------
+// With a mouse, one soft highlight glides from item to item as the pointer
+// moves along the top tabs or down the avatar menu -- the iPadOS pointer
+// "lifting" whatever it's over -- instead of each item lighting up and
+// going dark on its own. Fades in where the pointer enters, fades out when
+// it leaves the group. Mouse only; jumps under reduced motion.
+function attachHoverHighlight(group, itemSelector) {
+  const pill = document.createElement("span");
+  pill.className = "hover-pill";
+  pill.setAttribute("aria-hidden", "true");
+  group.appendChild(pill);
+  group.classList.add("has-hover-pill");
+  const box = { x: 0, y: 0, w: 0, h: 0 };
+  const render = () => {
+    pill.style.transform = `translate3d(${box.x}px, ${box.y}px, 0)`;
+    pill.style.width = `${box.w}px`;
+    pill.style.height = `${box.h}px`;
+  };
+  const springs = {};
+  for (const k of ["x", "y", "w", "h"]) springs[k] = new Spring(0, v => { box[k] = v; render(); });
+  let shown = false;
+  group.addEventListener("pointerover", (e) => {
+    if (e.pointerType !== "mouse") return;
+    const item = e.target instanceof Element ? e.target.closest(itemSelector) : null;
+    if (!item || !group.contains(item)) return;
+    const target = { x: item.offsetLeft, y: item.offsetTop, w: item.offsetWidth, h: item.offsetHeight };
+    for (const k of Object.keys(springs)) {
+      if (!shown || REDUCED_MOTION.matches) springs[k].jump(target[k]);
+      else springs[k].to(target[k], { response: 0.28 });
+    }
+    shown = true;
+    pill.classList.add("is-shown");
+  });
+  group.addEventListener("pointerleave", () => {
+    shown = false;
+    pill.classList.remove("is-shown");
+  });
+}
+
+function initHoverHighlights() {
+  if (!window.matchMedia("(hover: hover) and (pointer: fine)").matches) return;
+  const tabs = document.getElementById("main-tabs");
+  if (tabs) attachHoverHighlight(tabs, ".tab-btn");
+  const menu = document.getElementById("auth-menu");
+  if (menu) attachHoverHighlight(menu, ".auth-menu-item");
 }
 
 // ---------- tabs ----------
@@ -8511,9 +8746,13 @@ function initPullToRefresh() {
   // and translating them would recompute their backdrop blur every frame
   // (web-animation rule 5). It's a strip at the very top, so only the
   // page below it reflows -- what the old 0.2s height transition did too.
+  const title = document.querySelector("header h1");
   const render = (h) => {
     const height = Math.max(0, h);
     indicator.style.height = `${height}px`;
+    // The big title stretches a little as the page is pulled past its top,
+    // like an iOS large title -- the pull visibly has hold of the page.
+    if (title) title.style.transform = height > 0.5 ? `scale(${1 + height / 700})` : "";
     if (refreshing) return;
     // The arrow winds round as the pull grows and points the way it's
     // going -- progress you can read before letting go.
@@ -8651,6 +8890,7 @@ initScrollEdge();
 initCompactBar();
 initEdgeBack();
 initTrophyTilt();
+initHoverHighlights();
 
 // Registers unconditionally (not gated behind sign-in) -- installability
 // is a property of the page shell itself. See sw.js for what it actually

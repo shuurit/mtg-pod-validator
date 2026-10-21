@@ -5411,25 +5411,14 @@ html.is-scrolled .scroll-edge {
   -webkit-backdrop-filter: blur(22px) saturate(180%);
   backdrop-filter: blur(22px) saturate(180%);
   border-bottom: 1px solid var(--border-soft);
+  /* Opacity and a short slide are driven straight from the scroll
+     position by syncCompactBar, so there's no transition here to lag
+     behind the finger; .is-shown only makes it visible and focusable. */
   opacity: 0;
   visibility: hidden;
-  -webkit-transform: translate3d(0, -10px, 0);
-  transform: translate3d(0, -10px, 0);
-  transition: opacity 0.18s ease-in, transform 0.2s ease-in, visibility 0s linear 0.2s;
 }
 .compact-bar.is-shown {
-  opacity: 1;
   visibility: visible;
-  -webkit-transform: translate3d(0, 0, 0);
-  transform: translate3d(0, 0, 0);
-  transition: opacity 0.22s ease-out, transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s;
-}
-@media (prefers-reduced-motion: reduce) {
-  .compact-bar,
-  .compact-bar.is-shown {
-    -webkit-transform: none;
-    transform: none;
-  }
 }
 .compact-bar-title {
   max-width: calc(100% - 120px);
@@ -5469,6 +5458,13 @@ html.is-scrolled .scroll-edge {
 @media (hover: hover) and (pointer: fine) {
   .compact-bar-title:hover { color: var(--accent); border-color: transparent; }
   .compact-bar-back:hover { color: var(--accent-strong); border-color: transparent; }
+}
+
+/* The big title stretches while the page is pulled down to refresh
+   (initPullToRefresh), anchored at its left edge so it grows out of the
+   corner it starts in. */
+header h1 {
+  transform-origin: 0 100%;
 }
 
 /* ---------- Edge swipe back ----------
@@ -5572,6 +5568,98 @@ button.is-done:hover {
    light that follows it, pinned to where the pointer is (--sheen-x/y). */
 .tc-card.is-tilting {
   background-image: radial-gradient(circle at var(--sheen-x, 50%) var(--sheen-y, 50%), var(--chrome-edge), transparent 55%);
+}
+
+/* ---------- Ready to Play: cards turned over ----------
+   The pod's decks are dealt face-down and turned over one after another
+   (--flip-index, set in showRevealModal), each with a little overshoot --
+   the reveal is the app's big moment, where overshoot belongs. The back is
+   the tile's ::after; everything on the front hides its back face, so
+   halfway through the turn the back takes over. Only a `from` frame and a
+   backwards fill covering each tile's own delay: without the animation
+   the tiles are simply face up. */
+.reveal-tile {
+  position: relative;
+  transform-style: preserve-3d;
+  animation: reveal-turn-over 0.7s cubic-bezier(0.34, 1.4, 0.64, 1) backwards;
+  animation-delay: calc(0.25s + var(--flip-index, 0) * 0.12s);
+}
+.reveal-tile > * {
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+}
+.reveal-tile::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-md);
+  border: 1.5px solid var(--foil);
+  background:
+    radial-gradient(ellipse 34% 26% at 50% 42%, transparent 62%, rgba(201, 161, 63, 0.75) 64%, transparent 70%),
+    radial-gradient(circle at 50% 42%, var(--leather-hi), var(--leather-lo) 72%);
+  transform: rotateY(180deg);
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  pointer-events: none;
+}
+@keyframes reveal-turn-over {
+  from { transform: perspective(900px) rotateY(180deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .reveal-tile { animation: none; }
+  .reveal-tile::after { display: none; }
+}
+
+/* ---------- Tab bar scrubbing ----------
+   While a thumb slides along the bottom bar (wireIndicatorScrub), the tab
+   under the capsule lights up ahead of the switch. */
+.bottom-tabs.is-scrubbing .bottom-tab-btn.is-under {
+  color: var(--accent);
+}
+.bottom-tabs.is-scrubbing .bottom-tab-btn.is-under .bottom-tab-icon {
+  transform: scale(1.12);
+}
+
+/* ---------- Shared-element zoom ----------
+   The stand-in that flies a trophy emblem between its card and the detail
+   sheet (flyElement in app.js). Above the sheet, never clickable. */
+.flying-ghost {
+  position: fixed;
+  z-index: 250;
+  margin: 0;
+  transform-origin: 0 0;
+  pointer-events: none;
+}
+
+/* ---------- Pointer hover highlight ----------
+   One highlight that glides between the item under the mouse
+   (attachHoverHighlight): the top tabs and the avatar menu rows. Their own
+   per-item hover background stands down so there's only the one. */
+.has-hover-pill {
+  position: relative;
+}
+.hover-pill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 0;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.hover-pill.is-shown {
+  opacity: 1;
+}
+.has-hover-pill > :not(.hover-pill):not(.tab-indicator) {
+  position: relative;
+  z-index: 1;
+}
+@media (hover: hover) and (pointer: fine) {
+  .auth-menu.has-hover-pill .auth-menu-item:hover {
+    background: transparent;
+  }
 }
 
 /* ---------- Headings and copy ----------
