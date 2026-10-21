@@ -1,0 +1,12 @@
+{
+  "name": "season-video",
+  "private": true,
+  "description": "Season closing-ceremony recap video (Hyperframes composition)",
+  "scripts": {
+    "build": "node build-season.mjs",
+    "render": "hyperframes render -q high -o out/season-silent.mp4"
+  },
+  "dependencies": {
+    "hyperframes": "0.8.181"
+  }
+}

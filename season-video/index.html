@@ -1,0 +1,511 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700;900&family=EB+Garamond:ital,wght@0,500;0,700;1,500&display=block" rel="stylesheet" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <script src="season-data.js"></script>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 1920px; height: 1080px; overflow: hidden; background: #0a0806; }
+      :root {
+        --gold: #e3bd62;
+        --gold-hi: #fff1c2;
+        --gold-lo: #8a6420;
+        --ink: #f3ead6;
+        --muted: #b9a988;
+        --parch: #efe5cc;
+        --parch-ink: #1d160d;
+      }
+      #root {
+        position: relative; width: 1920px; height: 1080px; overflow: hidden;
+        font-family: "EB Garamond", Georgia, serif; color: var(--ink);
+        background:
+          radial-gradient(ellipse 70% 60% at 50% 45%, #2a1d10 0%, #120c07 55%, #070504 100%);
+      }
+      .scene { position: absolute; inset: 0; opacity: 0; visibility: hidden; }
+      .display { font-family: "Cinzel", serif; }
+      .gold-text {
+        background: linear-gradient(180deg, var(--gold-hi) 0%, var(--gold) 45%, var(--gold-lo) 100%);
+        -webkit-background-clip: text; background-clip: text; color: transparent;
+      }
+      .eyebrow { font-family: "Cinzel", serif; font-weight: 700; letter-spacing: 0.42em; text-transform: uppercase; color: var(--muted); }
+
+      /* ambient motes + vignette stay on top of every scene */
+      #motes { position: absolute; inset: 0; pointer-events: none; }
+      .mote { position: absolute; border-radius: 50%; filter: blur(1.5px); }
+      #vignette { position: absolute; inset: 0; pointer-events: none;
+        background: radial-gradient(ellipse 85% 75% at 50% 50%, transparent 55%, rgba(0,0,0,.75) 100%); }
+
+      /* mana orbs */
+      .orb { position: absolute; width: 96px; height: 96px; border-radius: 50%;
+        display: grid; place-items: center;
+        box-shadow: 0 0 0 3px rgba(0,0,0,.55), 0 0 40px var(--glow), inset 0 -8px 16px rgba(0,0,0,.25); }
+      .orb svg { width: 58%; height: 58%; }
+
+      /* section headings */
+      .head { position: absolute; left: 0; right: 0; top: 74px; text-align: center; }
+      .head .eyebrow { font-size: 22px; }
+      .head h2 { font-family: "Cinzel", serif; font-weight: 900; font-size: 84px; letter-spacing: .04em; line-height: 1.05; margin-top: 10px; }
+      .head p { font-size: 30px; font-style: italic; color: var(--muted); margin-top: 6px; }
+
+      /* trophy emblem showcase */
+      .trophy { position: absolute; text-align: center; }
+      .em-wrap { position: relative; margin: 0 auto; width: var(--es); height: calc(var(--es) * 1.17); }
+      .halo { position: absolute; left: -45%; right: -45%; top: -35%; bottom: -35%; border-radius: 50%;
+        background: radial-gradient(circle, rgba(255,214,120,.42) 0%, rgba(255,190,90,.12) 38%, transparent 64%); }
+      .em-wrap img { position: relative; width: 100%; height: 100%; object-fit: contain; display: block;
+        filter: drop-shadow(0 20px 26px rgba(0,0,0,.65)); }
+      .shine { position: absolute; inset: 0; overflow: hidden; pointer-events: none;
+        -webkit-mask-size: contain; mask-size: contain; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+        -webkit-mask-position: center; mask-position: center; }
+      .shine::before { content: ""; position: absolute; top: -20%; bottom: -20%; width: 40%; left: 0;
+        transform: translateX(var(--sx, -150%)) skewX(-18deg);
+        background: linear-gradient(90deg, transparent, rgba(255,246,214,.75) 50%, transparent); mix-blend-mode: screen; }
+      .tt { font-family: "Cinzel", serif; font-weight: 700; font-size: 27px; letter-spacing: .05em; margin-top: 16px; line-height: 1.1; }
+      .td { font-style: italic; font-size: 18px; color: var(--muted); line-height: 1.2; margin: 6px auto 0; max-width: 92%; min-height: 2.4em; }
+      .tw { font-family: "Cinzel", serif; font-weight: 900; font-size: 46px; line-height: 1.05; margin-top: 10px; color: var(--ink); }
+      .ts { font-weight: 700; font-size: 22px; margin-top: 4px; }
+      .tr { font-style: italic; font-size: 16px; color: var(--muted); margin-top: 8px; opacity: .85; }
+      .tline { width: 46%; height: 1px; margin: 12px auto 0; background: linear-gradient(90deg, transparent, rgba(227,189,98,.6), transparent); }
+      .sub-line { font-family: "EB Garamond", serif; font-weight: 500; font-style: italic; color: var(--ink); margin-top: 6px; }
+
+      /* stat tokens */
+      .token { position: absolute; width: 250px; height: 250px; border-radius: 50%; display: flex; flex-direction: column; align-items: center; justify-content: center;
+        background: radial-gradient(circle at 50% 35%, #3a2a17, #140e08 70%);
+        box-shadow: 0 0 0 6px #0b0806, 0 0 0 10px var(--gold-lo), 0 0 0 12px var(--gold), 0 20px 50px rgba(0,0,0,.6); }
+      .token .n { font-family: "Cinzel", serif; font-weight: 900; font-size: 88px; line-height: 1; }
+      .token .l { font-family: "Cinzel", serif; font-weight: 700; font-size: 19px; letter-spacing: .25em; color: var(--muted); margin-top: 8px; }
+
+      /* deck marquee */
+      .row { position: absolute; left: 0; display: flex; gap: 22px; }
+      .tile { position: relative; flex: none; width: 260px; height: 190px; border-radius: 10px; overflow: hidden;
+        box-shadow: 0 0 0 3px #0d0b09, 0 0 0 5px var(--frame), 0 14px 30px rgba(0,0,0,.55);
+        background: linear-gradient(135deg, var(--frame-hi), var(--frame-lo)); }
+      .tile img { width: 100%; height: 100%; object-fit: cover; }
+      .tile .cap { position: absolute; left: 0; right: 0; bottom: 0; padding: 26px 12px 10px;
+        background: linear-gradient(transparent, rgba(0,0,0,.88)); }
+      .tile .dn { font-family: "Cinzel", serif; font-weight: 700; font-size: 17px; line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .tile .dp { font-size: 16px; color: var(--muted); display: flex; align-items: center; gap: 6px; margin-top: 3px; }
+      .pip { width: 13px; height: 13px; border-radius: 50%; box-shadow: 0 0 0 1px rgba(0,0,0,.6); display: inline-block; }
+      .spot { position: absolute; left: 50%; top: 600px; width: 1100px; margin-left: -550px; padding: 30px 40px; text-align: center;
+        background: rgba(10,7,4,.86); border: 1px solid rgba(227,189,98,.5); border-radius: 18px; box-shadow: 0 30px 80px rgba(0,0,0,.7); }
+      .spot .eyebrow { font-size: 18px; color: var(--gold); }
+      .spot .big { font-family: "Cinzel", serif; font-weight: 900; font-size: 50px; margin-top: 8px; line-height: 1.1; }
+      .spot .sub { font-size: 28px; font-style: italic; color: var(--muted); margin-top: 6px; }
+
+      /* battle log */
+      .gtile { position: absolute; width: 178px; height: 118px; border-radius: 8px; overflow: hidden;
+        box-shadow: 0 0 0 2px #0d0b09, 0 0 0 3.5px var(--frame); background: linear-gradient(135deg, var(--frame-hi), var(--frame-lo)); }
+      .gtile img { width: 100%; height: 100%; object-fit: cover; filter: saturate(.9) brightness(.8); }
+      .gtile .gn { position: absolute; top: 6px; left: 8px; font-family: "Cinzel", serif; font-weight: 900; font-size: 16px; text-shadow: 0 1px 4px #000; }
+      .gtile .gw { position: absolute; left: 0; right: 0; bottom: 0; padding: 18px 8px 6px; background: linear-gradient(transparent, rgba(0,0,0,.9));
+        font-family: "Cinzel", serif; font-weight: 700; font-size: 17px; }
+      .gtile .gw small { display: block; font-family: "EB Garamond", serif; font-weight: 500; font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .wins { position: absolute; left: 1330px; top: 300px; width: 500px; }
+      .wins h3 { font-family: "Cinzel", serif; font-weight: 700; letter-spacing: .3em; font-size: 20px; color: var(--muted); margin-bottom: 18px; }
+      .wrow { display: grid; grid-template-columns: 130px 1fr 60px; align-items: center; height: 58px; }
+      .wrow .wn { font-family: "Cinzel", serif; font-weight: 700; font-size: 24px; }
+      .wrow .track { height: 18px; border-radius: 9px; background: rgba(255,255,255,.07); overflow: hidden; }
+      .wrow .fill { height: 100%; width: 100%; border-radius: 9px; transform-origin: left center;
+        background: linear-gradient(90deg, var(--gold-lo), var(--gold), var(--gold-hi)); }
+      .wrow .wv { font-family: "Cinzel", serif; font-weight: 900; font-size: 26px; text-align: right; }
+      .caption { position: absolute; left: 90px; right: 90px; bottom: 60px; text-align: center; font-size: 32px; font-style: italic; }
+      .caption b { font-family: "Cinzel", serif; font-style: normal; color: var(--gold); }
+
+      /* phase ladder */
+      #ladder { position: absolute; top: 40px; left: 50%; transform: translateX(-50%); display: flex; gap: 10px; opacity: 0; }
+      .step { font-family: "Cinzel", serif; font-weight: 700; font-size: 15px; letter-spacing: .14em; text-transform: uppercase;
+        padding: 8px 16px; border-radius: 20px; border: 1px solid rgba(227,189,98,.28); color: rgba(243,234,214,.45); position: relative; }
+      .step .lit { position: absolute; inset: -1px; border-radius: 20px; opacity: 0;
+        background: linear-gradient(180deg, #f2d48a, #b8862e); box-shadow: 0 0 24px rgba(227,189,98,.6); }
+      .step span { position: relative; }
+      .phase-head { top: 112px; }
+      .phase-head h2 { font-size: 72px; }
+      .phase-head p { font-size: 28px; }
+
+      /* hoard */
+      .hrow { position: absolute; left: 260px; display: flex; align-items: center; height: 110px; }
+      .hrow .hn { width: 300px; font-family: "Cinzel", serif; font-weight: 900; font-size: 50px; }
+      .hrow .cups { display: flex; gap: 10px; width: 1000px; align-items: center; }
+      .hrow .cups img { width: 86px; height: 100px; object-fit: contain; filter: drop-shadow(0 6px 10px rgba(0,0,0,.6)); }
+      .hrow .hc { font-family: "Cinzel", serif; font-weight: 900; font-size: 56px; width: 120px; text-align: right; }
+
+      /* judgment */
+      .rays { position: absolute; left: 50%; top: 520px; width: 1700px; height: 1700px; margin: -850px 0 0 -850px; border-radius: 50%;
+        background: repeating-conic-gradient(from 0deg, rgba(255,214,120,.16) 0deg 5deg, transparent 5deg 15deg);
+        -webkit-mask: radial-gradient(circle, #000 0%, rgba(0,0,0,.6) 30%, transparent 62%); mask: radial-gradient(circle, #000 0%, rgba(0,0,0,.6) 30%, transparent 62%); }
+      .plinth { position: absolute; bottom: 0; border-radius: 10px 10px 0 0; display: grid; place-items: start center; padding-top: 14px;
+        font-family: "Cinzel", serif; font-weight: 900; font-size: 56px;
+        background: linear-gradient(180deg, #3b2b18, #1a1209); box-shadow: inset 0 3px 0 rgba(227,189,98,.6), 0 -10px 40px rgba(0,0,0,.5); }
+      .podium-name { position: absolute; text-align: center; font-family: "Cinzel", serif; font-weight: 900; }
+      .spark { position: absolute; width: 10px; height: 10px; border-radius: 50%; background: radial-gradient(circle, #fff6d5, #e3bd62 60%, transparent 70%); }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="main" data-start="0" data-duration="113.6" data-width="1920" data-height="1080">
+      <div id="motes"></div>
+      <div id="scenes"></div>
+      <div id="ladder"></div>
+      <div id="vignette"></div>
+    </div>
+
+    <script>
+      // ---------- data + helpers ----------
+      const S = window.SEASON;
+      const root = document.getElementById("root");
+      const scenesEl = document.getElementById("scenes");
+      const tl = gsap.timeline({ paused: true });
+
+      // Deterministic randomness (Hyperframes forbids Math.random).
+      let seed = 1337 + S.season.id;
+      const rnd = () => { seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+      const R = (a, b) => a + (b - a) * rnd();
+
+      const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
+      const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+      const MANA = {
+        W: { c: "#f4eed2", glow: "rgba(255,248,210,.55)" },
+        U: { c: "#2f7fd0", glow: "rgba(70,150,255,.55)" },
+        B: { c: "#3a302c", glow: "rgba(170,120,200,.45)" },
+        R: { c: "#d4452c", glow: "rgba(255,90,50,.55)" },
+        G: { c: "#2e8b52", glow: "rgba(70,200,110,.5)" },
+      };
+      const FRAMES = {
+        W: ["#fbf6e2", "#d9cfae", "#9c9070"], U: ["#7db6ef", "#2c6aa8", "#173a62"], B: ["#7a6e68", "#3c3431", "#171312"],
+        R: ["#f19a7c", "#bb3d26", "#5e1b10"], G: ["#86c99a", "#2f7a48", "#163a22"], M: ["#f7dd94", "#c79c3f", "#6b4c17"], C: ["#d7dde2", "#8d969d", "#4b5257"],
+      };
+      const ciKey = (ci) => !ci ? "C" : ci.length > 1 ? "M" : ci;
+      const frameVars = (ci) => { const f = FRAMES[ciKey(ci)]; return `--frame-hi:${f[0]};--frame:${f[1]};--frame-lo:${f[2]};`; };
+      const pips = (ci) => (ci || "C").split("").map((k) => `<span class="pip" style="background:${(MANA[k] || { c: "#9aa0a6" }).c}"></span>`).join("");
+
+      const GLYPH = {
+        W: '<svg viewBox="0 0 40 40"><circle cx="20" cy="20" r="7" fill="#3b3320"/><g stroke="#3b3320" stroke-width="3" stroke-linecap="round">' +
+          [0, 45, 90, 135, 180, 225, 270, 315].map((a) => `<line x1="20" y1="5" x2="20" y2="10" transform="rotate(${a} 20 20)"/>`).join("") + "</g></svg>",
+        U: '<svg viewBox="0 0 40 40"><path d="M20 5 C26 14 31 20 31 26 a11 11 0 0 1 -22 0 C9 20 14 14 20 5z" fill="#0d2a47"/></svg>',
+        B: '<svg viewBox="0 0 40 40"><path d="M20 6c-8 0-13 5.5-13 12.5 0 4.6 2.3 7.6 5 9.2V33h16v-5.3c2.7-1.6 5-4.6 5-9.2C33 11.5 28 6 20 6z" fill="#cfc6c0"/><circle cx="15" cy="19" r="3.4" fill="#2a2220"/><circle cx="25" cy="19" r="3.4" fill="#2a2220"/><rect x="18.5" y="25" width="3" height="4" fill="#2a2220"/></svg>',
+        R: '<svg viewBox="0 0 40 40"><path d="M21 4c2 7 9 10 9 19a10 10 0 0 1-20 0c0-5 3-8 4-12 1 4 3 5 4 6 1-5 0-9 3-13z" fill="#4a0f05"/></svg>',
+        G: '<svg viewBox="0 0 40 40"><path d="M20 4 31 22h-6l5 7H10l5-7H9z" fill="#0f2f1b"/><rect x="18" y="29" width="4" height="7" fill="#0f2f1b"/></svg>',
+      };
+      const fmtDate = (d) => new Date(d + "T12:00:00Z").toLocaleDateString("en-US", { month: "long", day: "numeric", timeZone: "UTC" });
+      const days = Math.round((new Date(S.season.last) - new Date(S.season.first)) / 864e5) + 1;
+      const seasonNum = S.season.label.replace(/\D+/g, "") || S.season.id;
+
+      const PODIUM = ["season-champion", "second-place", "third-place"];
+      const ROAST = new Set(["wooden-spoon", "saltiest", "early-exit", "most-mulligans", "most-disruptions", "longest-turn"]);
+      const PHASES = [
+        { cat: "tempo", step: "Upkeep", title: "Trophies of Tempo", line: "Mulligans, marathon turns and speedruns", gem: "#7fb3d5" },
+        { cat: "table", step: "Main Phase", title: "Trophies of the Table", line: "Healers, pacifists, and the salt they left behind", gem: "#9ccc65" },
+        { cat: "combat", step: "Combat", title: "Trophies of Carnage", line: "Declare attackers. Assign damage. No regrets.", gem: "#e0533d" },
+        { cat: "playstyle", step: "Second Main", title: "Trophies of Style", line: "How they played the game", gem: "#b388ff" },
+        { cat: "survival", step: "End Step", title: "Trophies of Survival", line: "Who clung to life, and who didn't", gem: "#e8c15a" },
+        { cat: "standings", step: "Cleanup", title: "Honorable Mentions", line: "Close, but not quite", gem: "#e2621f" },
+      ];
+      const awardsIn = (cat) => S.awards.filter((a) => a.category === cat && !PODIUM.includes(a.id));
+      const phases = PHASES.filter((p) => awardsIn(p.cat).length);
+
+      // One trophy: the app's own emblem art, glowing, with the winner beneath.
+      function trophyEl(a, w, es, { details = true } = {}) {
+        const so = a.runnerUp ? `${ROAST.has(a.id) ? "Dodged it" : "So close"}: ${esc(a.runnerUp)}, ${esc(a.runnerUpDisplay)}` : "Uncontested";
+        const tr = el("div", "trophy");
+        tr.style.cssText = `width:${w}px;--es:${es}px`;
+        tr.innerHTML = `<div class="em-wrap"><div class="halo"></div><img src="${a.emblem}"><div class="shine" style="-webkit-mask-image:url(${a.emblem});mask-image:url(${a.emblem})"></div></div>` +
+          (details ? `<div class="tt gold-text">${esc(a.title)}</div><div class="td">${esc(a.description)}</div><div class="tline"></div>
+            <div class="tw">${esc(a.winner)}</div><div class="ts">${esc(a.display)}</div><div class="tr">${so}</div>` : "");
+        return tr;
+      }
+      function shine(tr, t, dur = 1.0) {
+        tl.fromTo(tr.querySelector(".shine"), { "--sx": "-150%" }, { "--sx": "300%", duration: dur, ease: "power2.inOut" }, t);
+      }
+      // Emblem lands, halo blooms, then title -> winner -> stat read in.
+      function revealTrophy(tr, at) {
+        const wrap = tr.querySelector(".em-wrap"), halo = tr.querySelector(".halo");
+        tl.fromTo(wrap, { scale: 0.25, opacity: 0, y: -50, rotation: -12 }, { scale: 1, opacity: 1, y: 0, rotation: 0, duration: 0.8, ease: "back.out(1.7)" }, at);
+        tl.fromTo(halo, { scale: 0.4, opacity: 0 }, { scale: 1, opacity: 1, duration: 1.0, ease: "power2.out" }, at + 0.2);
+        tl.to(halo, { scale: 1.08, opacity: 0.75, duration: 1.6, yoyo: true, repeat: 3, ease: "sine.inOut" }, at + 1.2);
+        shine(tr, at + 0.75);
+        const txt = tr.querySelectorAll(".tt, .td, .tline, .tw, .ts, .tr");
+        if (txt.length) tl.from(txt, { opacity: 0, y: 14, duration: 0.45, stagger: 0.08, ease: "power2.out" }, at + 0.45);
+      }
+      function scene(start, dur, build) {
+        const s = el("div", "scene"); scenesEl.appendChild(s);
+        tl.set(s, { visibility: "visible" }, start).to(s, { opacity: 1, duration: 0.45, ease: "power1.out" }, start);
+        tl.to(s, { opacity: 0, duration: 0.45, ease: "power1.in" }, start + dur - 0.45).set(s, { visibility: "hidden" }, start + dur);
+        build(s, start, dur);
+        return start + dur;
+      }
+      function counter(node, to, t, dur, fmt = (v) => Math.round(v)) {
+        const o = { v: 0 };
+        tl.fromTo(o, { v: 0 }, { v: to, duration: dur, ease: "power2.out", onUpdate: () => (node.textContent = fmt(o.v)) }, t);
+        node.textContent = fmt(0);
+      }
+      function orbs(parent, cx, cy, radius, t) {
+        const keys = ["W", "U", "B", "R", "G"];
+        keys.forEach((k, i) => {
+          const a = (-90 + i * 72) * Math.PI / 180;
+          const o = el("div", "orb", GLYPH[k]);
+          o.style.cssText = `background:radial-gradient(circle at 35% 30%, #fff8, ${MANA[k].c} 45%);--glow:${MANA[k].glow};left:${cx + Math.cos(a) * radius - 48}px;top:${cy + Math.sin(a) * radius - 48}px`;
+          parent.appendChild(o);
+          tl.fromTo(o, { scale: 0, opacity: 0, rotation: -90 }, { scale: 1, opacity: 1, rotation: 0, duration: 0.7, ease: "back.out(2)" }, t + i * 0.12);
+          tl.to(o, { y: -10, duration: 1.4, ease: "sine.inOut", yoyo: true, repeat: 3 }, t + 0.9 + i * 0.1);
+        });
+      }
+
+      // ---------- ambient motes ----------
+      const motesEl = document.getElementById("motes");
+      const moteColors = ["#f4eed2", "#5fa3ec", "#b48cdc", "#f0704f", "#5fcf86", "#e3bd62", "#e3bd62"];
+      for (let i = 0; i < 46; i++) {
+        const m = el("div", "mote"); const s = R(3, 9);
+        m.style.cssText = `width:${s}px;height:${s}px;left:${R(0, 1920)}px;top:${R(0, 1180)}px;background:${moteColors[i % moteColors.length]};opacity:${R(.15, .5)}`;
+        motesEl.appendChild(m);
+        tl.to(m, { y: -R(250, 650), x: R(-80, 80), duration: 110, ease: "none" }, 0);
+        tl.to(m, { opacity: R(.05, .2), duration: R(1.5, 3.5), yoyo: true, repeat: 30, ease: "sine.inOut" }, R(0, 2));
+      }
+
+      // ---------- 1. intro ----------
+      let t = 0;
+      t = scene(t, 7.5, (s, t0) => {
+        orbs(s, 960, 300, 150, t0 + 0.3);
+        const eb = el("div", "eyebrow", "Amass a Gathering presents"); eb.style.cssText = "position:absolute;top:520px;width:100%;text-align:center;font-size:24px";
+        const h = el("div", "display gold-text", esc(S.season.label)); h.style.cssText = "position:absolute;top:560px;width:100%;text-align:center;font-weight:900;font-size:190px;letter-spacing:.06em;line-height:1.1";
+        const sub = el("div", "display", "The Closing Ceremony"); sub.style.cssText = "position:absolute;top:780px;width:100%;text-align:center;font-weight:700;font-size:46px;letter-spacing:.18em;color:var(--ink)";
+        const dt = el("div", "", `${fmtDate(S.season.first)} — ${fmtDate(S.season.last)}`); dt.style.cssText = "position:absolute;top:860px;width:100%;text-align:center;font-size:32px;font-style:italic;color:var(--muted)";
+        s.append(eb, h, sub, dt);
+        tl.from(eb, { opacity: 0, y: 20, duration: 0.6 }, t0 + 1.0);
+        tl.from(h, { opacity: 0, scale: 1.25, duration: 1.1, ease: "expo.out" }, t0 + 1.3);
+        tl.from(sub, { opacity: 0, y: 30, duration: 0.7, ease: "power3.out" }, t0 + 2.1);
+        tl.from(dt, { opacity: 0, duration: 0.7 }, t0 + 2.6);
+      });
+
+      // ---------- 2. the battlefield (stats) ----------
+      const totalKOs = S.players.reduce((n, p) => n + p.kos, 0);
+      const totalPops = S.players.reduce((n, p) => n + p.popoffs, 0);
+      t = scene(t, 7.5, (s, t0) => {
+        s.append(el("div", "head", `<div class="eyebrow">${days} days of Commander</div><h2 class="gold-text">The Battlefield</h2><p>What ${S.players.length} planeswalkers left on the table</p>`));
+        const stats = [[S.games.length, "Games"], [S.decks.length, "Commanders"], [totalKOs, "Knockouts"], [totalPops, "Pop-offs"], [S.awards.length, "Trophies"]];
+        stats.forEach(([n, l], i) => {
+          const tk = el("div", "token", `<div class="n gold-text"></div><div class="l">${l}</div>`);
+          tk.style.left = (960 - 2.5 * 300 + i * 300 + 25) + "px"; tk.style.top = "460px";
+          s.appendChild(tk);
+          tl.from(tk, { scale: 0, rotation: -120, opacity: 0, duration: 0.8, ease: "back.out(1.6)" }, t0 + 0.6 + i * 0.18);
+          counter(tk.querySelector(".n"), n, t0 + 0.8 + i * 0.18, 2.2);
+        });
+      });
+
+      // ---------- 3. the command zone (decks) ----------
+      const mostPlayed = S.decks[0];
+      const mostWins = [...S.decks].sort((a, b) => b.wins - a.wins || a.played - b.played)[0];
+      t = scene(t, 11, (s, t0, dur) => {
+        s.append(el("div", "head", `<div class="eyebrow">The Command Zone</div><h2 class="gold-text">${S.decks.length} Commanders Took the Field</h2>`));
+        const withArt = S.decks.filter((d) => d.art);
+        const rows = [[], [], []];
+        S.decks.forEach((d, i) => rows[i % 3].push(d));
+        rows.forEach((list, r) => {
+          const row = el("div", "row"); row.style.top = (300 + r * 220) + "px";
+          const seq = list.concat(list); // doubled so the scroll never shows an edge
+          seq.forEach((d) => {
+            const tile = el("div", "tile", `${d.art ? `<img src="${d.art}">` : ""}<div class="cap"><div class="dn">${esc(d.deck)}</div><div class="dp">${pips(d.ci)} ${esc(d.player)} · ${d.played} game${d.played === 1 ? "" : "s"}</div></div>`);
+            tile.style.cssText = frameVars(d.ci); row.appendChild(tile);
+          });
+          s.appendChild(row);
+          const span = list.length * 282;
+          const dir = r % 2 ? 1 : -1;
+          tl.fromTo(row, { x: dir < 0 ? 0 : -span }, { x: dir < 0 ? -span * 0.55 : -span * 0.45, duration: dur, ease: "none" }, t0);
+          tl.from(row, { opacity: 0, y: 60, duration: 0.7, ease: "power3.out" }, t0 + 0.3 + r * 0.15);
+        });
+        const dim = el("div", ""); dim.style.cssText = "position:absolute;inset:0;background:rgba(5,3,2,.55)"; s.appendChild(dim);
+        tl.fromTo(dim, { opacity: 0 }, { opacity: 1, duration: 0.5 }, t0 + 3.6);
+        const spots = [
+          ["Most piloted", mostPlayed.deck, `${mostPlayed.player}'s go-to · ${mostPlayed.played} games, ${mostPlayed.wins} win${mostPlayed.wins === 1 ? "" : "s"}`, mostPlayed],
+          ["Winningest commander", mostWins.deck, `${mostWins.player} · ${mostWins.wins} wins from ${mostWins.played} games`, mostWins],
+        ];
+        spots.forEach(([eb, big, sub, d], i) => {
+          const sp = el("div", "spot", `<div class="eyebrow">${eb}</div><div class="big gold-text">${esc(big)}</div><div class="sub">${esc(sub)}</div>`);
+          sp.style.top = "420px"; s.appendChild(sp);
+          const card = el("div", "tile", `${d.art ? `<img src="${d.art}">` : ""}`);
+          card.style.cssText = frameVars(d.ci) + "position:absolute;left:50%;top:700px;width:420px;height:300px;margin-left:-210px";
+          s.appendChild(card);
+          const a = t0 + 3.9 + i * 3.4;
+          tl.fromTo([sp, card], { opacity: 0, y: 40 }, { opacity: 1, y: 0, duration: 0.6, ease: "power3.out", stagger: 0.1 }, a);
+          if (i < spots.length - 1) tl.to([sp, card], { opacity: 0, y: -30, duration: 0.4 }, a + 2.9);
+        });
+      });
+
+      // ---------- 4. battle log (games) ----------
+      const bigGame = [...S.games].sort((a, b) => b.kos - a.kos || a.num - b.num)[0];
+      const winners = S.players.filter((p) => p.games > 0).sort((a, b) => b.wins - a.wins || b.kos - a.kos);
+      t = scene(t, 11.5, (s, t0) => {
+        s.append(el("div", "head", `<div class="eyebrow">Battle Log</div><h2 class="gold-text">${S.games.length} Games Fought</h2>`));
+        const cols = 6, gx = 90, gy = 280, w = 178, h = 118, gap = 14;
+        let bigTile;
+        S.games.forEach((g, i) => {
+          const tile = el("div", "gtile", `${g.art ? `<img src="${g.art}">` : ""}<div class="gn">G${g.num}</div><div class="gw">${esc(g.winner)}<small>${esc(g.deck)}</small></div>`);
+          tile.style.cssText = frameVars(g.ci) + `left:${gx + (i % cols) * (w + gap)}px;top:${gy + Math.floor(i / cols) * (h + gap)}px`;
+          s.appendChild(tile);
+          tl.from(tile, { scaleX: 0, opacity: 0, duration: 0.35, ease: "power2.out" }, t0 + 0.7 + i * 0.09);
+          if (g === bigGame) {
+            bigTile = tile;
+            const col = i % cols, row = Math.floor(i / cols);
+            tile.style.transformOrigin = `${col === 0 ? "left" : col === cols - 1 ? "right" : "center"} ${row === 0 ? "top" : "center"}`;
+          }
+        });
+        const wins = el("div", "wins", `<h3>Wins</h3>` + winners.map((p) => `<div class="wrow"><div class="wn">${esc(p.name)}</div><div class="track"><div class="fill"></div></div><div class="wv gold-text">${p.wins}</div></div>`).join(""));
+        s.appendChild(wins);
+        const maxW = Math.max(1, ...winners.map((p) => p.wins));
+        wins.querySelectorAll(".fill").forEach((f, i) => {
+          tl.fromTo(f, { scaleX: 0 }, { scaleX: Math.max(0.02, winners[i].wins / maxW), duration: 1.2, ease: "power3.out" }, t0 + 1.2 + i * 0.12);
+        });
+        tl.from(wins, { opacity: 0, x: 40, duration: 0.6 }, t0 + 1.0);
+        if (bigTile) {
+          bigTile.style.zIndex = 5;
+          tl.to(bigTile, { scale: 1.9, duration: 0.7, ease: "back.out(1.6)" }, t0 + 5.2);
+          tl.to(bigTile, { boxShadow: "0 0 0 3px #0d0b09, 0 0 0 6px #e3bd62, 0 0 60px rgba(227,189,98,.8)", duration: 0.5 }, t0 + 5.2);
+          const cap = el("div", "caption", `Biggest game: <b>G${bigGame.num}</b>, ${esc(bigGame.winner)}'s <b>${esc(bigGame.deck)}</b> knocked out ${bigGame.kos} in a ${bigGame.pod}-player pod`);
+          s.appendChild(cap);
+          tl.from(cap, { opacity: 0, y: 20, duration: 0.6 }, t0 + 5.5);
+        }
+      });
+
+      // ---------- 5. trophy phases ----------
+      const ladder = document.getElementById("ladder");
+      const ladderSteps = [...phases.map((p) => p.step), "Final Judgment"].map((name) => {
+        const st = el("div", "step", `<div class="lit"></div><span>${name}</span>`); ladder.appendChild(st); return st;
+      });
+      const phaseStart = t;
+      phases.forEach((p, pi) => {
+        const list = awardsIn(p.cat);
+        const n = list.length;
+        const w = n >= 6 ? 292 : n === 5 ? 340 : n === 4 ? 400 : 460;
+        const es = n >= 6 ? 215 : n === 2 ? 280 : 255;
+        const gap = n >= 6 ? 8 : 24;
+        const dur = 3.6 + n * 1.0;
+        t = scene(t, dur, (s, t0) => {
+          // ladder: light this step, dim the previous one
+          tl.to(ladderSteps[pi].querySelector(".lit"), { opacity: 1, duration: 0.4 }, t0 + 0.1);
+          tl.to(ladderSteps[pi], { color: "#1d160d", duration: 0.4 }, t0 + 0.1);
+          if (pi > 0) {
+            tl.to(ladderSteps[pi - 1].querySelector(".lit"), { opacity: 0.25, duration: 0.4 }, t0 + 0.1);
+            tl.to(ladderSteps[pi - 1], { color: "rgba(243,234,214,.7)", duration: 0.4 }, t0 + 0.1);
+          }
+          const head = el("div", "head phase-head", `<div class="eyebrow">${p.step}</div><h2 class="gold-text">${p.title}</h2><p>${p.line}</p>`);
+          s.appendChild(head);
+          tl.from(head, { opacity: 0, y: -20, duration: 0.6 }, t0 + 0.2);
+          const total = n * w + (n - 1) * gap;
+          list.forEach((a, i) => {
+            const tr = trophyEl(a, w, es);
+            tr.style.left = (960 - total / 2 + i * (w + gap)) + "px";
+            tr.style.top = (n >= 6 ? 300 : 290) + "px";
+            s.appendChild(tr);
+            revealTrophy(tr, t0 + 0.8 + i * 0.5);
+          });
+        });
+      });
+      // ladder is visible across every trophy phase and the finale
+      tl.fromTo(ladder, { opacity: 0, y: -20 }, { opacity: 1, y: 0, duration: 0.5 }, phaseStart);
+
+      // ---------- 6. the hoard ----------
+      const haul = {};
+      S.awards.forEach((a) => (haul[a.winner] = (haul[a.winner] || 0) + 1));
+      const hoard = Object.entries(haul).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+      t = scene(t, 7, (s, t0) => {
+        s.append(el("div", "head phase-head", `<div class="eyebrow">The Hoard</div><h2 class="gold-text">Trophies Claimed</h2>`));
+        const rowH = Math.min(118, 640 / hoard.length);
+        hoard.forEach(([name, n], r) => {
+          const row = el("div", "hrow", `<div class="hn">${esc(name)}</div><div class="cups"></div><div class="hc gold-text"></div>`);
+          row.style.top = (300 + r * rowH) + "px";
+          s.appendChild(row);
+          tl.from(row.querySelector(".hn"), { opacity: 0, x: -40, duration: 0.5 }, t0 + 0.5 + r * 0.15);
+          const cups = row.querySelector(".cups");
+          S.awards.filter((a) => a.winner === name).forEach((a, i) => {
+            const c = el("img"); c.src = a.emblem; cups.appendChild(c);
+            tl.from(c, { scale: 0, rotation: -30, opacity: 0, duration: 0.45, ease: "back.out(2.2)" }, t0 + 1.0 + r * 0.15 + i * 0.16);
+          });
+          counter(row.querySelector(".hc"), n, t0 + 1.0 + r * 0.15, n * 0.16 + 0.3);
+        });
+      });
+
+      // ---------- 7. final judgment (podium) ----------
+      const pod = PODIUM.map((id) => S.awards.find((a) => a.id === id));
+      t = scene(t, 16, (s, t0) => {
+        const lit = ladderSteps.at(-1);
+        tl.to(lit.querySelector(".lit"), { opacity: 1, duration: 0.4 }, t0 + 0.1).to(lit, { color: "#1d160d", duration: 0.4 }, t0 + 0.1);
+        tl.to(ladderSteps.at(-2).querySelector(".lit"), { opacity: 0.25, duration: 0.4 }, t0 + 0.1);
+        tl.to(ladderSteps.at(-2), { color: "rgba(243,234,214,.7)", duration: 0.4 }, t0 + 0.1);
+        const head = el("div", "head phase-head", `<div class="eyebrow">Final Judgment</div><h2 class="gold-text">The Podium</h2>`);
+        s.appendChild(head);
+        tl.from(head, { opacity: 0, y: -20, duration: 0.6 }, t0 + 0.2);
+
+        const rays = el("div", "rays"); s.appendChild(rays);
+        tl.fromTo(rays, { opacity: 0, rotation: 0, scale: 0.6 }, { opacity: 1, scale: 1, duration: 1.2, ease: "power2.out" }, t0 + 8.2);
+        tl.to(rays, { rotation: 40, duration: 8, ease: "none" }, t0 + 8.2);
+
+        // [award, place label, x-center, emblem size, plinth height, reveal time]
+        const slots = [
+          [pod[2], "3", 1460, 230, 120, 1.0],
+          [pod[1], "2", 460, 230, 170, 4.4],
+          [pod[0], "1", 960, 300, 230, 8.0],
+        ];
+        slots.forEach(([a, place, cx, es, ph, rt]) => {
+          if (!a) return;
+          const pw = place === "1" ? 420 : 360;
+          const pl = el("div", "plinth", `<span class="gold-text">${place}</span>`);
+          pl.style.cssText += `left:${cx - pw / 2}px;width:${pw}px;height:${ph}px`;
+          s.appendChild(pl);
+          tl.from(pl, { y: ph + 20, duration: 0.7, ease: "power3.out" }, t0 + rt);
+          const eh = Math.round(es * 1.17);
+          const top = 1080 - ph - eh - 18;
+          const tr = trophyEl(a, 500, es, { details: false });
+          tr.style.left = (cx - 250) + "px"; tr.style.top = top + "px";
+          s.appendChild(tr);
+          revealTrophy(tr, t0 + rt + 0.4);
+          if (place === "1") {
+            shine(tr, t0 + rt + 3.2); shine(tr, t0 + rt + 5.6);
+            tl.to(tr.querySelector(".em-wrap"), { y: -10, duration: 1.6, yoyo: true, repeat: 3, ease: "sine.inOut" }, t0 + rt + 1.4);
+            for (let i = 0; i < 40; i++) {
+              const sp = el("div", "spark"); const ang = R(0, Math.PI * 2), dist = R(260, 640), sz = R(6, 16);
+              sp.style.cssText = `left:${cx}px;top:${top + eh / 2}px;width:${sz}px;height:${sz}px`;
+              s.appendChild(sp);
+              tl.fromTo(sp, { x: 0, y: 0, opacity: 1, scale: 1 }, { x: Math.cos(ang) * dist, y: Math.sin(ang) * dist, opacity: 0, scale: 0.3, duration: R(1.2, 2.2), ease: "power3.out" }, t0 + rt + 0.5);
+            }
+            const crown = el("div", "podium-name", `<div class="eyebrow" style="color:var(--gold);font-size:22px">${esc(S.season.label)} Champion</div><div class="gold-text" style="font-size:104px;line-height:1.05">${esc(a.winner)}</div><div class="sub-line" style="font-size:28px">${esc(a.title)} · ${esc(a.display)}</div>`);
+            crown.style.cssText += "left:0;right:0;top:118px";
+            s.appendChild(crown);
+            tl.from(crown, { opacity: 0, scale: 1.3, duration: 0.9, ease: "expo.out" }, t0 + rt + 1.0);
+            tl.to(head, { opacity: 0, duration: 0.4 }, t0 + rt + 0.6);
+          } else {
+            const nm = el("div", "podium-name", `<div class="gold-text" style="font-size:56px;line-height:1">${esc(a.winner)}</div><div class="sub-line" style="font-size:24px">${esc(a.title)} · ${esc(a.display)}</div>`);
+            nm.style.cssText += `left:${cx - 260}px;width:520px;top:${top - 112}px`;
+            s.appendChild(nm);
+            tl.from(nm, { opacity: 0, y: 20, duration: 0.6 }, t0 + rt + 1.0);
+          }
+        });
+      });
+      tl.to(ladder, { opacity: 0, duration: 0.5 }, t - 0.5);
+
+      // ---------- 8. outro ----------
+      t = scene(t, 6.5, (s, t0) => {
+        orbs(s, 960, 330, 150, t0 + 0.2);
+        const a = el("div", "display gold-text", `Season ${Number(seasonNum) + 1} has begun`);
+        a.style.cssText = "position:absolute;top:580px;width:100%;text-align:center;font-weight:900;font-size:110px;line-height:1.1";
+        const b = el("div", "", "Shuffle up and deal.");
+        b.style.cssText = "position:absolute;top:740px;width:100%;text-align:center;font-size:48px;font-style:italic;color:var(--ink)";
+        s.append(a, b);
+        tl.from(a, { opacity: 0, y: 30, duration: 0.9, ease: "power3.out" }, t0 + 0.9);
+        tl.from(b, { opacity: 0, duration: 0.8 }, t0 + 1.8);
+      });
+      // fade to black
+      const black = el("div", ""); black.style.cssText = "position:absolute;inset:0;background:#000;opacity:0"; root.appendChild(black);
+      tl.to(black, { opacity: 1, duration: 0.8 }, t - 0.8);
+
+      root.dataset.duration = String(t);
+      window.__timelines = window.__timelines || {};
+      window.__timelines["main"] = tl;
+      tl.seek(0);
+    </script>
+  </body>
+</html>
