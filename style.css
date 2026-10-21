@@ -156,6 +156,49 @@
   --chrome-edge: rgba(255, 255, 255, 0.07);
 }
 
+/* ---------- Theme change ----------
+   Switching light <-> dark used to swap every colour in one frame -- a
+   full-screen brightness jump. Registering the theme's colour tokens as
+   real <color> properties (initial values = the light palette above) lets
+   them transition, so a theme change fades every surface, text colour and
+   the artwork scrim in place, in one pass. No snapshot or second
+   full-screen layer is involved (web-animation rule 3): the same elements
+   just repaint toward their new colours. Only while html.theme-easing is
+   set (easeThemeChange in app.js) -- never on first paint. Not tied to
+   reduced motion: it's a fade, and a gentler brightness change is the
+   accessible option. */
+@property --bg { syntax: "<color>"; inherits: true; initial-value: #f3efe5; }
+@property --bg-accent { syntax: "<color>"; inherits: true; initial-value: #ece7da; }
+@property --card-bg { syntax: "<color>"; inherits: true; initial-value: #fdfbf7; }
+@property --ink { syntax: "<color>"; inherits: true; initial-value: #201d18; }
+@property --muted { syntax: "<color>"; inherits: true; initial-value: #5a5347; }
+@property --border { syntax: "<color>"; inherits: true; initial-value: #e2dbca; }
+@property --border-soft { syntax: "<color>"; inherits: true; initial-value: #ece7db; }
+@property --accent { syntax: "<color>"; inherits: true; initial-value: #6b46f0; }
+@property --accent-strong { syntax: "<color>"; inherits: true; initial-value: #5934d6; }
+@property --accent-soft { syntax: "<color>"; inherits: true; initial-value: rgba(107, 70, 240, 0.09); }
+@property --accent-ink { syntax: "<color>"; inherits: true; initial-value: #ffffff; }
+@property --focus-ring { syntax: "<color>"; inherits: true; initial-value: rgba(107, 70, 240, 0.4); }
+@property --good { syntax: "<color>"; inherits: true; initial-value: #1c7a44; }
+@property --good-bg { syntax: "<color>"; inherits: true; initial-value: #e5f5ea; }
+@property --good-border { syntax: "<color>"; inherits: true; initial-value: #bfe6cd; }
+@property --bad { syntax: "<color>"; inherits: true; initial-value: #b3312f; }
+@property --bad-bg { syntax: "<color>"; inherits: true; initial-value: #fbeaea; }
+@property --bad-border { syntax: "<color>"; inherits: true; initial-value: #f0c6c5; }
+@property --warn { syntax: "<color>"; inherits: true; initial-value: #b5720f; }
+@property --warn-bg { syntax: "<color>"; inherits: true; initial-value: #fdf1de; }
+@property --warn-border { syntax: "<color>"; inherits: true; initial-value: #f0d5a8; }
+@property --bg-scrim { syntax: "<color>"; inherits: true; initial-value: rgba(243, 239, 229, 0.86); }
+@property --card-bg-translucent { syntax: "<color>"; inherits: true; initial-value: rgba(255, 255, 255, 0.25); }
+@property --chrome-bg { syntax: "<color>"; inherits: true; initial-value: rgba(253, 251, 247, 0.74); }
+@property --chrome-edge { syntax: "<color>"; inherits: true; initial-value: rgba(255, 255, 255, 0.7); }
+
+html.theme-easing {
+  transition-property: --bg, --bg-accent, --card-bg, --ink, --muted, --border, --border-soft, --accent, --accent-strong, --accent-soft, --accent-ink, --focus-ring, --good, --good-bg, --good-border, --bad, --bad-bg, --bad-border, --warn, --warn-bg, --warn-border, --bg-scrim, --card-bg-translucent, --chrome-bg, --chrome-edge;
+  transition-duration: 0.45s;
+  transition-timing-function: ease;
+}
+
 * { box-sizing: border-box; }
 
 /* iOS Safari/PWA can briefly let position:fixed layers (.tab-bg below,
@@ -3100,6 +3143,66 @@ td.num {
 }
 .gtu-field input {
   width: 100%;
+}
+
+/* −/+ around the whole-number fields (buildGtuStepper in app.js). One
+   joined control: the buttons share the input's well colour and border,
+   so it reads as a single stepper rather than three loose boxes. Wider
+   columns than the plain fields so each button is a thumb-sized target. */
+.gtu-card-fields:has(.gtu-stepper) {
+  grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
+}
+.gtu-stepper {
+  display: flex;
+  align-items: stretch;
+}
+.gtu-stepper .gtu-stepper-input {
+  min-width: 0;
+  flex: 1 1 auto;
+  text-align: center;
+  border-radius: 0;
+  border-left: 0;
+  border-right: 0;
+  font-variant-numeric: tabular-nums;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+.gtu-stepper .gtu-stepper-input::-webkit-inner-spin-button,
+.gtu-stepper .gtu-stepper-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.gtu-step {
+  flex: 0 0 auto;
+  width: 36px;
+  padding: 0;
+  border: 1px solid var(--border);
+  background: var(--bg-accent);
+  color: var(--accent);
+  font-size: 1.15rem;
+  font-weight: 600;
+  line-height: 1;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.gtu-step:first-child {
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+.gtu-step:last-child {
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+/* Pressed shows as a tint rather than the usual scale, so the joined
+   control doesn't come apart under the thumb. */
+.gtu-step:active {
+  transform: none;
+  background: var(--accent-soft);
+}
+@media (pointer: coarse) {
+  .gtu-step {
+    width: 40px;
+    min-height: 44px;
+  }
 }
 /* A guess, not something typed in yet -- see markGtuPrefilled in app.js.
    Dashed border is the same "provisional, please confirm" language

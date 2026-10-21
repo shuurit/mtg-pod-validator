@@ -5904,6 +5904,85 @@ function readGtuStrength(input) {
   return parseFloat(input.value);
 }
 
+// −/+ around a whole-number field, so a count at the table is a tap or
+// two instead of summoning the keyboard. The <input> stays the source of
+// truth (and stays typeable): every step writes its value and fires a
+// bubbling "input" event, so drafts, the stale-preview check and the
+// prefilled marker all see it exactly as if it had been typed.
+//
+// Responds on press, not release; holding repeats, speeding up the longer
+// it's held. At min/max the field bumps against the limit (a short spring
+// kick toward the wall) instead of silently doing nothing.
+function buildGtuStepper(input, labelText) {
+  const wrap = document.createElement("div");
+  wrap.className = "gtu-stepper";
+  const button = (delta, glyph, verb) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "gtu-step";
+    b.tabIndex = -1; // the field itself takes arrow keys; one tab stop per field
+    b.textContent = glyph;
+    b.setAttribute("aria-label", `${verb} ${labelText}`);
+    let timer = null;
+    let pressed = false; // a pointer press already stepped; its click mustn't step again
+    const stop = () => { clearTimeout(timer); timer = null; };
+    const repeat = (wait) => {
+      timer = setTimeout(() => {
+        if (stepGtuField(input, delta)) repeat(Math.max(45, wait * 0.8));
+        else stop();
+      }, wait);
+    };
+    b.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault(); // no focus steal, no keyboard, no text selection
+      pressed = true;
+      b.setPointerCapture?.(e.pointerId);
+      stepGtuField(input, delta);
+      stop();
+      repeat(420);
+    });
+    for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) b.addEventListener(type, stop);
+    // Keyboard and assistive-tech activation arrive as a click with no
+    // pointer press before it. (A tap's own click can't be told apart by
+    // e.detail -- touch-generated clicks report 0 too -- hence the flag.)
+    b.addEventListener("click", () => {
+      if (pressed) { pressed = false; return; }
+      stepGtuField(input, delta);
+    });
+    return b;
+  };
+  input.classList.add("gtu-stepper-input");
+  input.inputMode = "numeric";
+  wrap.append(button(-1, "−", "Decrease"), input, button(1, "+", "Increase"));
+  return wrap;
+}
+
+// Returns whether the value actually moved, so a held button stops
+// repeating once it reaches the limit.
+function stepGtuField(input, delta) {
+  const min = input.min === "" ? -Infinity : Number(input.min);
+  const max = input.max === "" ? Infinity : Number(input.max);
+  const current = input.value === "" ? null : Number(input.value);
+  let next;
+  if (current === null || Number.isNaN(current)) next = delta > 0 ? (Number.isFinite(min) ? min : 0) : null;
+  else next = Math.min(max, Math.max(min, Math.round(current) + delta));
+  if (next === null || next === current) {
+    bumpGtuField(input, delta);
+    return false;
+  }
+  input.value = String(next);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  haptic(5);
+  return true;
+}
+
+function bumpGtuField(input, direction) {
+  haptic(14);
+  if (REDUCED_MOTION.matches) return;
+  const spring = input._bumpSpring ||= new Spring(0, v => { input.style.transform = Math.abs(v) < 0.1 ? "" : `translate3d(${v}px, 0, 0)`; });
+  spring.to(0, { dampingRatio: 0.45, response: 0.2, velocity: direction * 160 });
+}
+
 function buildGtuParticipantCard(p, i, pgGame) {
   const defaultStrength = findDefaultStrength(p.player, p.commander);
   const defaultPlace = p.result === "win" ? 1 : "";
@@ -5938,6 +6017,20 @@ function buildGtuParticipantCard(p, i, pgGame) {
     wrap.append(lbl, inputEl);
     return wrap;
   };
+  // Not a wrapping <label> like field(): a label with no `for` labels its
+  // first labelable child, which here would be the − button -- tapping
+  // the caption would decrement. Points at the input by id instead.
+  const stepperField = (labelText, inputEl) => {
+    const wrap = document.createElement("div");
+    wrap.className = "gtu-field";
+    inputEl.id = `gtu-${gtuFieldName(inputEl)}-${i}`;
+    const lbl = document.createElement("label");
+    lbl.className = "gtu-field-label";
+    lbl.htmlFor = inputEl.id;
+    lbl.textContent = labelText;
+    wrap.append(lbl, buildGtuStepper(inputEl, labelText));
+    return wrap;
+  };
 
   // Shown to 2 decimals: a deck's computed power carries a long tail
   // ("2.32333333") that overflowed the field on a phone. The exact value
@@ -5961,12 +6054,12 @@ function buildGtuParticipantCard(p, i, pgGame) {
   fields.className = "gtu-card-fields";
   fields.append(
     field("Cmdr Strength", strengthInput),
-    field("Place", placeInput),
-    field("KOs", makeGtuInput("number", "gtu-knockouts", i, { min: "0", value: 0 })),
-    field("TOV", makeGtuInput("number", "gtu-tov", i, { min: "1", value: "" })),
-    field("Disruptions", makeGtuInput("number", "gtu-disruptions", i, { min: "0", value: 0 })),
-    field("Recoveries", makeGtuInput("number", "gtu-recoveries", i, { min: "0", value: 0 })),
-    field("Bracket", bracketInput),
+    stepperField("Place", placeInput),
+    stepperField("KOs", makeGtuInput("number", "gtu-knockouts", i, { min: "0", value: 0 })),
+    stepperField("TOV", makeGtuInput("number", "gtu-tov", i, { min: "1", value: "" })),
+    stepperField("Disruptions", makeGtuInput("number", "gtu-disruptions", i, { min: "0", value: 0 })),
+    stepperField("Recoveries", makeGtuInput("number", "gtu-recoveries", i, { min: "0", value: 0 })),
+    stepperField("Bracket", bracketInput),
   );
   card.appendChild(fields);
 
@@ -8059,14 +8152,32 @@ function initViewportHeight() {
   }
 }
 
+// Fades the palette across instead of swapping it in one frame (see
+// html.theme-easing in style.css). The class only has to be present when
+// the new colours land; it's taken off again once the fade is done so
+// nothing else ever transitions the tokens.
+let themeEaseTimer = null;
+function easeThemeChange(change) {
+  const root = document.documentElement;
+  root.classList.add("theme-easing");
+  if (change) change();
+  clearTimeout(themeEaseTimer);
+  themeEaseTimer = setTimeout(() => root.classList.remove("theme-easing"), 600);
+}
+
 function initTheme() {
   applyTheme(localStorage.getItem("themePreference"));
   document.querySelectorAll(".theme-toggle-btn").forEach(btn => {
     btn.addEventListener("click", () => {
-      const choice = applyTheme(btn.dataset.themeChoice);
-      localStorage.setItem("themePreference", choice);
+      easeThemeChange(() => {
+        const choice = applyTheme(btn.dataset.themeChoice);
+        localStorage.setItem("themePreference", choice);
+      });
     });
   });
+  // On Auto, the OS flipping at sunset fades too, rather than snapping
+  // the whole screen dark mid-game.
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => easeThemeChange());
 }
 
 // ---------- pull-to-refresh (touch) ----------
