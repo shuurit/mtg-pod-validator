@@ -5390,6 +5390,190 @@ html.is-scrolled .scroll-edge {
   opacity: 1;
 }
 
+/* ---------- Compact title bar ----------
+   Slides in once the current tab's heading has scrolled out from under it
+   (syncCompactBar in app.js), naming where you are; tap the name to glide
+   to the top, the chevron (pages reached from Tonight) to go back. The
+   same floating material as the tab bar, sitting just above the
+   status-bar scroll edge. Enter and exit along the same short path. */
+.compact-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 95;
+  height: calc(env(safe-area-inset-top, 0px) + 44px);
+  padding: env(safe-area-inset-top, 0px) max(8px, env(safe-area-inset-right)) 0 max(8px, env(safe-area-inset-left));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--chrome-bg);
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
+  backdrop-filter: blur(22px) saturate(180%);
+  border-bottom: 1px solid var(--border-soft);
+  opacity: 0;
+  visibility: hidden;
+  -webkit-transform: translate3d(0, -10px, 0);
+  transform: translate3d(0, -10px, 0);
+  transition: opacity 0.18s ease-in, transform 0.2s ease-in, visibility 0s linear 0.2s;
+}
+.compact-bar.is-shown {
+  opacity: 1;
+  visibility: visible;
+  -webkit-transform: translate3d(0, 0, 0);
+  transform: translate3d(0, 0, 0);
+  transition: opacity 0.22s ease-out, transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .compact-bar,
+  .compact-bar.is-shown {
+    -webkit-transform: none;
+    transform: none;
+  }
+}
+.compact-bar-title {
+  max-width: calc(100% - 120px);
+  min-height: 44px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.compact-bar-back {
+  position: absolute;
+  left: max(4px, env(safe-area-inset-left));
+  bottom: 0;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+}
+.compact-bar-back[hidden] { display: none; }
+.compact-bar-back svg {
+  width: 22px;
+  height: 22px;
+}
+@media (hover: hover) and (pointer: fine) {
+  .compact-bar-title:hover { color: var(--accent); border-color: transparent; }
+  .compact-bar-back:hover { color: var(--accent-strong); border-color: transparent; }
+}
+
+/* ---------- Edge swipe back ----------
+   The arrow that follows a back swipe out of the left edge (initEdgeBack,
+   installed app only). Positioned entirely by JS; fills with the accent
+   once letting go will go back. */
+.edge-back {
+  position: fixed;
+  left: 0;
+  top: 50%;
+  z-index: 150;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  background: var(--chrome-bg);
+  -webkit-backdrop-filter: blur(16px) saturate(170%);
+  backdrop-filter: blur(16px) saturate(170%);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+  opacity: 0;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+.edge-back svg {
+  width: 22px;
+  height: 22px;
+}
+.edge-back.armed {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
+}
+
+/* ---------- Rolling digits ----------
+   rollText in app.js: the old value and the new one stacked in one cell,
+   one leaving as the other arrives, clipped to the line so neither shows
+   outside it. Sized by the wider of the two, so nothing reflows mid-roll. */
+.roll {
+  display: inline-grid;
+  overflow: hidden;
+  vertical-align: bottom;
+}
+.roll > span {
+  grid-area: 1 / 1;
+}
+
+/* ---------- Completion ----------
+   celebrateButton in app.js: a check drawn on the button that sent it.
+   Only a `from` frame -- without the animation it's just a check. */
+button.is-done,
+button.is-done:hover {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--good);
+  border-color: var(--good);
+  color: var(--accent-ink);
+  box-shadow: none;
+}
+.done-check {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.done-check path {
+  stroke-dasharray: 1;
+  animation: done-check-draw 0.36s cubic-bezier(0.2, 0.8, 0.2, 1) 0.05s backwards;
+}
+@keyframes done-check-draw {
+  from { stroke-dashoffset: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .done-check path { animation: none; }
+}
+
+/* ---------- First load ----------
+   The first time real content replaces a list's skeleton placeholders
+   (watchSkeletonArrival in app.js), it settles in rather than popping.
+   Only a `from` frame; content inside .card, never the .card itself. */
+.content-arriving > * {
+  animation: content-arrive 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes content-arrive {
+  from { opacity: 0; transform: translate3d(0, 4px, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .content-arriving > * { animation: none; }
+}
+
+/* ---------- Trophy tilt (mouse) ----------
+   initTrophyTilt in app.js tilts the card toward the pointer; this is the
+   light that follows it, pinned to where the pointer is (--sheen-x/y). */
+.tc-card.is-tilting {
+  background-image: radial-gradient(circle at var(--sheen-x, 50%) var(--sheen-y, 50%), var(--chrome-edge), transparent 55%);
+}
+
 /* ---------- Headings and copy ----------
    Balanced headings don't leave one word stranded on a second line at
    phone width; pretty hint text avoids a lone last word. Ignored where
@@ -5413,7 +5597,9 @@ header h1,
   .card,
   .bottom-tabs,
   .auth-menu,
-  .scroll-edge {
+  .scroll-edge,
+  .compact-bar,
+  .edge-back {
     background: var(--card-bg);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
@@ -5423,7 +5609,9 @@ header h1,
   .card,
   .bottom-tabs,
   .auth-menu,
-  .scroll-edge {
+  .scroll-edge,
+  .compact-bar,
+  .edge-back {
     background: var(--card-bg);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;

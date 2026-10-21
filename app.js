@@ -306,6 +306,8 @@ function buildTonightItem({ count, label, tab, tone, done, loading, onRetry }) {
     lead.innerHTML = tonightSvg('<path d="M20 6 9 17l-5-5"></path>');
   } else if (loading) {
     lead.textContent = "…";
+  } else if (tab) {
+    rollText(lead, count, `tonight:${tab}`);
   } else {
     lead.textContent = count;
   }
@@ -635,7 +637,7 @@ function setTabBadge(baseId, count) {
     const badge = document.getElementById(id);
     if (!badge) continue;
     if (count > 0) {
-      badge.textContent = String(count);
+      rollText(badge, String(count), id);
       badge.hidden = false;
     } else {
       badge.hidden = true;
@@ -1831,6 +1833,7 @@ function initAchievementsTab() {
 // empty the way the other three tabs are before their first fetch lands.
 function renderSkeletonCards(container, count, lineWidths) {
   container.innerHTML = "";
+  watchSkeletonArrival(container);
   for (let i = 0; i < count; i++) {
     const card = document.createElement("div");
     card.className = "skeleton-card";
@@ -4990,6 +4993,305 @@ function shakeNo(el) {
   spring.to(0, { dampingRatio: 0.22, response: 0.16, velocity: -650, onRest: () => { el.style.transition = ""; } });
 }
 
+// ---------- numeric text transitions ----------
+// A count or percentage that changes rolls to its new value -- up when it
+// grew, down when it shrank -- instead of the digits silently flipping, so
+// a change is noticed and its direction read at a glance (what iOS calls a
+// numeric content transition). Keyed, because most of these elements are
+// rebuilt on every render: the key remembers what was on screen last time.
+// The first showing, an unchanged value, or anything non-numeric just sets
+// the text. The final text never waits on the animation (rule 2).
+const rolledValues = new Map();
+
+function rollText(el, text, key = el) {
+  text = String(text);
+  const previous = rolledValues.get(key);
+  rolledValues.set(key, text);
+  const from = parseFloat(previous);
+  const to = parseFloat(text);
+  if (previous === undefined || previous === text || Number.isNaN(from) || Number.isNaN(to) || from === to || REDUCED_MOTION.matches || !el.animate) {
+    el.textContent = text;
+    return;
+  }
+  const direction = to > from ? 1 : -1;
+  const box = document.createElement("span");
+  box.className = "roll";
+  const out = document.createElement("span");
+  out.textContent = previous;
+  out.setAttribute("aria-hidden", "true");
+  const into = document.createElement("span");
+  into.textContent = text;
+  box.append(out, into);
+  el.replaceChildren(box);
+  const timing = { duration: 320, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)", fill: "both" };
+  out.animate([{ transform: "translateY(0)", opacity: 1 }, { transform: `translateY(${-direction * 70}%)`, opacity: 0 }], timing);
+  into.animate([{ transform: `translateY(${direction * 70}%)`, opacity: 0 }, { transform: "translateY(0)", opacity: 1 }], timing);
+  const settle = () => { if (rolledValues.get(key) === text && el.firstChild === box) el.textContent = text; };
+  setTimeout(settle, 380);
+}
+
+// ---------- completion ----------
+// A submit that landed draws a check on the button that sent it, with a
+// success buzz on the same frame -- the moment is tied to the control you
+// pressed, not just a status line further down. Only a `from` frame on the
+// stroke, so if the animation never runs the check is simply there.
+function celebrateButton(button, label) {
+  if (!button) return;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.classList.add("done-check");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", "M5 12.5l4.5 4.5L19 7.5");
+  path.setAttribute("pathLength", "1");
+  svg.appendChild(path);
+  const text = document.createElement("span");
+  text.textContent = label;
+  button.replaceChildren(svg, text);
+  button.classList.add("is-done");
+  haptic([10, 40, 22]);
+}
+
+// ---------- first load: skeleton -> content ----------
+// The shaped placeholders (renderSkeletonCards) used to be swapped for the
+// real list in one frame. The first time real content replaces them, it
+// settles in instead. Only that first arrival -- later refreshes re-render
+// in place (rule 7), and a container is only watched while it holds
+// skeletons.
+const skeletonWatchers = new WeakSet();
+
+function watchSkeletonArrival(container) {
+  container.dataset.skeleton = "1";
+  if (skeletonWatchers.has(container)) return;
+  skeletonWatchers.add(container);
+  new MutationObserver(() => {
+    if (container.dataset.skeleton !== "1" || container.querySelector(".skeleton-card")) return;
+    delete container.dataset.skeleton;
+    if (REDUCED_MOTION.matches || !container.children.length) return;
+    container.classList.add("content-arriving");
+    setTimeout(() => container.classList.remove("content-arriving"), 450);
+  }).observe(container, { childList: true });
+}
+
+// ---------- compact title bar ----------
+// iOS large titles: once a tab's own heading has scrolled up out of view,
+// a slim frosted bar slides in at the top with the tab's name, so "where
+// am I?" always has an answer. Tapping the name glides back to the top
+// (the web has no tappable status bar); on a page reached from Tonight it
+// also carries a back chevron. Hidden (and inert) whenever the heading
+// itself is on screen.
+function activePanel() {
+  return [...document.querySelectorAll(".tab-panel")].find(p => !p.hidden) || null;
+}
+
+// Where "back" goes from the open panel, or null when it's a top-level tab.
+function backTargetFor(panel) {
+  if (!panel) return null;
+  const link = panel.querySelector("[data-goto-tab]");
+  if (link) return link.dataset.gotoTab;
+  return panel.id === "tab-proposals" ? "tonight" : null;
+}
+
+function panelTitle(panel) {
+  const name = panel.id.replace(/^tab-/, "");
+  const tabBtn = document.querySelector(`.bottom-tab-btn[data-tab="${name}"] .bottom-tab-label`);
+  if (tabBtn) return tabBtn.textContent.trim();
+  const h2 = panel.querySelector(".card h2");
+  return h2 ? h2.textContent.trim() : "";
+}
+
+function syncCompactBar() {
+  const bar = document.getElementById("compact-bar");
+  const wrap = document.querySelector(".wrap");
+  if (!bar || !wrap) return;
+  const panel = activePanel();
+  // The heading that names this screen: the tab's own card title, or the
+  // app title on Tonight, which has none.
+  const heading = panel && (panel.querySelector(".card h2") || document.querySelector("header h1"));
+  const show = !wrap.hidden && !!heading && heading.getBoundingClientRect().bottom < bar.offsetHeight;
+  if (show) {
+    document.getElementById("compact-bar-title").textContent = panelTitle(panel);
+    const back = backTargetFor(panel);
+    const backBtn = document.getElementById("compact-bar-back");
+    backBtn.hidden = !back;
+    backBtn.dataset.target = back || "";
+  }
+  bar.classList.toggle("is-shown", show);
+  bar.inert = !show;
+  bar.setAttribute("aria-hidden", String(!show));
+}
+
+function initCompactBar() {
+  const bar = document.getElementById("compact-bar");
+  if (!bar) return;
+  document.getElementById("compact-bar-title").addEventListener("click", () => {
+    window.scrollTo({ top: 0, behavior: REDUCED_MOTION.matches ? "auto" : "smooth" });
+  });
+  document.getElementById("compact-bar-back").addEventListener("click", (e) => {
+    const target = e.currentTarget.dataset.target;
+    if (target) activateTab(target);
+  });
+  let queued = false;
+  const queue = () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => { queued = false; syncCompactBar(); });
+  };
+  window.addEventListener("scroll", queue, { passive: true });
+  window.addEventListener("resize", queue);
+  queue();
+}
+
+// ---------- edge swipe back ----------
+// Installed to the home screen, iOS gives a web app no back gesture at all;
+// the only way out of Games to Update, New Players/Decks or Proposals was
+// the small back link at the top. A swipe in from the left edge now does
+// it: a back arrow follows the thumb out of the edge (rubber-banding past
+// its reach), fills in and ticks once letting go will go back, and the
+// release projects the flick's momentum before deciding. Only in the
+// installed app -- in a browser tab, that same edge swipe is the browser's
+// own history-back, and the two must not both fire.
+const EDGE_ZONE = 24; // px from the left edge a back swipe must start in
+const EDGE_BACK_ENABLED = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+
+function edgeBackTarget() {
+  if (!EDGE_BACK_ENABLED || document.querySelector(".modal-overlay:not([hidden])")) return null;
+  return backTargetFor(activePanel());
+}
+
+// Whether a touch starting here belongs to the back swipe -- the pull-to-
+// refresh gesture defers to it, so a diagonal thumb can't trigger both.
+function edgeBackClaims(x) {
+  return x < EDGE_ZONE && !!edgeBackTarget();
+}
+
+function initEdgeBack() {
+  if (!EDGE_BACK_ENABLED) return;
+  const arrow = document.createElement("div");
+  arrow.className = "edge-back";
+  arrow.setAttribute("aria-hidden", "true");
+  arrow.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"></path></svg>';
+  document.body.appendChild(arrow);
+
+  const REACH = 64; // px the arrow travels out before it starts resisting
+  const ARM_AT = 96; // px of finger travel that arms the back
+  const tracker = createVelocityTracker();
+  let start = null;
+  let tracking = false;
+  let armed = false;
+  let target = null;
+  const render = (x) => {
+    const shown = Math.max(0, x);
+    arrow.style.opacity = String(Math.min(1, shown / 24));
+    arrow.style.transform = `translate3d(${shown - 52}px, -50%, 0) scale(${0.7 + 0.3 * Math.min(1, shown / REACH)})`;
+  };
+  const spring = new Spring(0, render);
+  render(0);
+
+  document.addEventListener("touchstart", (e) => {
+    start = null;
+    if (e.touches.length !== 1) return;
+    const t = e.touches[0];
+    if (!edgeBackClaims(t.clientX)) return;
+    start = { x: t.clientX, y: t.clientY };
+    target = edgeBackTarget();
+    tracking = false;
+    armed = false;
+  }, { passive: true });
+
+  document.addEventListener("touchmove", (e) => {
+    if (!start) return;
+    const t = e.touches[0];
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    if (!tracking) {
+      if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { start = null; return; }
+      if (dx < 10) return;
+      tracking = true;
+      spring.stop();
+      arrow.style.top = `${t.clientY}px`;
+      tracker.reset();
+    }
+    e.preventDefault();
+    tracker.add(t.clientX, e.timeStamp);
+    const x = dx <= REACH ? dx : REACH + rubberband(dx - REACH, 120);
+    spring.set(x);
+    const nowArmed = dx >= ARM_AT;
+    if (nowArmed !== armed) {
+      armed = nowArmed;
+      arrow.classList.toggle("armed", armed);
+      if (armed) haptic(8);
+    }
+  }, { passive: false });
+
+  const release = () => {
+    if (!start || !tracking) { start = null; return; }
+    const dx = spring.value;
+    const velocity = tracker.velocity();
+    start = null;
+    tracking = false;
+    const go = armed || (dx + projectMomentum(velocity) > ARM_AT * 1.4 && velocity > 0);
+    armed = false;
+    arrow.classList.remove("armed");
+    spring.to(0, { response: 0.3, velocity: -Math.abs(velocity) * 0.2 });
+    if (go && target) activateTab(target);
+  };
+  document.addEventListener("touchend", release);
+  document.addEventListener("touchcancel", release);
+}
+
+// ---------- trophy tilt (mouse) ----------
+// With a mouse, a Trophy Case card leans toward the pointer and a soft
+// light follows it across the face, like a foil card turned in the hand
+// (or a tvOS poster under focus). X and Y tilt are separate springs, so it
+// tracks smoothly and settles flat when the pointer leaves. Mouse only:
+// on touch the card just presses in. Off under reduced motion.
+function initTrophyTilt() {
+  if (!window.matchMedia("(hover: hover) and (pointer: fine)").matches) return;
+  const MAX_TILT = 7; // degrees
+  let current = null;
+  const springsFor = (card) => {
+    if (card._tilt) return card._tilt;
+    const state = { rx: 0, ry: 0 };
+    const render = () => {
+      card.style.transform = Math.abs(state.rx) < 0.02 && Math.abs(state.ry) < 0.02
+        ? ""
+        : `perspective(700px) rotateX(${state.rx}deg) rotateY(${state.ry}deg)`;
+    };
+    card._tilt = {
+      x: new Spring(0, v => { state.rx = v; render(); }, 0.02),
+      y: new Spring(0, v => { state.ry = v; render(); }, 0.02),
+    };
+    return card._tilt;
+  };
+  const release = (card) => {
+    if (!card) return;
+    card.classList.remove("is-tilting");
+    const s = springsFor(card);
+    s.x.to(0, { response: 0.45 });
+    s.y.to(0, { response: 0.45 });
+  };
+  document.addEventListener("pointermove", (e) => {
+    if (e.pointerType !== "mouse" || REDUCED_MOTION.matches) return;
+    const card = e.target instanceof Element ? e.target.closest(".tc-card") : null;
+    if (card !== current) {
+      release(current);
+      current = card;
+    }
+    if (!card) return;
+    const rect = card.getBoundingClientRect();
+    const nx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    const ny = ((e.clientY - rect.top) / rect.height) * 2 - 1;
+    card.classList.add("is-tilting");
+    card.style.setProperty("--sheen-x", `${((nx + 1) / 2) * 100}%`);
+    card.style.setProperty("--sheen-y", `${((ny + 1) / 2) * 100}%`);
+    const s = springsFor(card);
+    s.x.to(-ny * MAX_TILT, { response: 0.3 });
+    s.y.to(nx * MAX_TILT, { response: 0.3 });
+  });
+  document.addEventListener("pointerleave", () => { release(current); current = null; });
+}
+
 // ---------- tabs ----------
 
 // Switches to a tab by name. Pulled out of initTabs' click handler so
@@ -5023,6 +5325,7 @@ function activateTab(tabName) {
     pollLiveTable(true);
   }
   if (tabName === "tonight") pollLiveTable(true);
+  syncCompactBar();
 }
 
 // Swaps the active .tab-bg. The new layer shows instantly underneath and
@@ -5229,7 +5532,7 @@ function buildWinRateCard(row, rank, sortKey, direction) {
 
   const primaryValEl = document.createElement("span");
   primaryValEl.className = "wr-metric-value";
-  primaryValEl.textContent = primaryPct !== null ? `${primaryPct.toFixed(1)}%` : "—";
+  rollText(primaryValEl, primaryPct !== null ? `${primaryPct.toFixed(1)}%` : "—", `wr:${row.name}`);
   header.appendChild(primaryValEl);
   card.appendChild(header);
 
@@ -6394,7 +6697,7 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
         });
         const body = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
-        submitBtn.textContent = "Submitted ✓";
+        celebrateButton(submitBtn, "Submitted");
         clearGtuDraft(gtuDraftKey(pgGame));
         // D1 writes land in ~100-300ms (vs. the old GitHub Actions round
         // trip's 1-3 minutes), so this waits for a real refetch instead of
@@ -6418,6 +6721,7 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
         }, 1500);
       } catch (err) {
         submitBtn.disabled = false;
+        submitBtn.classList.remove("is-done");
         submitBtn.textContent = "Submit Game";
         statusEl.textContent = `Submission failed: ${err.message}`;
       }
@@ -7101,7 +7405,7 @@ function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
         // renderRosterUpdateConfirmationBanner reading it and clearing it.
         rosterUpdateSubmitConfirmation = `✓ Added ${submittedLabels.join(", ")}.`;
 
-        submitBtn.textContent = "Submitted ✓";
+        celebrateButton(submitBtn, "Submitted");
         // D1 writes land in ~100-300ms (vs. the old GitHub Actions round
         // trip's 1-3 minutes), so this waits for a real refetch instead of
         // optimistically merging a guessed local copy.
@@ -7119,6 +7423,7 @@ function renderRosterUpdateSubmit(formAreaEl, newPlayers, newDecksForExisting) {
         return;
       } catch (err) {
         submitBtn.disabled = false;
+        submitBtn.classList.remove("is-done");
         submitBtn.textContent = "Add Player/Decks";
         statusEl.textContent = `Submission failed: ${err.message}`;
       }
@@ -7758,6 +8063,7 @@ async function submitProposalForm(e) {
   submit.disabled = false;
   submit.textContent = "Post to the pod";
   if (ok) {
+    haptic([10, 40, 22]);
     showProposalForm(false);
     proposalsUi.filter = "active";
     renderProposals();
@@ -8224,7 +8530,7 @@ function initPullToRefresh() {
     // (signed in -- refreshEverything no-ops otherwise anyway) and nothing
     // above to scroll past. Re-checked on every touchstart, not cached,
     // since sign-in state and scroll position both change between pulls.
-    if (refreshing || !currentUser || (window.scrollY || document.documentElement.scrollTop) > 0 || touchBelongsToInnerScroll(e.target)) {
+    if (refreshing || !currentUser || (window.scrollY || document.documentElement.scrollTop) > 0 || touchBelongsToInnerScroll(e.target) || edgeBackClaims(e.touches[0].clientX)) {
       startY = null;
       return;
     }
@@ -8342,6 +8648,9 @@ wireAuthControl();
 initPullToRefresh();
 initSelectionIndicators();
 initScrollEdge();
+initCompactBar();
+initEdgeBack();
+initTrophyTilt();
 
 // Registers unconditionally (not gated behind sign-in) -- installability
 // is a property of the page shell itself. See sw.js for what it actually
