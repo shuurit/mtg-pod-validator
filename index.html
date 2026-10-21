@@ -17,7 +17,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="style.css?v=63">
+<link rel="stylesheet" href="style.css?v=64">
 
 <!-- Home-screen icon (iOS "Add to Home Screen" + Android/Chrome install).
      Generated from icon-source.png via scripts/generate_icons.py -- rerun
@@ -57,6 +57,14 @@
      scrolled under it -- see .scroll-edge in style.css, initScrollEdge in
      app.js. -->
 <div class="scroll-edge" aria-hidden="true"></div>
+<!-- Slim title bar that slides in once the current tab's own heading has
+     scrolled away -- see initCompactBar/syncCompactBar in app.js. -->
+<div class="compact-bar" id="compact-bar" aria-hidden="true" inert>
+  <button type="button" class="compact-bar-back" id="compact-bar-back" aria-label="Back to Tonight" hidden>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
+  </button>
+  <button type="button" class="compact-bar-title" id="compact-bar-title" aria-label="Scroll to top"></button>
+</div>
 <!-- Visible by default, hidden once a signed-in session is confirmed --
      fails closed: nothing else on the page loads or fetches live data
      until then (see renderAuthGate/checkAuthSession in app.js), rather
@@ -460,6 +468,6 @@
   </div>
 </div>
 
-<script src="app.js?v=70"></script>
+<script src="app.js?v=71"></script>
 </body>
 </html>
