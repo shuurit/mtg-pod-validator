@@ -31,3 +31,20 @@ The soundtrack is `music.py`: an original procedural lo-fi fantasy loop
 (72 BPM, D minor; plucked lute arpeggios, pad, bass, soft beat, ocarina
 melody) with harp glissandos into each scene and a bell on every emblem
 reveal. Its scene timings mirror `index.html`, so change both together.
+
+## Publishing a season's video to the app
+
+The app's Closing Ceremony modal plays the video for any season listed in
+`CEREMONY_VIDEOS` in `app.js`. The files live in the repo's `videos/` folder
+and are served by GitHub Pages next to `emblems/`. To add a season:
+
+```bash
+# ~10 MB at 1080p; +faststart lets it start playing before it fully downloads
+ffmpeg -i out/season-N-closing-ceremony.mp4 -c:v libx264 -preset slow -crf 26 -tune animation \
+  -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart ../videos/season-N.mp4
+# poster: a frame from the intro title card (not the podium, so it doesn't spoil the winner)
+ffmpeg -ss 4.5 -i ../videos/season-N.mp4 -frames:v 1 -vf scale=1280:-2 -q:v 4 ../videos/season-N.jpg
+```
+
+Then add `N: { src: "videos/season-N.mp4", poster: "videos/season-N.jpg" }`
+to `CEREMONY_VIDEOS` (keyed by the season's id), and bump `app.js?v=` in `index.html`.
