@@ -8,34 +8,46 @@
   --font-display: "Saira Condensed", "Arial Narrow", "Segoe UI", sans-serif;
   --font-body: "IBM Plex Sans", "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
 
-  /* Light is the deliberate counterpart to the dark theme's ink ground,
-     not a washed-out copy of it: warm paper rather than white, so the
-     same fixed mana colours and the violet accent sit on it the way they
-     sit on the dark. Card stays lighter than the page so panels still
-     lift, which a flat cream-on-cream lost. */
-  --bg: #f3efe5;
-  --bg-accent: #ece7da;
-  --card-bg: #fdfbf7;
-  --ink: #201d18;
-  --muted: #5a5347;
-  --border: #e2dbca;
-  --border-soft: #ece7db;
-  --accent: #6b46f0;
-  --accent-strong: #5934d6;
-  --accent-soft: rgba(107, 70, 240, 0.09);
-  --accent-ink: #ffffff;
+  /* The whole app is a playmat, like the one Set Up Pod is drawn on (see
+     .mat). Dark is the neoprene itself: green-black ground, cream ink,
+     foil gold for anything that wants a tap. Light is the same mat
+     printed on paper: cream ground, green-black ink, brass for the gold
+     (foil gold itself is too pale to read as text on cream). Card stays
+     lighter than the page so panels still lift, which a flat
+     cream-on-cream lost. */
+  --bg: #efeee4;
+  --bg-accent: #e5e6d9;
+  --card-bg: #fbfaf3;
+  --ink: #15201b;
+  --muted: #4f5a52;
+  --border: #d6dacb;
+  --border-soft: #e6e8dc;
+  --accent: #7d5c12;
+  --accent-strong: #654a0d;
+  --accent-soft: rgba(201, 161, 63, 0.16);
+  --accent-ink: #fffaf0;
   /* Focus halo for inputs and the global :focus-visible ring. --accent-soft
      (9% alpha) was too faint to see as a focus state on warm paper. */
-  --focus-ring: rgba(107, 70, 240, 0.4);
-  --good: #1c7a44;
-  --good-bg: #e5f5ea;
-  --good-border: #bfe6cd;
-  --bad: #b3312f;
-  --bad-bg: #fbeaea;
-  --bad-border: #f0c6c5;
-  --warn: #b5720f;
-  --warn-bg: #fdf1de;
-  --warn-border: #f0d5a8;
+  --focus-ring: rgba(125, 92, 18, 0.4);
+  --good: #1d7344;
+  --good-bg: #e3f1e6;
+  --good-border: #bcdcc6;
+  --bad: #a8322a;
+  --bad-bg: #f8e7e3;
+  --bad-border: #ecc4bc;
+  --warn: #a4560f;
+  --warn-bg: #fbecdc;
+  --warn-border: #ecd0ad;
+  /* The thin rule a printed playmat has just inside its edge -- drawn
+     inside every .card (see its outline). */
+  --print-line: rgba(21, 32, 27, 0.13);
+  /* Primary buttons (button.primary). Separate from --accent because
+     brass, right for text on cream, is muddy as a fill: on the light mat
+     the main action is mat-green with cream ink; on the dark one it's
+     foil gold with dark ink, the same as --accent. */
+  --cta: #1d4536;
+  --cta-strong: #163729;
+  --cta-ink: #f3ecdb;
   --shadow-sm: 0 1px 2px rgba(32, 26, 12, 0.05);
   --shadow-md: 0 10px 30px -14px rgba(32, 26, 12, 0.22);
   --radius-lg: 16px;
@@ -44,15 +56,15 @@
   /* Same color as --bg, alpha'd -- layered over each tab's background
      image so it still reads as "this app's page," light or dark, rather
      than the artwork fighting the theme. */
-  --bg-scrim: rgba(243, 239, 229, 0.86);
-  --card-bg-translucent: rgba(255, 255, 255, 0.25);
+  --bg-scrim: rgba(239, 238, 228, 0.88);
+  --card-bg-translucent: rgba(251, 250, 243, 0.35);
   /* Floating chrome (bottom tab bar, avatar menu, the status-bar scroll
      edge): a translucent material the page scrolls under, rather than an
      opaque strip. Heavier than --card-bg-translucent on purpose -- it sits
      over text and over those cards, and a light material stacked on a
      light material stops being legible. --chrome-edge is the bright top
      rim where light catches it. */
-  --chrome-bg: rgba(253, 251, 247, 0.74);
+  --chrome-bg: rgba(251, 250, 243, 0.78);
   --chrome-edge: rgba(255, 255, 255, 0.7);
 
   /* Magic's own five mana colors -- see buildIdentityCoin in app.js.
@@ -93,33 +105,37 @@
    of what the user picked in-app. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #0b0a10;
-    --bg-accent: #14121c;
-    --card-bg: #14121c;
-    --ink: #f2efe9;
-    --muted: #9e97ac;
-    --border: #241f30;
-    --border-soft: #1b1826;
-    --accent: #a48bff;
-    --accent-strong: #b9a4ff;
-    --accent-soft: rgba(164, 139, 255, 0.14);
-    --accent-ink: #171522;
-    --focus-ring: rgba(164, 139, 255, 0.5);
-    --good: #5bd992;
-    --good-bg: #142a1e;
-    --good-border: #204a30;
-    --bad: #ff9b96;
-    --bad-bg: #33191b;
-    --bad-border: #5c2a2a;
-    --warn: #ffc266;
-    --warn-bg: #362510;
-    --warn-border: #5c421c;
+    --bg: #0c1512;
+    --bg-accent: #142019;
+    --card-bg: #13201b;
+    --ink: #efe6d2;
+    --muted: #aea893;
+    --border: #2b3a32;
+    --border-soft: #1d2a24;
+    --accent: #dcb55a;
+    --accent-strong: #ecc96f;
+    --accent-soft: rgba(220, 181, 90, 0.14);
+    --accent-ink: #1b1405;
+    --focus-ring: rgba(220, 181, 90, 0.5);
+    --good: #74d39c;
+    --good-bg: #13291d;
+    --good-border: #24452f;
+    --bad: #ff9d8a;
+    --bad-bg: #2d1915;
+    --bad-border: #55291f;
+    --warn: #f39a52;
+    --warn-bg: #2e1f12;
+    --warn-border: #573a1d;
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
     --shadow-md: 0 14px 36px -16px rgba(0, 0, 0, 0.65);
-    --bg-scrim: rgba(11, 10, 16, 0.88);
-    --card-bg-translucent: rgba(20, 18, 28, 0.30);
-    --chrome-bg: rgba(20, 18, 28, 0.72);
-    --chrome-edge: rgba(255, 255, 255, 0.07);
+    --bg-scrim: rgba(12, 21, 18, 0.88);
+    --card-bg-translucent: rgba(19, 32, 27, 0.5);
+    --chrome-bg: rgba(14, 24, 20, 0.8);
+    --chrome-edge: rgba(239, 230, 210, 0.08);
+    --print-line: rgba(222, 212, 188, 0.14);
+    --cta: #dcb55a;
+    --cta-strong: #ecc96f;
+    --cta-ink: #1b1405;
   }
 }
 
@@ -129,33 +145,37 @@
    the avatar-menu theme toggle. Keep both blocks in sync if this palette
    ever changes. */
 :root[data-theme="dark"] {
-  --bg: #0b0a10;
-  --bg-accent: #14121c;
-  --card-bg: #14121c;
-  --ink: #f2efe9;
-  --muted: #9e97ac;
-  --border: #241f30;
-  --border-soft: #1b1826;
-  --accent: #a48bff;
-  --accent-strong: #b9a4ff;
-  --accent-soft: rgba(164, 139, 255, 0.14);
-  --accent-ink: #171522;
-  --focus-ring: rgba(164, 139, 255, 0.5);
-  --good: #5bd992;
-  --good-bg: #142a1e;
-  --good-border: #204a30;
-  --bad: #ff9b96;
-  --bad-bg: #33191b;
-  --bad-border: #5c2a2a;
-  --warn: #ffc266;
-  --warn-bg: #362510;
-  --warn-border: #5c421c;
+  --bg: #0c1512;
+  --bg-accent: #142019;
+  --card-bg: #13201b;
+  --ink: #efe6d2;
+  --muted: #aea893;
+  --border: #2b3a32;
+  --border-soft: #1d2a24;
+  --accent: #dcb55a;
+  --accent-strong: #ecc96f;
+  --accent-soft: rgba(220, 181, 90, 0.14);
+  --accent-ink: #1b1405;
+  --focus-ring: rgba(220, 181, 90, 0.5);
+  --good: #74d39c;
+  --good-bg: #13291d;
+  --good-border: #24452f;
+  --bad: #ff9d8a;
+  --bad-bg: #2d1915;
+  --bad-border: #55291f;
+  --warn: #f39a52;
+  --warn-bg: #2e1f12;
+  --warn-border: #573a1d;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-md: 0 14px 36px -16px rgba(0, 0, 0, 0.65);
-  --bg-scrim: rgba(11, 10, 16, 0.88);
-  --card-bg-translucent: rgba(20, 18, 28, 0.30);
-  --chrome-bg: rgba(20, 18, 28, 0.72);
-  --chrome-edge: rgba(255, 255, 255, 0.07);
+  --bg-scrim: rgba(12, 21, 18, 0.88);
+  --card-bg-translucent: rgba(19, 32, 27, 0.5);
+  --chrome-bg: rgba(14, 24, 20, 0.8);
+  --chrome-edge: rgba(239, 230, 210, 0.08);
+  --print-line: rgba(222, 212, 188, 0.14);
+  --cta: #dcb55a;
+  --cta-strong: #ecc96f;
+  --cta-ink: #1b1405;
 }
 
 /* ---------- Theme change ----------
@@ -169,30 +189,30 @@
    set (easeThemeChange in app.js) -- never on first paint. Not tied to
    reduced motion: it's a fade, and a gentler brightness change is the
    accessible option. */
-@property --bg { syntax: "<color>"; inherits: true; initial-value: #f3efe5; }
-@property --bg-accent { syntax: "<color>"; inherits: true; initial-value: #ece7da; }
-@property --card-bg { syntax: "<color>"; inherits: true; initial-value: #fdfbf7; }
-@property --ink { syntax: "<color>"; inherits: true; initial-value: #201d18; }
-@property --muted { syntax: "<color>"; inherits: true; initial-value: #5a5347; }
-@property --border { syntax: "<color>"; inherits: true; initial-value: #e2dbca; }
-@property --border-soft { syntax: "<color>"; inherits: true; initial-value: #ece7db; }
-@property --accent { syntax: "<color>"; inherits: true; initial-value: #6b46f0; }
-@property --accent-strong { syntax: "<color>"; inherits: true; initial-value: #5934d6; }
-@property --accent-soft { syntax: "<color>"; inherits: true; initial-value: rgba(107, 70, 240, 0.09); }
-@property --accent-ink { syntax: "<color>"; inherits: true; initial-value: #ffffff; }
-@property --focus-ring { syntax: "<color>"; inherits: true; initial-value: rgba(107, 70, 240, 0.4); }
-@property --good { syntax: "<color>"; inherits: true; initial-value: #1c7a44; }
-@property --good-bg { syntax: "<color>"; inherits: true; initial-value: #e5f5ea; }
-@property --good-border { syntax: "<color>"; inherits: true; initial-value: #bfe6cd; }
-@property --bad { syntax: "<color>"; inherits: true; initial-value: #b3312f; }
-@property --bad-bg { syntax: "<color>"; inherits: true; initial-value: #fbeaea; }
-@property --bad-border { syntax: "<color>"; inherits: true; initial-value: #f0c6c5; }
-@property --warn { syntax: "<color>"; inherits: true; initial-value: #b5720f; }
-@property --warn-bg { syntax: "<color>"; inherits: true; initial-value: #fdf1de; }
-@property --warn-border { syntax: "<color>"; inherits: true; initial-value: #f0d5a8; }
-@property --bg-scrim { syntax: "<color>"; inherits: true; initial-value: rgba(243, 239, 229, 0.86); }
-@property --card-bg-translucent { syntax: "<color>"; inherits: true; initial-value: rgba(255, 255, 255, 0.25); }
-@property --chrome-bg { syntax: "<color>"; inherits: true; initial-value: rgba(253, 251, 247, 0.74); }
+@property --bg { syntax: "<color>"; inherits: true; initial-value: #efeee4; }
+@property --bg-accent { syntax: "<color>"; inherits: true; initial-value: #e5e6d9; }
+@property --card-bg { syntax: "<color>"; inherits: true; initial-value: #fbfaf3; }
+@property --ink { syntax: "<color>"; inherits: true; initial-value: #15201b; }
+@property --muted { syntax: "<color>"; inherits: true; initial-value: #4f5a52; }
+@property --border { syntax: "<color>"; inherits: true; initial-value: #d6dacb; }
+@property --border-soft { syntax: "<color>"; inherits: true; initial-value: #e6e8dc; }
+@property --accent { syntax: "<color>"; inherits: true; initial-value: #7d5c12; }
+@property --accent-strong { syntax: "<color>"; inherits: true; initial-value: #654a0d; }
+@property --accent-soft { syntax: "<color>"; inherits: true; initial-value: rgba(201, 161, 63, 0.16); }
+@property --accent-ink { syntax: "<color>"; inherits: true; initial-value: #fffaf0; }
+@property --focus-ring { syntax: "<color>"; inherits: true; initial-value: rgba(125, 92, 18, 0.4); }
+@property --good { syntax: "<color>"; inherits: true; initial-value: #1d7344; }
+@property --good-bg { syntax: "<color>"; inherits: true; initial-value: #e3f1e6; }
+@property --good-border { syntax: "<color>"; inherits: true; initial-value: #bcdcc6; }
+@property --bad { syntax: "<color>"; inherits: true; initial-value: #a8322a; }
+@property --bad-bg { syntax: "<color>"; inherits: true; initial-value: #f8e7e3; }
+@property --bad-border { syntax: "<color>"; inherits: true; initial-value: #ecc4bc; }
+@property --warn { syntax: "<color>"; inherits: true; initial-value: #a4560f; }
+@property --warn-bg { syntax: "<color>"; inherits: true; initial-value: #fbecdc; }
+@property --warn-border { syntax: "<color>"; inherits: true; initial-value: #ecd0ad; }
+@property --bg-scrim { syntax: "<color>"; inherits: true; initial-value: rgba(239, 238, 228, 0.88); }
+@property --card-bg-translucent { syntax: "<color>"; inherits: true; initial-value: rgba(251, 250, 243, 0.35); }
+@property --chrome-bg { syntax: "<color>"; inherits: true; initial-value: rgba(251, 250, 243, 0.78); }
 @property --chrome-edge { syntax: "<color>"; inherits: true; initial-value: rgba(255, 255, 255, 0.7); }
 
 html.theme-easing {
@@ -1896,6 +1916,11 @@ header h1 {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
+  /* The playmat's printed inner rule. A negative-offset outline rather than
+     a pseudo-element: it follows the radius, takes no layout, and leaves
+     ::before/::after free for the cards that already use them. */
+  outline: 1px solid var(--print-line);
+  outline-offset: -9px;
   padding: 24px 24px 26px;
   margin-bottom: 22px;
 }
@@ -2007,25 +2032,25 @@ button:active {
 }
 
 button.primary {
-  background: var(--accent);
-  color: var(--accent-ink);
-  border-color: var(--accent);
+  background: var(--cta);
+  color: var(--cta-ink);
+  border-color: var(--cta);
   font-weight: 600;
-  box-shadow: 0 6px 16px -8px var(--accent);
+  box-shadow: 0 6px 16px -8px var(--cta);
 }
 
 @media (hover: hover) and (pointer: fine) {
   button.primary:hover {
-    background: var(--accent-strong);
-    border-color: var(--accent-strong);
-    color: var(--accent-ink);
+    background: var(--cta-strong);
+    border-color: var(--cta-strong);
+    color: var(--cta-ink);
   }
 }
 
 /* Prompts a re-check after a suggestion chip swapped a deck in. */
 @keyframes recheck-glow {
-  0%, 100% { box-shadow: 0 6px 16px -8px var(--accent), 0 0 0 0 var(--warn-border); }
-  50% { box-shadow: 0 6px 16px -8px var(--accent), 0 0 0 6px transparent, 0 0 16px 3px var(--warn); }
+  0%, 100% { box-shadow: 0 6px 16px -8px var(--cta), 0 0 0 0 var(--warn-border); }
+  50% { box-shadow: 0 6px 16px -8px var(--cta), 0 0 0 6px transparent, 0 0 16px 3px var(--warn); }
 }
 button.primary.glow {
   animation: recheck-glow 1.4s ease-in-out infinite;
