@@ -3011,7 +3011,142 @@ function buildPodCorner() {
     const me = myPodPlayerId();
     if (me) removePodSeat(me);
   });
+  wireCornerDrag(corner);
   return corner;
+}
+
+// Drag a deck box from the shelf up into your zone to seal it -- the same
+// pick as tapping it, for anyone who'd rather put the box down. On touch a
+// box lifts only after a short hold, so a quick swipe across the shelf
+// still scrolls the page; with a mouse it lifts as soon as it moves. A
+// floating copy follows the finger 1:1; let go over the zone and it drops
+// in, anywhere else and it springs back to the shelf with the release's
+// velocity. Tapping is untouched (a drag swallows only its own click).
+let podCornerDragging = false;
+function wireCornerDrag(corner) {
+  const shelf = corner.querySelector(".corner-shelf");
+  const zone = corner.querySelector(".corner-zone");
+  const HOLD_MS = 160;
+  const SLOP = 8;
+  let press = null; // { box, id, x, y, pointerId, touch, timer }
+  let drag = null; // { box, ghost, originX, originY, x, y }
+  let suppressClickUntil = 0;
+  const trackX = createVelocityTracker();
+  const trackY = createVelocityTracker();
+
+  const overZone = (x, y) => {
+    const r = zone.getBoundingClientRect();
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  };
+
+  const lift = () => {
+    const { box, x, y, pointerId } = press;
+    clearTimeout(press.timer);
+    const r = box.getBoundingClientRect();
+    const ghost = box.cloneNode(true);
+    ghost.classList.add("corner-ghost");
+    ghost.removeAttribute("id");
+    ghost.setAttribute("aria-hidden", "true");
+    ghost.style.left = `${r.left}px`;
+    ghost.style.top = `${r.top}px`;
+    ghost.style.width = `${r.width}px`;
+    ghost.style.height = `${r.height}px`;
+    document.body.appendChild(ghost);
+    box.classList.add("is-lifted");
+    zone.classList.add("is-dropzone");
+    try { box.setPointerCapture(pointerId); } catch { /* pointer already gone -- release handles it */ }
+    drag = { box, ghost, id: press.id, startX: x, startY: y, dx: 0, dy: 0 };
+    podCornerDragging = true;
+    trackX.reset();
+    trackY.reset();
+    haptic(8);
+  };
+
+  // Takes the drag it's drawing, not the shared `drag`: the two return
+  // springs can tick once more after the other has already finished.
+  const place = d => {
+    const lifted = REDUCED_MOTION.matches ? "" : " scale(1.06) rotate(-2deg)";
+    d.ghost.style.transform = `translate3d(${d.dx}px, ${d.dy}px, 0)${lifted}`;
+  };
+
+  const finish = () => {
+    if (!drag) return;
+    drag.springs?.forEach(s => s.stop());
+    drag.ghost.remove();
+    drag.box.classList.remove("is-lifted");
+    zone.classList.remove("is-dropzone", "is-target");
+    drag = null;
+    podCornerDragging = false;
+  };
+
+  const release = (e, cancelled) => {
+    if (press) { clearTimeout(press.timer); press = null; }
+    if (!drag) return;
+    suppressClickUntil = performance.now() + 400;
+    const me = myPodPlayerId();
+    const d = drag;
+    if (!cancelled && overZone(e.clientX, e.clientY) && me) {
+      // Into the zone: the copy shrinks into the box already there while
+      // the pick goes off; the end state never waits on it (rule 2).
+      const zr = zone.querySelector(".mat-box").getBoundingClientRect();
+      const gr = d.ghost.getBoundingClientRect();
+      d.ghost.style.transition = REDUCED_MOTION.matches ? "none" : "transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.2s ease";
+      d.ghost.style.transform = `translate3d(${d.dx + (zr.left + zr.width / 2) - (gr.left + gr.width / 2)}px, ${d.dy + (zr.top + zr.height / 2) - (gr.top + gr.height / 2)}px, 0) scale(0.4)`;
+      d.ghost.style.opacity = "0";
+      setTimeout(finish, REDUCED_MOTION.matches ? 0 : 220);
+      haptic(12);
+      if (!podPendingPicks.has(me)) pickPodDeck(me, d.id);
+      return;
+    }
+    if (REDUCED_MOTION.matches) { finish(); return; }
+    // Back to the shelf, carrying the release's speed into the spring.
+    const sx = new Spring(d.dx, v => { d.dx = v; place(d); });
+    const sy = new Spring(d.dy, v => { d.dy = v; place(d); });
+    d.springs = [sx, sy];
+    zone.classList.remove("is-target");
+    sx.to(0, { dampingRatio: 0.8, response: 0.3, velocity: trackX.velocity() });
+    sy.to(0, { dampingRatio: 0.8, response: 0.3, velocity: trackY.velocity(), onRest: finish });
+  };
+
+  shelf.addEventListener("pointerdown", e => {
+    const box = e.target.closest(".corner-deck");
+    if (!box || drag || e.button > 0 || box.getAttribute("aria-busy") === "true") return;
+    const touch = e.pointerType !== "mouse";
+    press = { box, id: box.dataset.deckId, x: e.clientX, y: e.clientY, pointerId: e.pointerId, touch, timer: 0 };
+    if (touch) press.timer = setTimeout(() => { if (press) lift(); }, HOLD_MS);
+  });
+  shelf.addEventListener("pointermove", e => {
+    if (drag) {
+      drag.dx = e.clientX - drag.startX;
+      drag.dy = e.clientY - drag.startY;
+      trackX.add(drag.dx, e.timeStamp);
+      trackY.add(drag.dy, e.timeStamp);
+      place(drag);
+      zone.classList.toggle("is-target", overZone(e.clientX, e.clientY));
+      return;
+    }
+    if (!press || e.pointerId !== press.pointerId) return;
+    const moved = Math.hypot(e.clientX - press.x, e.clientY - press.y);
+    if (moved < SLOP) return;
+    // Moved before the hold: on touch that's a scroll, so let it be one.
+    if (press.touch) { clearTimeout(press.timer); press = null; return; }
+    lift();
+  });
+  shelf.addEventListener("pointerup", e => release(e, false));
+  shelf.addEventListener("pointercancel", e => release(e, true));
+  // Once a box is lifted the page mustn't scroll under the finger. Touch
+  // events, not pointer events, are the only ones that can stop it.
+  shelf.addEventListener("touchmove", e => { if (drag) e.preventDefault(); }, { passive: false });
+  // A long-press on a box would otherwise open the iOS callout or the
+  // context menu under the finger.
+  shelf.addEventListener("contextmenu", e => { if (press || drag) e.preventDefault(); });
+  // The drag's own click (fired on release) isn't a tap on the box.
+  shelf.addEventListener("click", e => {
+    if (performance.now() < suppressClickUntil) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+  }, true);
 }
 
 function renderPodCorner() {
@@ -3076,10 +3211,10 @@ function renderPodCorner() {
     note.textContent = "Sliding it into your zone.";
   } else if (state === "waiting") {
     boxText.textContent = "Empty";
-    note.textContent = "Tap a deck box below to seal it here. Only you will see which until the pod passes.";
+    note.textContent = "Tap a deck box below, or drag one up into this zone, to seal it. Only you will see which until the pod passes.";
   } else if (state === "flagged") {
     boxText.textContent = check && check.overBy > 0 ? `Over by ${formatPower(check.overBy)}` : "Over range";
-    note.textContent = "Your deck is over this pod's range. Pick another from the shelf.";
+    note.textContent = "Your deck is over this pod's range. Tap or drag another in from the shelf.";
   } else {
     boxText.textContent = deck ? podShortDeckName(deck.name) : "Sealed";
     const coin = state === "revealed" && deck ? buildIdentityCoin(deck.colorIdentity) : null;
@@ -3098,7 +3233,8 @@ function renderPodCorner() {
   const decks = decksAvailableForSlot(mine);
   const shelf = corner.querySelector(".corner-shelf");
   const signature = JSON.stringify([me, decks.map(d => d.id), mine.deckId, pending]);
-  if (shelf.dataset.signature !== signature) {
+  // Never under a box that's being dragged: it would vanish mid-gesture.
+  if (shelf.dataset.signature !== signature && !podCornerDragging) {
     shelf.dataset.signature = signature;
     const focusedId = shelf.contains(document.activeElement) ? document.activeElement.dataset.deckId : null;
     shelf.innerHTML = "";
