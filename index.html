@@ -17,7 +17,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="style.css?v=71">
+<link rel="stylesheet" href="style.css?v=72">
 
 <!-- Home-screen icon (iOS "Add to Home Screen" + Android/Chrome install).
      Generated from icon-source.png via scripts/generate_icons.py -- rerun
@@ -270,13 +270,19 @@
   </div>
 
   <div id="tab-winrates" class="tab-panel" hidden>
-    <section class="card">
-      <h2>Player Win Rates</h2>
-      <p class="hint">playgroup.gg's raw win rate next to the app's Player Adjusted Win Rate, which also weighs pod size, knockouts and deck strength.</p>
+    <section class="card" id="winrates-league">
+      <h2>The league race</h2>
+      <p class="hint">playgroup.gg's raw win rate next to the app's Player Adjusted Win Rate, which also weighs pod size, knockouts and deck strength. Tap a player for their dossier.</p>
       <p class="hint" id="winrates-sync-status">Tallying the numbers…</p>
+      <!-- Everyone's adjusted rank, game night by game night -- see
+           buildLeagueRace in app.js. Empty until there are two nights. -->
+      <div id="winrates-race"></div>
       <div id="winrates-table"></div>
       <p class="hint" id="winrates-note"></p>
     </section>
+    <!-- One player's file: rivals, decks, rank by night, pinned trophies.
+         Filled by renderDossier; swaps places with #winrates-league. -->
+    <section class="card dossier" id="winrates-dossier" hidden></section>
   </div>
 
   <div id="tab-achievements" class="tab-panel" hidden>
@@ -479,6 +485,6 @@
   </div>
 </div>
 
-<script src="app.js?v=77"></script>
+<script src="app.js?v=78"></script>
 </body>
 </html>

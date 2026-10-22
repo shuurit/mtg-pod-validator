@@ -6151,6 +6151,16 @@ function activateTab(tabName) {
   if (switching) playTabEnter(panel, previous);
   if (tabName === "pod") pollLiveTable(true);
   if (tabName === "tonight") pollLiveTable(true);
+  // Standings always opens on the league; a dossier is somewhere you go
+  // from there, not somewhere the tab remembers.
+  if (tabName === "winrates" && switching) {
+    if (dossierPlayerName) {
+      dossierPlayerName = null;
+      document.getElementById("winrates-dossier").hidden = true;
+      document.getElementById("winrates-league").hidden = false;
+    }
+    drawLeagueRace();
+  }
   syncCompactBar();
 }
 
@@ -6306,10 +6316,14 @@ const TREND_CLASS = { up: "trend-up", down: "trend-down", steady: "trend-steady"
 // sample can't support -- at 22 games a single result moves the rate by
 // more than a whole percentage point, so digits past the first were noise
 // that made two close players look precisely different.
-function buildWinRateCard(row, rank, sortKey, direction) {
-  const card = document.createElement("div");
+//
+// The whole row is a button into that player's dossier (openDossier).
+function buildWinRateCard(row, rank, sortKey, direction, race) {
+  const card = document.createElement("button");
+  card.type = "button";
   card.className = "wr-card";
   card.dataset.flipKey = row.name;
+  card.addEventListener("click", () => openDossier(row.name, card));
 
   const isAdjusted = sortKey === "adjPct";
   const primaryPct = isAdjusted ? row.adjPct : row.pgPct;
@@ -6346,9 +6360,22 @@ function buildWinRateCard(row, rank, sortKey, direction) {
     }
     nameEl.appendChild(pinsEl);
   }
-  header.appendChild(nameEl);
+  // How the night's race went for them (raceCaption), under the name.
+  const caption = isAdjusted ? raceCaption(race, row.name) : null;
+  if (caption) {
+    const nameBlock = document.createElement("span");
+    nameBlock.className = "wr-name-block";
+    const captionEl = document.createElement("span");
+    captionEl.className = `wr-caption ${caption.tone}`;
+    captionEl.textContent = caption.text;
+    nameBlock.append(nameEl, captionEl);
+    header.appendChild(nameBlock);
+  } else {
+    header.appendChild(nameEl);
+  }
 
-  if (row.adjPct !== null && direction) {
+  // The caption already says which way they moved, over a whole night.
+  if (row.adjPct !== null && direction && !caption) {
     const trendEl = document.createElement("span");
     trendEl.className = `wr-trend ${TREND_CLASS[direction]}`;
     trendEl.title = "Whether this player's rank in the Player Adjusted Win Rate standings moved compared to before their most recent logged game";
@@ -6360,6 +6387,10 @@ function buildWinRateCard(row, rank, sortKey, direction) {
   primaryValEl.className = "wr-metric-value";
   rollText(primaryValEl, primaryPct !== null ? `${primaryPct.toFixed(1)}%` : "—", `wr:${row.name}`);
   header.appendChild(primaryValEl);
+  const go = document.createElement("span");
+  go.className = "wr-go";
+  go.innerHTML = tonightSvg('<path d="m9 18 6-6-6-6"></path>');
+  header.appendChild(go);
   card.appendChild(header);
 
   const meter = document.createElement("div");
@@ -6373,6 +6404,9 @@ function buildWinRateCard(row, rank, sortKey, direction) {
     fill.style.width = `${Math.max(0, Math.min(100, primaryPct))}%`;
     bar.appendChild(fill);
     meter.appendChild(bar);
+
+    const form = buildFormStrip(row.name);
+    if (form) meter.appendChild(form);
 
     const recordEl = document.createElement("span");
     recordEl.className = "wr-record";
@@ -6454,6 +6488,7 @@ function renderWinRatesTable(data) {
   });
 
   const trendByPlayer = computeWinRatesRankTrend();
+  const race = computeLeagueRace();
 
   // Competition-style ranks (ties share a rank) off whichever metric is
   // currently sorted -- same assignRanks used for the trend calculation,
@@ -6495,9 +6530,17 @@ function renderWinRatesTable(data) {
   const list = document.createElement("div");
   list.className = "wr-card-list";
   for (const row of rowData) {
-    list.appendChild(buildWinRateCard(row, rankByName[row.name] ?? null, sortKey, trendByPlayer[row.name]));
+    list.appendChild(buildWinRateCard(row, rankByName[row.name] ?? null, sortKey, trendByPlayer[row.name], race));
   }
   tableEl.appendChild(list);
+
+  const raceEl = document.getElementById("winrates-race");
+  if (raceEl) {
+    raceEl.innerHTML = "";
+    const chart = buildLeagueRace(race);
+    if (chart) raceEl.appendChild(chart);
+  }
+  if (dossierPlayerName) renderDossier();
 
   statusEl.textContent = `Live as of ${new Date(data.generated_at).toLocaleTimeString()} (playgroup.gg data may be cached up to 5 min).`;
   noteEl.innerHTML = "";
@@ -6505,6 +6548,473 @@ function renderWinRatesTable(data) {
   note.className = "note-line";
   note.textContent = `Scoped to the active league (${data.league || "unknown"}). Player Adjusted Win Rate is computed live from the current season's Game Log.`;
   noteEl.appendChild(note);
+}
+
+// ---------- dossiers ----------
+// Standings tell the season's story: the league race above the table is
+// everyone's adjusted rank game night by game night, and each row opens a
+// dossier on that player -- their rivals, their decks, their rank by night
+// and their pinned trophies. All of it from the same current-season Game
+// Log rows the table already reads; nothing new is fetched.
+
+// The newest nights the race draws. More than this and eight lines get too
+// tangled to follow on a phone.
+const RACE_NIGHTS = 8;
+// Whose dossier is open, by name (the table is keyed by name too).
+let dossierPlayerName = null;
+// The row that opened it, to hand focus back to on the way out.
+let dossierOpener = null;
+
+function signedInPlayerName() {
+  return currentUser && players.length
+    ? (players.find(p => p.id === currentUser.playerId) || {}).name || null
+    : null;
+}
+
+// A game night is a calendar day, in this phone's time zone.
+function gameNightKey(date) {
+  const d = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(d.getTime())) return null;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function formatNightKey(key) {
+  const [y, m, d] = key.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+
+function ordinal(n) {
+  const tens = n % 100;
+  const suffix = tens >= 11 && tens <= 13 ? "th" : ({ 1: "st", 2: "nd", 3: "rd" }[n % 10] || "th");
+  return `${n}${suffix}`;
+}
+
+// Every standings player's position after each of the last RACE_NIGHTS game
+// nights, counting every game up to and including that night. Positions,
+// not the table's competition ranks: a line needs a row of its own, so a
+// tie breaks by name. null before a player's first game of the season.
+// -> { nights: ["2026-10-01", ...], ranks: { name: [pos|null, ...] } }
+function computeLeagueRace() {
+  const tracked = new Set(podPlayers.map(p => p.name));
+  const rows = gameLogSeason3Rows.filter(r => typeof r.J === "number" && tracked.has(r.player) && gameNightKey(r.date));
+  const nights = [...new Set(rows.map(r => gameNightKey(r.date)))].sort().slice(-RACE_NIGHTS);
+  const names = [...new Set(rows.map(r => r.player))];
+  const ranks = Object.fromEntries(names.map(n => [n, []]));
+  for (const night of nights) {
+    const upTo = rows.filter(r => gameNightKey(r.date) <= night);
+    const rated = names
+      .map(name => {
+        const own = upTo.filter(r => r.player === name);
+        return own.length ? { name, rate: computePlayerAdjustedWinRate(own).B } : null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.rate - a.rate || a.name.localeCompare(b.name));
+    const pos = Object.fromEntries(rated.map((r, i) => [r.name, i + 1]));
+    for (const name of names) ranks[name].push(pos[name] ?? null);
+  }
+  return { nights, ranks };
+}
+
+// One line under a player's name in the table: how the last game night
+// moved them. The leader gets how long they've held it instead.
+function raceCaption(race, name) {
+  const line = race && race.ranks[name];
+  if (!line || race.nights.length < 2) return null;
+  const now = line[line.length - 1];
+  const before = line[line.length - 2];
+  if (now === null) return null;
+  if (now === 1) {
+    let held = 0;
+    for (let i = line.length - 1; i >= 0 && line[i] === 1; i--) held++;
+    if (held >= 2) return { text: `1st for ${held} nights`, tone: "trend-up" };
+  }
+  if (before === null) return { text: "New on the board", tone: "trend-steady" };
+  if (now < before) return { text: `Up ${before - now} last night`, tone: "trend-up" };
+  if (now > before) return { text: `Down ${now - before} last night`, tone: "trend-down" };
+  return { text: `Held ${ordinal(now)} last night`, tone: "trend-steady" };
+}
+
+// Last five results, oldest first so the newest sits nearest the rate.
+function buildFormStrip(name) {
+  const results = gameLogSeason3Rows
+    .filter(r => r.player === name && typeof r.J === "number")
+    .sort((a, b) => a.gameNum - b.gameNum)
+    .slice(-5)
+    .map(r => r.result === 1);
+  if (!results.length) return null;
+  const strip = document.createElement("span");
+  strip.className = "wr-form";
+  strip.setAttribute("role", "img");
+  strip.setAttribute("aria-label", `Last ${results.length === 1 ? "game" : results.length + " games"}: ${results.map(w => (w ? "win" : "loss")).join(", ")}`);
+  for (const won of results) {
+    const pip = document.createElement("span");
+    pip.className = won ? "wr-form-pip is-win" : "wr-form-pip";
+    strip.appendChild(pip);
+  }
+  return strip;
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+function svgEl(tag, attrs) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) el.setAttribute(k, v);
+  return el;
+}
+
+// The league race: a bump chart on the playmat, one line per player in
+// their sleeve colour, yours in gold and drawn last so it's never buried.
+// Needs two nights to be a race at all.
+function buildLeagueRace(race) {
+  if (!race || race.nights.length < 2) return null;
+  const names = Object.keys(race.ranks).filter(n => race.ranks[n].some(r => r !== null));
+  if (names.length < 2) return null;
+  const me = signedInPlayerName();
+  const rowGap = 26, top = 16, left = 30, right = 62, width = 340;
+  const height = top + (names.length - 1) * rowGap + 34;
+  const stepX = (width - left - right) / (race.nights.length - 1);
+  const x = i => left + i * stepX;
+  const y = pos => top + (pos - 1) * rowGap;
+
+  const wrap = document.createElement("div");
+  wrap.className = "race";
+  const svg = svgEl("svg", { viewBox: `0 0 ${width} ${height}`, width: "100%", role: "img" });
+
+  const finalOrder = names
+    .map(n => ({ name: n, pos: race.ranks[n][race.ranks[n].length - 1] }))
+    .sort((a, b) => a.pos - b.pos);
+  svg.setAttribute("aria-label",
+    `Adjusted rank after each of the last ${race.nights.length} game nights, ${formatNightKey(race.nights[0])} to ${formatNightKey(race.nights[race.nights.length - 1])}. ` +
+    `Now: ${finalOrder.map(r => `${ordinal(r.pos)} ${r.name}`).join(", ")}.`);
+
+  const grid = svgEl("g", { class: "race-grid" });
+  for (let pos = 1; pos <= names.length; pos++) {
+    grid.appendChild(svgEl("path", { d: `M${left - 4} ${y(pos)}H${width - right + 4}` }));
+    const label = svgEl("text", { x: 0, y: y(pos) + 3, class: "race-axis" });
+    label.textContent = ordinal(pos);
+    grid.appendChild(label);
+  }
+  race.nights.forEach((night, i) => {
+    const label = svgEl("text", { x: x(i), y: height - 6, "text-anchor": "middle", class: "race-axis" });
+    // Every night labelled gets crowded past five; first, last and every
+    // other one between.
+    const every = race.nights.length > 5 ? 2 : 1;
+    if (i === 0 || i === race.nights.length - 1 || (i % every === 0 && i < race.nights.length - 2)) {
+      label.textContent = formatNightKey(night);
+      grid.appendChild(label);
+    }
+  });
+  svg.appendChild(grid);
+
+  const ordered = [...names.filter(n => n !== me), ...names.filter(n => n === me)];
+  for (const name of ordered) {
+    const line = race.ranks[name];
+    const points = line.map((pos, i) => (pos === null ? null : `${x(i)},${y(pos)}`)).filter(Boolean);
+    const player = podPlayers.find(p => p.name === name);
+    const g = svgEl("g", { class: name === me ? "race-line is-me" : "race-line" });
+    if (name !== me && player) g.style.setProperty("--line", podSleeveOf(player.id));
+    g.appendChild(svgEl("polyline", { points: points.join(" "), pathLength: 1 }));
+    const last = line[line.length - 1];
+    g.appendChild(svgEl("circle", { cx: x(line.length - 1), cy: y(last), r: name === me ? 5 : 4.5 }));
+    const label = svgEl("text", { x: x(line.length - 1) + 10, y: y(last) + 4, class: "race-name" });
+    label.textContent = name === me ? "You" : name;
+    g.appendChild(label);
+    svg.appendChild(g);
+  }
+  wrap.appendChild(svg);
+  return wrap;
+}
+
+// The lines draw themselves in left to right when you arrive on Standings
+// -- a real tab switch only, never on a data refresh (rule 7). The chart
+// is complete without it: the class only adds the reveal on top.
+function drawLeagueRace() {
+  const race = document.querySelector("#winrates-race .race");
+  if (!race || REDUCED_MOTION.matches) return;
+  race.classList.remove("is-drawing");
+  void race.offsetWidth;
+  race.classList.add("is-drawing");
+  clearTimeout(race._drawTimer);
+  race._drawTimer = setTimeout(() => race.classList.remove("is-drawing"), 1400);
+}
+
+// Head-to-head over shared pods this season. Nemesis: whoever won the most
+// pods this player sat in. Favourite prey: whoever sat in the most pods
+// this player won. Ties go to the higher share of shared pods.
+function computeRivals(name) {
+  const byGame = new Map();
+  for (const r of gameLogSeason3Rows) {
+    if (typeof r.gameNum !== "number") continue;
+    if (!byGame.has(r.gameNum)) byGame.set(r.gameNum, []);
+    byGame.get(r.gameNum).push(r);
+  }
+  const tracked = new Set(podPlayers.map(p => p.name));
+  const vs = {};
+  for (const rows of byGame.values()) {
+    if (!rows.some(r => r.player === name)) continue;
+    const winner = (rows.find(r => r.result === 1) || {}).player;
+    for (const r of rows) {
+      if (r.player === name || !tracked.has(r.player)) continue;
+      const v = vs[r.player] ||= { name: r.player, shared: 0, theyWon: 0, iWon: 0 };
+      v.shared++;
+      if (winner === r.player) v.theyWon++;
+      if (winner === name) v.iWon++;
+    }
+  }
+  const pick = key => Object.values(vs)
+    .filter(v => v[key] > 0)
+    .sort((a, b) => b[key] - a[key] || b[key] / b.shared - a[key] / a.shared || a.name.localeCompare(b.name))[0] || null;
+  return { nemesis: pick("theyWon"), prey: pick("iWon") };
+}
+
+// This season's decks for a player, most played first, from the Game Log's
+// commander column, matched back to their deck list for colours and the
+// combo watch.
+function computeDossierDecks(name) {
+  const player = podPlayers.find(p => p.name === name);
+  const byDeck = new Map();
+  for (const r of gameLogSeason3Rows) {
+    if (r.player !== name || !r.commander) continue;
+    const d = byDeck.get(r.commander) || { name: r.commander, games: 0, wins: 0 };
+    d.games++;
+    if (r.result === 1) d.wins++;
+    byDeck.set(r.commander, d);
+  }
+  const decks = [...byDeck.values()].sort((a, b) => b.games - a.games || b.wins - a.wins);
+  for (const d of decks) {
+    d.deck = player ? player.decks.find(x => x.name === d.name || stripDeckDisambiguation(x.name) === stripDeckDisambiguation(d.name)) || null : null;
+  }
+  const best = decks.filter(d => d.wins > 0).sort((a, b) => b.wins - a.wins || b.wins / b.games - a.wins / a.games)[0];
+  if (best) best.best = true;
+  return decks;
+}
+
+function openDossier(name, opener) {
+  dossierPlayerName = name;
+  dossierOpener = opener || null;
+  renderDossier();
+  const league = document.getElementById("winrates-league");
+  const dossier = document.getElementById("winrates-dossier");
+  league.hidden = true;
+  dossier.hidden = false;
+  window.scrollTo({ top: 0, behavior: "auto" });
+  if (!REDUCED_MOTION.matches) {
+    dossier.classList.remove("is-entering");
+    void dossier.offsetWidth;
+    dossier.classList.add("is-entering");
+    clearTimeout(dossier._enterTimer);
+    dossier._enterTimer = setTimeout(() => dossier.classList.remove("is-entering"), 400);
+  }
+  const heading = dossier.querySelector(".dossier-name");
+  if (heading) heading.focus({ preventScroll: true });
+}
+
+function closeDossier() {
+  if (!dossierPlayerName) return;
+  const name = dossierPlayerName;
+  dossierPlayerName = null;
+  document.getElementById("winrates-dossier").hidden = true;
+  document.getElementById("winrates-league").hidden = false;
+  // The opener is usually gone (the table re-renders), so find the row
+  // again by name.
+  const row = [...document.querySelectorAll("#winrates-table .wr-card")].find(el => el.dataset.flipKey === name)
+    || (dossierOpener && dossierOpener.isConnected ? dossierOpener : null);
+  dossierOpener = null;
+  if (row) {
+    row.focus({ preventScroll: true });
+    row.scrollIntoView({ block: "center" });
+  }
+}
+
+function dossierSection(title) {
+  const label = document.createElement("h3");
+  label.className = "dossier-label";
+  label.textContent = title;
+  return label;
+}
+
+function buildRivalCard(kind, rival, name) {
+  const card = document.createElement("div");
+  card.className = `dossier-rival is-${kind}`;
+  const tag = document.createElement("span");
+  tag.className = "dossier-rival-tag";
+  tag.textContent = kind === "nemesis" ? "Nemesis" : "Favourite prey";
+  const who = document.createElement("span");
+  who.className = "dossier-rival-name";
+  const how = document.createElement("span");
+  how.className = "dossier-rival-how";
+  if (rival) {
+    who.textContent = rival.name;
+    how.textContent = kind === "nemesis"
+      ? `beat ${name} in ${rival.theyWon} of ${rival.shared} shared ${rival.shared === 1 ? "pod" : "pods"}`
+      : `${name} won ${rival.iWon} of ${rival.shared} shared ${rival.shared === 1 ? "pod" : "pods"}`;
+  } else {
+    who.textContent = "None yet";
+    how.textContent = kind === "nemesis" ? "Nobody has beaten them yet" : "No wins to count yet";
+  }
+  card.append(tag, who, how);
+  return card;
+}
+
+function renderDossier() {
+  const host = document.getElementById("winrates-dossier");
+  const name = dossierPlayerName;
+  if (!host || !name) return;
+  const player = podPlayers.find(p => p.name === name) || players.find(p => p.name === name);
+  const row = latestStandings ? latestStandings.rows.find(r => r.name === name) : null;
+  const rank = latestStandings ? latestStandings.adjustedRankByName[name] : null;
+  const isMe = name === signedInPlayerName();
+  host.innerHTML = "";
+  host.style.setProperty("--sleeve", player ? podSleeveOf(player.id) : "var(--border)");
+
+  const band = document.createElement("div");
+  band.className = "dossier-band";
+  const back = document.createElement("button");
+  back.type = "button";
+  back.className = "dossier-back";
+  back.innerHTML = `${tonightSvg('<path d="m15 18-6-6 6-6"></path>')}<span>Standings</span>`;
+  back.addEventListener("click", closeDossier);
+  band.appendChild(back);
+
+  const title = document.createElement("div");
+  title.className = "dossier-title";
+  const nameEl = document.createElement("h2");
+  nameEl.className = "dossier-name";
+  nameEl.tabIndex = -1;
+  nameEl.textContent = name;
+  title.appendChild(nameEl);
+  const place = document.createElement("div");
+  place.className = "dossier-place";
+  const placeRank = document.createElement("span");
+  placeRank.className = "dossier-rank";
+  placeRank.textContent = rank ? ordinal(rank) : "Unranked";
+  const placeLine = document.createElement("span");
+  placeLine.className = "dossier-rate";
+  placeLine.textContent = row && row.adjPct !== null
+    ? `${row.adjPct.toFixed(1)}% adjusted · ${row.adjWins}–${row.adjLosses}`
+    : "No games logged this season";
+  place.append(placeRank, placeLine);
+  title.appendChild(place);
+  band.appendChild(title);
+  if (isMe) {
+    const you = document.createElement("span");
+    you.className = "dossier-you";
+    you.textContent = "Your dossier";
+    band.appendChild(you);
+  }
+  host.appendChild(band);
+
+  const body = document.createElement("div");
+  body.className = "dossier-body";
+
+  const rivals = computeRivals(name);
+  const rivalGrid = document.createElement("div");
+  rivalGrid.className = "dossier-rivals";
+  rivalGrid.append(buildRivalCard("nemesis", rivals.nemesis, name), buildRivalCard("prey", rivals.prey, name));
+  body.appendChild(rivalGrid);
+
+  const decks = computeDossierDecks(name);
+  body.appendChild(dossierSection(`${name}'s decks this season`));
+  if (decks.length) {
+    const grid = document.createElement("div");
+    grid.className = "dossier-decks";
+    for (const d of decks) {
+      const tile = document.createElement("div");
+      tile.className = d.best ? "dossier-deck is-best" : "dossier-deck";
+      const deckName = document.createElement("span");
+      deckName.className = "dossier-deck-name";
+      deckName.textContent = podShortDeckName(d.name);
+      deckName.title = d.name;
+      // The coin sits with the record, not beside the name, so a long
+      // commander gets the tile's whole width.
+      const coin = d.deck ? buildIdentityCoin(d.deck.colorIdentity) : null;
+      const meta = document.createElement("span");
+      meta.className = "dossier-deck-meta";
+      const record = document.createElement("span");
+      record.textContent = `${d.best ? "Best · " : ""}${d.wins} ${d.wins === 1 ? "win" : "wins"} in ${d.games}`;
+      if (d.best) record.className = "dossier-deck-best";
+      if (coin) meta.appendChild(coin);
+      meta.appendChild(record);
+      if (d.deck && d.deck.comboFlagged) {
+        const combo = document.createElement("span");
+        combo.className = "dossier-deck-combo";
+        combo.textContent = "Combo watch";
+        meta.appendChild(combo);
+      }
+      tile.append(deckName, meta);
+      grid.appendChild(tile);
+    }
+    body.appendChild(grid);
+  } else {
+    const none = document.createElement("p");
+    none.className = "hint";
+    none.textContent = "No games logged this season yet.";
+    body.appendChild(none);
+  }
+
+  const race = computeLeagueRace();
+  const line = race.ranks[name];
+  if (line && race.nights.length >= 2 && line.filter(r => r !== null).length >= 2) {
+    body.appendChild(dossierSection("Rank by night"));
+    body.appendChild(buildRankSpark(race, line, name));
+  }
+
+  const pins = (player && player.pinnedTrophies) || [];
+  if (pins.length) {
+    body.appendChild(dossierSection("Pinned trophies"));
+    const shelf = document.createElement("div");
+    shelf.className = "dossier-trophies";
+    for (const t of pins) {
+      const item = document.createElement("span");
+      item.className = "dossier-trophy";
+      const img = document.createElement("img");
+      img.src = t.emblem;
+      img.alt = "";
+      img.loading = "lazy";
+      img.decoding = "async";
+      const label = document.createElement("span");
+      label.textContent = t.title;
+      item.append(img, label);
+      shelf.appendChild(item);
+    }
+    body.appendChild(shelf);
+  }
+  host.appendChild(body);
+}
+
+// One player's line from the race, on its own, with every night's place.
+function buildRankSpark(race, line, name) {
+  const positions = line.filter(r => r !== null);
+  const worst = Math.max(...positions), best = Math.min(...positions);
+  const span = Math.max(1, worst - best);
+  const width = 330, height = 84, left = 22, right = 14, top = 14, bottom = 22;
+  const stepX = (width - left - right) / (line.length - 1);
+  const x = i => left + i * stepX;
+  const y = pos => top + ((pos - best) / span) * (height - top - bottom);
+  const wrap = document.createElement("div");
+  wrap.className = "dossier-spark";
+  const svg = svgEl("svg", { viewBox: `0 0 ${width} ${height}`, width: "100%", role: "img" });
+  svg.setAttribute("aria-label", `${name}'s rank after each game night: ${line.map((pos, i) => `${formatNightKey(race.nights[i])} ${pos === null ? "no games yet" : ordinal(pos)}`).join(", ")}`);
+  const g = svgEl("g", { class: "race-grid" });
+  for (const pos of new Set([best, worst])) {
+    g.appendChild(svgEl("path", { d: `M${left - 4} ${y(pos)}H${width - right + 4}` }));
+    const t = svgEl("text", { x: 0, y: y(pos) + 3, class: "race-axis" });
+    t.textContent = ordinal(pos);
+    g.appendChild(t);
+  }
+  svg.appendChild(g);
+  const points = line.map((pos, i) => (pos === null ? null : `${x(i)},${y(pos)}`)).filter(Boolean);
+  svg.appendChild(svgEl("polyline", { points: points.join(" "), class: "dossier-spark-line" }));
+  line.forEach((pos, i) => {
+    if (pos === null) return;
+    svg.appendChild(svgEl("circle", { cx: x(i), cy: y(pos), r: i === line.length - 1 ? 4.5 : 2.5, class: "dossier-spark-dot" }));
+  });
+  const first = svgEl("text", { x: x(0), y: height - 4, "text-anchor": "start", class: "race-axis" });
+  first.textContent = formatNightKey(race.nights[0]);
+  const lastLabel = svgEl("text", { x: x(line.length - 1), y: height - 4, "text-anchor": "end", class: "race-axis" });
+  lastLabel.textContent = formatNightKey(race.nights[race.nights.length - 1]);
+  svg.append(first, lastLabel);
+  wrap.appendChild(svg);
+  return wrap;
 }
 
 // ---------- games to update ----------

@@ -5613,3 +5613,350 @@ header h1,
     background: rgba(0, 0, 0, 0.75);
   }
 }
+
+/* ---------- Dossiers (Standings) ----------
+   The league race chart, the tappable standings rows and one player's
+   dossier -- see the dossiers section in app.js. The race and the dossier
+   band sit on the playmat material (--mat), fixed in both themes like the
+   Set Up Pod mat, so sleeve colours read the same on every phone. */
+
+/* Each standings row is a button into its dossier: none of a button's own
+   chrome, just the ruled row it already was. */
+button.wr-card {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--border-soft);
+  border-radius: 0;
+  padding: 10px 2px 11px;
+}
+button.wr-card:last-child { border-bottom: none; }
+@media (hover: hover) and (pointer: fine) {
+  button.wr-card:hover { color: inherit; background: var(--accent-soft); }
+}
+button.wr-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+.wr-name-block {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.wr-caption {
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+.wr-go {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+}
+.wr-go svg { width: 100%; height: 100%; display: block; }
+
+/* Last five games: gold for a win, an empty slot for a loss. */
+.wr-form {
+  display: inline-flex;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+.wr-form-pip {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--border);
+}
+.wr-form-pip.is-win { background: var(--accent); }
+
+/* The league race. */
+.race {
+  margin: 14px 0 4px;
+  padding: 12px 10px 6px;
+  border-radius: var(--radius-lg);
+  background: radial-gradient(ellipse at 50% 0%, var(--mat-hi), var(--mat) 75%);
+  box-shadow: inset 0 0 0 1px var(--mat-line), var(--shadow-md);
+  outline: 1px solid rgba(222, 212, 188, 0.14);
+  outline-offset: -9px;
+}
+.race svg { display: block; overflow: visible; }
+.race-grid path { stroke: rgba(222, 212, 188, 0.1); stroke-width: 1; }
+.race-axis {
+  font-family: var(--font-body);
+  font-size: 9px;
+  fill: var(--mat-muted);
+}
+.race-line polyline {
+  fill: none;
+  /* Sleeves are dark (they're card sleeves); lifted toward the mat's ink
+     so a line still reads against the neoprene. */
+  stroke: color-mix(in srgb, var(--line, #4a4f57) 55%, var(--mat-ink));
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.85;
+}
+.race-line circle {
+  fill: var(--mat);
+  stroke: color-mix(in srgb, var(--line, #4a4f57) 55%, var(--mat-ink));
+  stroke-width: 2.5;
+}
+.race-name {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  fill: var(--mat-ink);
+}
+.race-line.is-me polyline { stroke: var(--foil); stroke-width: 4; opacity: 1; }
+.race-line.is-me circle { stroke: var(--foil); }
+.race-line.is-me .race-name { fill: var(--foil); }
+/* Arriving on Standings: the lines draw in left to right, then the end
+   dots and names land. drawLeagueRace adds this only on a real tab
+   switch; the chart is whole without it. */
+.race.is-drawing polyline {
+  stroke-dasharray: 1;
+  animation: race-draw 0.9s cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+.race.is-drawing circle,
+.race.is-drawing .race-name {
+  animation: race-land 0.3s ease-out 0.75s both;
+}
+@keyframes race-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+@keyframes race-land { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .race.is-drawing polyline,
+  .race.is-drawing circle,
+  .race.is-drawing .race-name { animation: none; }
+}
+
+/* One player's dossier. */
+.dossier { padding-top: 12px; }
+.dossier.is-entering { animation: dossier-in 0.28s cubic-bezier(0.2, 0.8, 0.2, 1); }
+@keyframes dossier-in { from { opacity: 0; transform: translate3d(18px, 0, 0); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .dossier.is-entering { animation: none; } }
+
+.dossier-band {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 6px 14px 14px;
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(180deg, var(--sleeve) 0%, color-mix(in srgb, var(--sleeve) 35%, var(--mat)) 100%);
+  box-shadow: inset 0 0 0 1px var(--mat-line), var(--shadow-md);
+  color: var(--mat-ink);
+}
+button.dossier-back {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 44px;
+  margin-left: -8px;
+  padding: 0 10px;
+  border: 0;
+  background: none;
+  color: var(--mat-ink);
+  font-size: 0.9rem;
+}
+button.dossier-back svg { width: 18px; height: 18px; }
+@media (hover: hover) and (pointer: fine) {
+  button.dossier-back:hover { color: var(--foil); }
+}
+/* A long name keeps its words whole and pushes the place below it. */
+.dossier-title {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 8px 12px;
+}
+.card .dossier-name {
+  margin: 0;
+  max-width: 100%;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(2.6rem, 15vw, 3.8rem);
+  line-height: 0.85;
+  text-transform: uppercase;
+  overflow-wrap: break-word;
+  color: var(--mat-ink);
+}
+.card .dossier-name:focus { outline: none; }
+.card .dossier-name:focus-visible { outline: 2px solid var(--foil); outline-offset: 4px; }
+.dossier-place {
+  flex: 0 0 auto;
+  margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  text-align: right;
+}
+.dossier-rank {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 2rem;
+  line-height: 1;
+  color: var(--foil);
+}
+.dossier-rate {
+  font-size: 0.75rem;
+  color: var(--mat-muted);
+  font-variant-numeric: tabular-nums;
+}
+.dossier-you {
+  position: absolute;
+  top: 16px;
+  right: 14px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.3);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.dossier-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+}
+.dossier-label {
+  margin: 10px 0 0;
+  font-family: var(--font-body);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.dossier-rivals {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.dossier-rival {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-accent);
+}
+.dossier-rival-tag {
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.dossier-rival.is-nemesis .dossier-rival-tag { color: var(--bad); }
+.dossier-rival.is-prey .dossier-rival-tag { color: var(--good); }
+.dossier-rival-name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.5rem;
+  line-height: 1.05;
+  text-transform: uppercase;
+  overflow-wrap: break-word;
+}
+.dossier-rival-how {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+/* Deck boxes in the player's sleeve -- the same boxes they carry onto
+   the Set Up Pod mat. */
+.dossier-decks {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.dossier-deck {
+  min-height: 92px;
+  padding: 9px;
+  border-radius: var(--radius-md);
+  background: var(--sleeve);
+  box-shadow: inset 0 -10px 0 rgba(0, 0, 0, 0.22), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  color: var(--mat-ink);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 6px;
+}
+.dossier-deck.is-best {
+  box-shadow: 0 0 0 2px var(--foil), inset 0 -10px 0 rgba(0, 0, 0, 0.22);
+}
+.dossier-deck-meta .id-coin { width: 14px; height: 14px; margin-bottom: 4px; }
+.dossier-deck-name {
+  min-width: 0;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1rem;
+  line-height: 1.05;
+  text-transform: uppercase;
+  /* Whole words: a commander's name broken mid-word reads as two names. */
+  overflow-wrap: normal;
+  hyphens: auto;
+}
+.dossier-deck-meta {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.7rem;
+}
+.dossier-deck-best { font-weight: 600; color: #f3dc9b; }
+.dossier-deck-combo { color: #ffc0b3; }
+
+.dossier-spark {
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+}
+.dossier-spark svg { display: block; overflow: visible; }
+.dossier-spark .race-grid path { stroke: var(--border-soft); }
+.dossier-spark .race-axis { fill: var(--muted); }
+.dossier-spark-line {
+  fill: none;
+  stroke: color-mix(in srgb, var(--sleeve) 60%, var(--ink));
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.dossier-spark-dot {
+  fill: var(--card-bg);
+  stroke: color-mix(in srgb, var(--sleeve) 60%, var(--ink));
+  stroke-width: 2;
+}
+
+.dossier-trophies {
+  display: flex;
+  gap: 8px;
+}
+.dossier-trophy {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 6px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-align: center;
+}
+.dossier-trophy img { width: 44px; height: 44px; object-fit: contain; }
