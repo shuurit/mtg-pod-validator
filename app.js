@@ -190,16 +190,12 @@ let lastCeiling = null;
 // player's current seat, recomputed on every render. null = no panel.
 let podEditingPlayerId = null;
 let editingSeatIndex = null;
-// True once the last check passed and nothing has changed since: the orbs
-// show each deck's colours and the nameplates its name. Any change to the
+// True once the last check passed and nothing has changed since: each
+// command zone's deck box shows its commander and colours. Any change to the
 // pod (a seat added, removed or re-decked, on any phone) masks it again.
 let podRevealed = false;
-// The table's current turn in degrees (see turnPodTable). Local to this
-// phone -- everyone turns their own view. Accumulates rather than wrapping,
-// so each turn takes the short way round.
-let podSpin = 0;
-// The table's DOM, built once by buildPodTable and reused on every render so
-// thrones can glide between positions instead of being rebuilt.
+// The mat's DOM, built once by buildPodTable and reused on every render so
+// zones can glide between places instead of being rebuilt.
 let podUi = null;
 // Only one player's deck table shown at a time -- expanding one auto-
 // collapses whichever other player was open, so the card's height stays
@@ -2078,13 +2074,14 @@ async function togglePotentialBracket4(deck) {
 // Small monochrome icons drawn inline rather than set as emoji glyphs.
 // Emoji render as a different picture (and in full colour) on every
 // platform, which reads as a sticker dropped into otherwise monochrome
-// UI -- and these three sit right next to text they're meant to modify.
+// UI -- and these sit right next to text they're meant to modify.
 // Always aria-hidden: every caller already carries its own aria-label or
 // title, so the icon is decoration on top of a named control.
 const UI_ICON_PATHS = {
   pencil: '<path d="M4 20.2l4.4-1 10.9-10.9a2 2 0 0 0 0-2.8l-.8-.8a2 2 0 0 0-2.8 0L4.9 15.8 4 20.2z"></path><path d="m14.9 6.1 3 3"></path>',
   flame: '<path d="M12 22c3.8 0 6.4-2.5 6.4-5.9 0-4.1-3.5-6.3-4.7-10.2-.4-1.5-1.1-2.5-1.7-3.4-.3 2.2-1.6 3.5-3.1 5.3C7.4 9.7 6 11.5 6 16.1 6 19.5 8.2 22 12 22z"></path><path d="M12 22c1.8 0 3.1-1.2 3.1-3 0-2-1.6-2.9-2.3-5-.7 1.2-1.5 1.9-2.3 2.9-.9 1.1-1.6 1.4-1.6 2.1 0 1.8 1.3 3 3.1 3z"></path>',
   lock: '<rect x="5" y="10.2" width="14" height="10.3" rx="2"></rect><path d="M8.2 10.2V7.4a3.8 3.8 0 0 1 7.6 0v2.8"></path>',
+  rotate: '<path d="M3.5 12a8.5 8.5 0 0 1 14.6-5.9L20.5 8.5"></path><path d="M20.5 3.5v5h-5"></path><path d="M20.5 12a8.5 8.5 0 0 1-14.6 5.9L3.5 15.5"></path><path d="M3.5 20.5v-5h5"></path>',
 };
 
 function uiIcon(name) {
@@ -2489,7 +2486,7 @@ function applyLiveTable(view) {
   liveTableCheck = view.check || null;
   liveTableLoaded = true;
 
-  // Someone joining on any phone pulls a throne up on every phone -- but
+  // Someone joining on any phone fades their zone in on every phone -- but
   // opening the app onto a table that's already seated shouldn't replay it.
   if (!firstLoad) {
     for (const s of podSelections) if (!seatedBefore.has(s.playerId)) podSeatsEntering.add(s.playerId);
@@ -2504,7 +2501,7 @@ function applyLiveTable(view) {
   } else if (check && check.id !== prevCheckId && check.id !== liveTableSeenCheckId) {
     liveTableSeenCheckId = check.id;
     if (check.passed && podRevealed) schedulePodReveal(check.id);
-    else shakeFlaggedOrbs();
+    else shakeFlaggedZones();
   }
 }
 
@@ -2729,71 +2726,49 @@ function decksAvailableForSlot(slot) {
   return restricted && restricted.length > 0 ? restricted : activeDecks;
 }
 
-// ---------- Set Up Pod: the gathering table ----------
-// A wizard's table in CSS 3D. Tapping a member on the rail pulls a throne
-// up with a glass orb of spellfire in it; tapping a nameplate (or the
-// button) turns that seat to face you and docks its deck panel under the
-// table. The orb carries the seat's whole state (see podSeatState):
-//   waiting  -- seated, no deck yet: a low violet pilot flame
-//   sealed   -- deck picked and hidden: full spellfire, identical for all
-//   flagged  -- over the last check's range: hellfire behind cracked glass
-//   revealed -- the pod passed: each flame burns in its deck's colours
-// The deck stays masked exactly as before until the whole pod passes.
+// ---------- Set Up Pod: the command zone mat ----------
+// The pod as a printed playmat: one command zone per seat round the edge,
+// a d20 in the middle. Your own seat is always the zone nearest you (the
+// bottom); everyone else follows clockwise. A seat's zone carries its whole
+// state (see podSeatState):
+//   waiting  -- seated, no deck yet: an empty dashed zone
+//   sealed   -- deck picked and hidden: a deck box in that player's sleeve
+//               colour, identical in every way that could give it away
+//   flagged  -- over the last check's range: red zone, "Over by 0.4"
+//   revealed -- the pod passed: each box shows its commander and colours
+// Each zone carries that seat's range gauge. It stays hidden until a
+// check, then a marker lands on it: the gold half is in range, the red half
+// is over. Same relative numbers the gauge under the mat draws -- never a
+// deck's own power. A line runs from the d20 to every zone, lit gold or
+// red by the same check.
+//
+// "Lay flat" turns every zone to face its own edge, for a phone or tablet
+// lying in the middle of the real table. Only this phone's view changes.
 //
 // Everything below runs only after initLiveTable (renderPodSlots bails
 // until then): these consts sit far below the load-time render that
 // setPlayers triggers, and the pod tab is behind the sign-in gate anyway.
 
 const POD_MAX_SEATS = 8;
-const POD_SEAT_RADIUS = 132; // px, table centre to each throne
-const POD_SEAT_TUCKED = 72; // px, under the table's edge: where thrones slide from/to
-// The ring-shaped top, in the 0-100 sigil/carving space (table radius 50):
-// the open well, the groove between the two plank bands, and the inner
-// band's middle where each seat's sigil node sits. POD_HOLE_R must match
-// the 34% in .pod-table's --pod-hole mask.
-const POD_HOLE_R = 17;
-const POD_GROOVE_R = 27;
-const POD_NODE_R = 22;
-// Flame colours per mana colour, outer edge and hot centre. Fixed material,
-// like the pips: black burns as dark violet smoke-fire so it still reads as
-// fire in dark glass, colorless as pale silver.
-const POD_FIRE = {
-  W: { e: "#e8b84a", c: "#fff6d8" },
-  U: { e: "#1f5fe0", c: "#a8e0ff" },
-  B: { e: "#3a1a5e", c: "#b98cff" },
-  R: { e: "#e0260f", c: "#ffc46b" },
-  G: { e: "#118a3e", c: "#bcff8a" },
-  C: { e: "#8f97a6", c: "#eef1f6" },
-};
-const POD_GLOW = {
-  W: "rgba(255,226,150,.7)", U: "rgba(61,143,255,.75)", B: "rgba(150,110,220,.7)",
-  R: "rgba(255,80,40,.75)", G: "rgba(60,210,110,.7)", C: "rgba(220,226,236,.6)",
-};
-// Back to front: the aura that glances, the glass (plasma swirl, inner
-// fire, crack, gloss, sweep), the flame rising out of it, then embers and
-// sparks. Which of them burn, and how hard, is all CSS per state.
-const POD_ORB_HTML =
-  '<span class="pod-orb-float"><span class="pod-orb-aura"></span>' +
-  '<span class="pod-orb"><span class="pod-plasma"></span><span class="pod-fire"><span class="pod-fire-core"></span>' +
-  '<i class="pod-tw pod-tw4"><i></i></i><i class="pod-tw pod-tw5"><i></i></i>' +
-  '<i class="pod-tw pod-tw1"><i></i></i><i class="pod-tw pod-tw2"><i></i></i><i class="pod-tw pod-tw3"><i></i></i></span>' +
-  '<svg class="pod-orb-crack" viewBox="0 0 40 40" aria-hidden="true"><polyline points="15,2 19,12 13,18 21,25 17,38" fill="none" stroke="rgba(255,230,200,.75)" stroke-width="1.3" stroke-linejoin="round"/><polyline points="19,12 27,14" fill="none" stroke="rgba(255,230,200,.6)" stroke-width="1"/><polyline points="21,25 28,29" fill="none" stroke="rgba(255,230,200,.5)" stroke-width="0.9"/></svg>' +
-  '<span class="pod-orb-gloss"></span><span class="pod-orb-sweep"></span></span>' +
-  '<span class="pod-flame"><i class="pod-pf pod-pf2"><i></i></i><i class="pod-pf pod-pf3"><i></i></i><i class="pod-pf pod-pf1"><i></i></i></span>' +
-  ["e1", "e2", "e3", "e4"].map(e => `<i class="pod-ember ${e}"></i>`).join("") +
-  '<i class="pod-ember spark s1"></i></span>';
+// Deck-box sleeve colours, one per player (by id, so a player keeps theirs
+// from pod to pod). Fixed material like the pips: card sleeves, not theme.
+// Deliberately not derived from the deck: a sealed box mustn't hint at
+// which deck is inside it.
+const POD_SLEEVES = ["#7a2e2e", "#24486e", "#2f5e40", "#5c3d6e", "#7a5a22", "#2d5a5e", "#6e2f55", "#4a4f57"];
+// Zone size on the mat, px. Seven or eight seats use the narrow zone so
+// neighbours round the curve don't overlap.
+const POD_ZONE = { w: 108, h: 80 };
+const POD_ZONE_DENSE = { w: 84, h: 74 };
+// The d20's radius, px: where every range track starts.
+const POD_HUB_R = 48;
 
-// playerId -> { chair, plate } for every seat currently at the table.
+// playerId -> { zone, name, box, boxText, range, marker, track } per seat.
 const podSeatEls = new Map();
-// Player ids whose throne should slide in on the next render. Only a member
+// Player ids whose zone should fade in on the next render. Only a member
 // tapped onto the table (or an undo) gets an entrance -- a restored pod or a
-// background data refresh just shows the thrones where they already are.
+// background data refresh just shows the zones where they already are.
 const podSeatsEntering = new Set();
 let podPanelWasOpen = false;
-
-function podAngle(i, n) {
-  return n ? (i * 360) / n : 0;
-}
 
 function podPlayerOf(slot) {
   return podPlayers.find(p => String(p.id) === slot.playerId) || null;
@@ -2821,103 +2796,99 @@ function podSeatState(slot) {
 }
 
 // Partner/disambiguated names shortened to the first commander's first name
-// for a nameplate ("Atraxa", "Eshki"); the full name rides in the tooltip.
+// for a deck box ("Atraxa", "Eshki"); the full name rides in the tooltip.
 function podShortDeckName(name) {
   return stripDeckDisambiguation(name).split(/[,/]/)[0].trim();
 }
 
-// Each flame tongue takes one of the deck's colours, cycling if it has fewer
-// than three. Unknown identity (never captured) burns foil gold, the same
-// "no claim" stance buildIdentityCoin takes by not drawing a coin at all.
-function setPodRevealFire(chair, colorIdentity) {
-  let keys;
-  if (colorIdentity === null || colorIdentity === undefined) keys = null;
-  else {
-    keys = WUBRG_ORDER.filter(c => colorIdentity.includes(c));
-    if (keys.length === 0) keys = ["C"];
+function podSleeveOf(playerId) {
+  return POD_SLEEVES[Math.abs(Number(playerId) || 0) % POD_SLEEVES.length];
+}
+
+// The last check's line for this seat, while it still describes the pod.
+function podCheckEntry(playerId) {
+  if (!liveTableCheck || liveTableStale) return null;
+  return liveTableCheck.entries.find(e => String(e.playerId) === playerId) || null;
+}
+
+// One seeded d20 per seat, from the passing check's id, so every phone at
+// the table rolls the same numbers without the relay storing a roll.
+// FNV-1a over "checkId:playerId:round".
+function podD20(checkId, playerId, round) {
+  let h = 2166136261;
+  for (const ch of `${checkId}:${playerId}:${round}`) {
+    h ^= ch.charCodeAt(0);
+    h = Math.imul(h, 16777619);
   }
-  const pick = k => (keys ? POD_FIRE[keys[k % keys.length]] : { e: "#a8812b", c: "#ffe6a6" });
-  chair.style.setProperty("--r-e1", pick(0).e);
-  chair.style.setProperty("--r-c1", pick(0).c);
-  chair.style.setProperty("--r-e2", pick(1).e);
-  chair.style.setProperty("--r-c2", pick(1).c);
-  chair.style.setProperty("--r-c3", pick(2).c);
-  chair.style.setProperty("--r-glow", keys ? POD_GLOW[keys[0]] : "rgba(201,161,63,.55)");
+  return ((h >>> 0) % 20) + 1;
+}
+
+// Who goes first once the pod passes: highest d20, ties re-roll among the
+// tied. null until the pod is revealed.
+function podFirstPlayer() {
+  if (!podRevealed || !liveTableCheck || podSelections.length === 0) return null;
+  let contenders = podSelections.map(s => s.playerId);
+  let winnerRoll = null;
+  for (let round = 0; round < 8; round++) {
+    const rolls = contenders.map(id => [id, podD20(liveTableCheck.id, id, round)]);
+    const top = Math.max(...rolls.map(r => r[1]));
+    if (round === 0) winnerRoll = top;
+    contenders = rolls.filter(r => r[1] === top).map(r => r[0]);
+    if (contenders.length === 1) break;
+  }
+  return { playerId: contenders[0], roll: winnerRoll };
+}
+
+const POD_D20_SVG =
+  '<svg class="mat-die-svg" viewBox="0 0 40 40" aria-hidden="true">' +
+  '<path class="mat-die-body" d="M20 2 L36 11 L36 29 L20 38 L4 29 L4 11 Z"/>' +
+  '<path class="mat-die-facets" d="M20 2 L28 16 L12 16 Z M12 16 L20 30 L28 16 M4 11 L12 16 L4 29 M36 11 L28 16 L36 29 M20 38 L20 30"/></svg>';
+
+function podMatFlatSaved() {
+  try { return localStorage.getItem("podMatFlat") === "1"; } catch { return false; }
 }
 
 function buildPodTable(container) {
   const ui = {};
 
-  const scene = document.createElement("div");
-  scene.className = "pod-scene";
-  // Static decoration, drawn once: the floor circle, and the table's
-  // carving -- two bands of eight planks with staggered seams, grooves at
-  // the well's lip, between the bands and at the bevel, and a scroll
-  // carved into each outer plank. Our own drawing, in the spirit of a
-  // carved round table, not a copy of any one.
-  const marks = Array.from({ length: 12 }, (_, i) => {
-    const t = (i * Math.PI) / 6;
-    return `M${(50 + 45 * Math.sin(t)).toFixed(2)} ${(50 + 45 * Math.cos(t)).toFixed(2)}L${(50 + 48 * Math.sin(t)).toFixed(2)} ${(50 + 48 * Math.cos(t)).toFixed(2)}`;
-  }).join("");
-  const scroll =
-    "M-8 0.6C-8.6-1.8-5.6-2.8-4.6-0.9C-3.9 0.5-5.4 1.4-6.1 0.4" +
-    "M-4.6-0.9C-2.4 2.6 2.4 2.6 4.6-0.9" +
-    "M8 0.6C8.6-1.8 5.6-2.8 4.6-0.9C3.9 0.5 5.4 1.4 6.1 0.4" +
-    "M0 1.7C-0.6 0 0.4-1.6 1.8-1.9M0 1.7C0.6 0-0.4-1.6-1.8-1.9";
-  let carving = [POD_HOLE_R + 0.6, POD_GROOVE_R, 44.3].map(r => `<circle class="groove" cx="50" cy="50" r="${r}"/>`).join("");
-  for (let k = 0; k < 8; k++) {
-    const seam = (deg, r1, r2) => {
-      const [x1, y1] = podSigilPoint(r1, deg);
-      const [x2, y2] = podSigilPoint(r2, deg);
-      return `<line class="seam" x1="${x1.toFixed(2)}" y1="${y1.toFixed(2)}" x2="${x2.toFixed(2)}" y2="${y2.toFixed(2)}"/>`;
-    };
-    carving += seam(22.5 + k * 45, POD_HOLE_R + 0.6, POD_GROOVE_R) + seam(k * 45, POD_GROOVE_R, 44.3);
-    const deg = 22.5 + k * 45;
-    const [sx, sy] = podSigilPoint(35.6, deg);
-    carving += `<g transform="translate(${sx.toFixed(2)} ${sy.toFixed(2)}) rotate(${deg})"><path class="scroll-hi" transform="translate(0.3 0.4)" d="${scroll}"/><path class="scroll" d="${scroll}"/></g>`;
-  }
-  const apron = [43, 39, 35, 31, 27, 23, 19]
-    .map(z => `<div class="pod-table-apron" style="transform: translateZ(-${z}px)"></div>`)
-    .join("");
-  const legs = [30, 90, 150, 210, 270, 330]
-    .map(a => `<div class="pod-table-leg" style="--leg-a: ${a}deg"></div>`)
-    .join("");
-  const layers = [12, 10, 8, 6, 4, 2]
-    .map(z => `<div class="pod-table-layer${z === 2 ? " edge" : ""}" style="transform: translateZ(-${z}px)"></div>`)
-    .join("");
-  scene.innerHTML = `
-    <div class="pod-rig"><div class="pod-turn">
-      <div class="pod-floor-sigil" aria-hidden="true"><svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="48"/><circle cx="50" cy="50" r="45" stroke-dasharray="0.8 2.2"/><circle cx="50" cy="50" r="40"/><path d="${marks}"/></svg></div>
-      <div class="pod-floor-shadow"></div>
-      <div class="pod-table" aria-hidden="true">
-        <div class="pod-table-legs">${legs}</div>
-        ${apron}
-        <div class="pod-table-apron pod-table-well" style="transform: translateZ(-15px)"></div>
-        ${layers}
-        <div class="pod-table-top"><svg class="pod-table-carving" viewBox="0 0 100 100">${carving}</svg></div>
-        <div class="pod-slate">
-          <svg class="pod-sigil" viewBox="0 0 100 100"></svg>
-          <div class="pod-slate-label"><span class="pod-slate-count">0</span><span class="pod-slate-word">Seats</span></div>
-        </div>
-      </div>
-      <div class="pod-chairs"></div>
-    </div></div>
-    <div class="pod-plates"></div>
-    <p class="pod-scene-empty">Tap a member below to pull up a chair.</p>`;
-  container.appendChild(scene);
+  const mat = document.createElement("div");
+  mat.className = "mat";
+  mat.classList.toggle("is-flat", podMatFlatSaved());
+  mat.innerHTML = `
+    <span class="mat-ring" aria-hidden="true"></span>
+    <div class="mat-tracks" aria-hidden="true"></div>
+    <div class="mat-zones"></div>
+    <div class="mat-hub">
+      <button type="button" class="mat-die">${POD_D20_SVG}<span class="mat-die-face"></span></button>
+      <span class="mat-hub-label"></span>
+    </div>
+    <p class="mat-empty">Tap a member below to pull up a seat.</p>`;
+  container.appendChild(mat);
 
-  ui.scene = scene;
-  ui.rig = scene.querySelector(".pod-rig");
-  const turn = scene.querySelector(".pod-turn");
-  turn.addEventListener("transitionend", e => { if (e.target === turn) positionPodPlates(); });
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) trackPodPlates(900); });
-  ui.chairs = scene.querySelector(".pod-chairs");
-  ui.plates = scene.querySelector(".pod-plates");
-  ui.table = scene.querySelector(".pod-table");
-  ui.sigil = scene.querySelector(".pod-sigil");
-  ui.count = scene.querySelector(".pod-slate-count");
-  ui.word = scene.querySelector(".pod-slate-word");
-  ui.empty = scene.querySelector(".pod-scene-empty");
+  ui.mat = mat;
+  ui.tracks = mat.querySelector(".mat-tracks");
+  ui.zones = mat.querySelector(".mat-zones");
+  ui.die = mat.querySelector(".mat-die");
+  ui.dieFace = mat.querySelector(".mat-die-face");
+  ui.hubLabel = mat.querySelector(".mat-hub-label");
+  ui.empty = mat.querySelector(".mat-empty");
+  // Beside the card's heading rather than on the mat, where a seven- or
+  // eight-seat pod has a zone in every corner.
+  ui.flatBtn = document.createElement("button");
+  ui.flatBtn.type = "button";
+  ui.flatBtn.className = "mat-flat-btn";
+  ui.flatBtn.innerHTML = `${uiIcon("rotate")}<span>Lay flat</span>`;
+  ui.flatBtn.title = "Turn every seat to face its own edge, for a device lying in the middle of the table";
+  (container.parentElement.querySelector(".pod-head") || container).appendChild(ui.flatBtn);
+  ui.flatBtn.setAttribute("aria-pressed", String(mat.classList.contains("is-flat")));
+  ui.flatBtn.addEventListener("click", () => {
+    const flat = !mat.classList.contains("is-flat");
+    mat.classList.toggle("is-flat", flat);
+    ui.flatBtn.setAttribute("aria-pressed", String(flat));
+    try { localStorage.setItem("podMatFlat", flat ? "1" : "0"); } catch { /* storage blocked -- flat just won't be remembered */ }
+    layoutPodMat();
+  });
+  ui.die.addEventListener("click", () => { if (ui.dieAction) ui.dieAction(); });
 
   // role=status, one atomic message: what the table means right now.
   ui.status = document.createElement("p");
@@ -2943,288 +2914,265 @@ function buildPodTable(container) {
   ui.panel.hidden = true;
   container.appendChild(ui.panel);
 
-  // The table is sized off the card's width (and re-pinned when the pod tab
-  // goes from hidden to shown, which this also catches as a resize).
-  if ("ResizeObserver" in window) new ResizeObserver(fitPodScene).observe(scene);
-  initPodScenePause(scene);
+  // Zones are placed in px off the mat's size, so re-place them when it
+  // changes -- including the hidden-to-shown switch to the Pod tab, which
+  // this sees as a resize from nothing.
+  if ("ResizeObserver" in window) new ResizeObserver(() => layoutPodMat()).observe(mat);
   return ui;
 }
 
-// Holds every flame and ember still while the table is scrolled out of
-// view (see .pod-scene.is-offscreen) -- up to ~200 animations nobody can
-// see. A hidden Pod tab already stops them on its own (display: none).
-function initPodScenePause(scene) {
-  if (!("IntersectionObserver" in window)) return;
-  new IntersectionObserver(entries => {
-    for (const entry of entries) scene.classList.toggle("is-offscreen", !entry.isIntersecting);
-  }).observe(scene);
+function buildPodZone(playerId) {
+  const zone = document.createElement("button");
+  zone.type = "button";
+  zone.className = "mat-zone";
+  zone.style.setProperty("--sleeve", podSleeveOf(playerId));
+  zone.innerHTML =
+    '<span class="mat-zone-name"></span>' +
+    '<span class="mat-box"><span class="mat-box-text"></span></span>' +
+    '<span class="mat-range" aria-hidden="true"><span class="mat-marker"></span></span>';
+  zone.addEventListener("click", () => tapPodSeat(playerId));
+  const track = document.createElement("span");
+  track.className = "mat-track";
+  return {
+    zone, track,
+    name: zone.querySelector(".mat-zone-name"),
+    box: zone.querySelector(".mat-box"),
+    boxText: zone.querySelector(".mat-box-text"),
+    range: zone.querySelector(".mat-range"),
+    marker: zone.querySelector(".mat-marker"),
+  };
 }
 
-function fitPodScene() {
-  if (!podUi) return;
-  const w = podUi.scene.clientWidth;
-  if (w > 0) podUi.scene.style.setProperty("--pod-fit", Math.min(1, w / 372).toFixed(3));
-  trackPodPlates(60);
-}
-
-function buildPodChair(playerId) {
-  const chair = document.createElement("div");
-  chair.className = "pod-chair";
-  // Two throne carvings, spire and crest, alternating by player rather than
-  // seat so a throne keeps its look when the seats around it shift.
-  if (Number(playerId) % 2 === 0) chair.classList.add("crest");
-  // Desyncs this seat's bob and flame from its neighbours'.
-  chair.style.setProperty("--pod-d", `${(-Math.random() * 3.2).toFixed(2)}s`);
-  // .pod-chair carries the throne's place round the table, .pod-throne its
-  // slide out from the table's edge; each glides as its own transform.
-  chair.innerHTML =
-    '<div class="pod-throne">' +
-    '<div class="pod-chair-shadow"></div>' +
-    '<div class="pod-chair-legs back"></div><div class="pod-chair-legs front"></div>' +
-    '<div class="pod-chair-side left"></div><div class="pod-chair-side right"></div>' +
-    '<div class="pod-chair-seat"></div>' +
-    // The orb's light on its seat and on the table in front of it.
-    '<div class="pod-chair-light seat"></div><div class="pod-chair-light table"></div>' +
-    '<div class="pod-chair-arm left"></div><div class="pod-chair-arm right"></div>' +
-    '<div class="pod-chair-back"><span class="pod-chair-glow"></span><span class="pod-chair-gem"></span></div>' +
-    '<div class="pod-bb"><div class="pod-bb-a"><div class="pod-bb-spin"><div class="pod-bb-face">' +
-    `<span class="pod-orb-hit" aria-hidden="true">${POD_ORB_HTML}</span><span class="pod-plate-anchor"></span>` +
-    "</div></div></div></div></div>";
-  // The orb is a pointer shortcut; the nameplate is the real (focusable) control.
-  chair.querySelector(".pod-orb-hit").addEventListener("click", () => tapPodSeat(playerId));
-  // Re-pin the nameplates when a glide actually finishes. The timers in
-  // trackPodPlates can run out while a hidden page holds the transition at
-  // its start, leaving plates pinned where the throne started, not ended.
-  const throne = chair.firstChild;
-  chair.addEventListener("transitionend", e => {
-    if ((e.target === chair || e.target === throne) && e.propertyName === "transform") positionPodPlates();
-  });
-  return chair;
-}
-
-function buildPodPlate(playerId) {
-  const plate = document.createElement("button");
-  plate.type = "button";
-  plate.className = "pod-plate";
-  plate.innerHTML = '<span class="pod-plate-name"></span><span class="pod-plate-state"></span>';
-  plate.addEventListener("click", () => tapPodSeat(playerId));
-  return plate;
-}
-
-function updatePodSeat(entry, slot, i, n) {
-  const { chair, plate } = entry;
+function updatePodZone(entry, slot, i) {
+  const { zone, box, boxText, range, track, marker } = entry;
   const state = podSeatState(slot);
   const player = podPlayerOf(slot);
   const deck = podDeckOf(slot);
-  chair.style.setProperty("--pod-a", `${podAngle(i, n)}deg`);
-  chair.style.setProperty("--pod-i", i);
-  if (state !== "revealed") chair.classList.remove("no-enter");
   const locked = podSeatLocked(slot);
-  for (const el of [chair, plate]) {
-    el.classList.remove("is-waiting", "is-sealed", "is-flagged", "is-revealed");
-    el.classList.add(`is-${state}`);
-    el.classList.toggle("is-focus", editingSeatIndex === i);
-    el.classList.toggle("is-locked", locked);
-  }
+  const check = podCheckEntry(slot.playerId);
+  const first = podFirstPlayer();
+  const isFirst = !!first && first.playerId === slot.playerId;
+
+  zone.classList.remove("is-waiting", "is-sealed", "is-flagged", "is-revealed");
+  zone.classList.add(`is-${state}`);
+  zone.classList.toggle("is-focus", editingSeatIndex === i);
+  zone.classList.toggle("is-locked", locked);
+  zone.classList.toggle("is-first", isFirst);
   // Not `disabled`: a disabled button swallows the tap silently, which read
   // as being locked out with no reason given. aria-disabled keeps it
   // focusable and announced, and tapPodSeat explains the lock.
-  if (locked) plate.setAttribute("aria-disabled", "true");
-  else plate.removeAttribute("aria-disabled");
+  if (locked) zone.setAttribute("aria-disabled", "true");
+  else zone.removeAttribute("aria-disabled");
 
   const name = player ? player.name : "…";
-  plate.querySelector(".pod-plate-name").textContent = name;
-  const stateEl = plate.querySelector(".pod-plate-state");
-  plate.removeAttribute("title");
+  entry.name.textContent = isFirst ? `${name} · 1st` : name;
+  zone.removeAttribute("title");
+  box.querySelector(".id-coin, .ui-icon")?.remove();
   let spoken;
   if (podPendingPicks.has(slot.playerId)) {
-    stateEl.textContent = "Sealing…";
+    boxText.textContent = "Sealing…";
     spoken = "sealing a deck";
   } else if (state === "waiting") {
-    stateEl.textContent = "Pick a deck";
-    spoken = "no deck yet";
+    // The narrow zone of a seven- or eight-seat mat fits one word.
+    boxText.textContent = podSelections.length >= 7 ? "Pick" : "Pick a deck";
+    spoken = "empty command zone, no deck yet";
   } else if (state === "flagged") {
-    stateEl.textContent = "Over range";
-    spoken = "deck over this pod's range";
+    const over = check && check.overBy > 0 ? ` by ${formatPower(check.overBy)}` : "";
+    boxText.textContent = `Over${over}`;
+    spoken = `deck over this pod's range${over}`;
   } else if (state === "sealed") {
-    stateEl.innerHTML = `${uiIcon("lock")}<span>${slot.outOfRange && slot.repicked ? "Re-check" : "Sealed"}</span>`;
+    boxText.textContent = slot.outOfRange && slot.repicked ? "Re-check" : "Sealed";
+    box.insertAdjacentHTML("afterbegin", uiIcon("lock"));
     spoken = slot.outOfRange && slot.repicked ? "new deck sealed, check again" : "deck sealed";
   } else {
-    stateEl.textContent = deck ? podShortDeckName(deck.name) : "";
-    if (deck) plate.title = deck.name;
-    setPodRevealFire(chair, deck ? deck.colorIdentity : null);
+    boxText.textContent = deck ? podShortDeckName(deck.name) : "Revealed";
+    const coin = deck ? buildIdentityCoin(deck.colorIdentity) : null;
+    if (coin) box.prepend(coin);
+    if (deck) zone.title = deck.name;
     spoken = deck ? deck.name : "deck revealed";
   }
-  plate.setAttribute("aria-label", `Seat ${i + 1}, ${name}, ${spoken}${locked ? `. Only ${name} can change this seat.` : ""}`);
+  if (isFirst) spoken += `, goes first (rolled ${first.roll})`;
+  zone.setAttribute("aria-label", `${name}'s command zone, ${spoken}${locked ? `. Only ${name} can change this seat.` : ""}`);
+
+  // The marker lands only on a check that still describes this pod. New
+  // decks are exempt: no marker (the gauge under the mat says why).
+  const measured = !!check && !check.exempt && check.rel !== null;
+  const over = measured && check.overBy > 0;
+  for (const el of [range, track]) {
+    el.classList.toggle("is-measured", measured);
+    el.classList.toggle("is-over", over);
+  }
+  if (measured) {
+    // 0% is the pod's lightest deck; each point of relative power walks the
+    // marker half the gauge. Past the halfway line is over the range.
+    marker.style.setProperty("--m", `${(Math.min(2, check.rel) * 50).toFixed(1)}%`);
+  }
 }
 
-function renderPodChairs() {
+// Where each seat goes: evenly spaced (by distance, not angle) round a
+// rectangle inset from the mat's edge, starting from the bottom centre and
+// running clockwise. An ellipse spaced by angle bunched seven or eight
+// zones into each other at the top and bottom of a phone-shaped mat.
+// Returns centre offsets from the mat's middle plus the edge each seat sits
+// on (0 bottom, 1 left, 2 top, 3 right), which "Lay flat" turns it to face.
+function podMatSpots(n, w, h, size) {
+  const hw = w / 2 - size.w / 2 - 12;
+  const hh = h / 2 - size.h / 2 - 12;
+  // The path, clockwise from bottom centre: bottom-left run, left side,
+  // top, right side, bottom-right run back to the start.
+  const legs = [
+    [hw, 0, [0, hh], [-hw, hh]],
+    [2 * hh, 1, [-hw, hh], [-hw, -hh]],
+    [2 * hw, 2, [-hw, -hh], [hw, -hh]],
+    [2 * hh, 3, [hw, -hh], [hw, hh]],
+    [hw, 0, [hw, hh], [0, hh]],
+  ];
+  const total = 4 * hw + 4 * hh;
+  return Array.from({ length: n }, (_, k) => {
+    let d = (k * total) / n;
+    for (const [len, edge, [x1, y1], [x2, y2]] of legs) {
+      if (d <= len + 1e-6) {
+        const f = len ? Math.min(1, d / len) : 0;
+        return { x: x1 + (x2 - x1) * f, y: y1 + (y2 - y1) * f, edge };
+      }
+      d -= len;
+    }
+    return { x: 0, y: hh, edge: 0 };
+  });
+}
+
+// Distance from a zone's centre to its edge along the unit direction
+// (ux, uy) -- so each track stops short of its own zone whichever side of
+// the zone it arrives at.
+function podZoneEntry(ux, uy, size) {
+  return 1 / Math.max(Math.abs(ux) / (size.w / 2), Math.abs(uy) / (size.h / 2), 1e-6);
+}
+
+// Places every zone and track. Pure layout: reads the mat's size once, then
+// writes custom properties only (all transforms).
+function layoutPodMat() {
+  if (!podUi) return;
+  const n = podSelections.length;
+  // Taller mat for bigger pods, so zones keep their spacing (see .mat.is-*).
+  podUi.mat.classList.toggle("is-tall", n >= 5 && n <= 6);
+  podUi.mat.classList.toggle("is-dense", n >= 7);
+  const w = podUi.mat.clientWidth;
+  const h = podUi.mat.clientHeight;
+  if (w === 0) return; // pod tab hidden; the ResizeObserver re-runs this on show
+  const size = n >= 7 ? POD_ZONE_DENSE : POD_ZONE;
+  const flat = podUi.mat.classList.contains("is-flat");
+  const mine = podSelections.findIndex(s => s.playerId === myPodPlayerId());
+  const spots = podMatSpots(n, w, h, size);
+  podSelections.forEach((slot, i) => {
+    const entry = podSeatEls.get(slot.playerId);
+    if (!entry) return;
+    // Your own seat is always spot 0, the zone nearest you.
+    const spot = spots[(((i - Math.max(0, mine)) % n) + n) % n];
+    entry.zone.style.setProperty("--x", `${(w / 2 + spot.x).toFixed(1)}px`);
+    entry.zone.style.setProperty("--y", `${(h / 2 + spot.y).toFixed(1)}px`);
+    entry.zone.style.setProperty("--r", flat ? `${spot.edge * 90}deg` : "0deg");
+    const dist = Math.hypot(spot.x, spot.y);
+    const a = (Math.atan2(spot.y, spot.x) * 180) / Math.PI;
+    // From the d20's edge to the zone's: the line runs under the zone, so
+    // stopping at its edge just keeps it from showing through the border.
+    const end = dist - podZoneEntry(spot.x / dist, spot.y / dist, size);
+    entry.track.style.setProperty("--a", `${a.toFixed(1)}deg`);
+    entry.track.style.setProperty("--len", `${Math.max(0, end - POD_HUB_R).toFixed(1)}px`);
+  });
+}
+
+function renderPodZones() {
   const n = podSelections.length;
   const seated = new Set(podSelections.map(s => s.playerId));
   for (const [id, entry] of podSeatEls) {
-    if (!seated.has(id)) removePodSeatEls(id, entry);
+    if (!seated.has(id)) removePodZone(id, entry);
   }
   podSelections.forEach((slot, i) => {
     let entry = podSeatEls.get(slot.playerId);
     if (!entry) {
-      const chair = buildPodChair(slot.playerId);
-      const plate = buildPodPlate(slot.playerId);
-      const entering = podSeatsEntering.has(slot.playerId) && !REDUCED_MOTION.matches;
-      chair.style.setProperty("--pod-a", `${podAngle(i, n)}deg`);
-      chair.style.setProperty("--pod-r", `${entering ? POD_SEAT_TUCKED : POD_SEAT_RADIUS}px`);
-      // A pod restored (or refreshed) already revealed shouldn't replay the
-      // flare; cleared in updatePodSeat once the seat leaves that state.
-      if (!entering && podSeatState(slot) === "revealed") chair.classList.add("no-enter");
-      // Insert in seat order so the nameplates' tab order matches the table.
+      entry = buildPodZone(slot.playerId);
+      // In seat order so the zones' tab order matches the table.
       const next = podSelections.slice(i + 1).map(s => podSeatEls.get(s.playerId)).find(Boolean);
-      podUi.chairs.insertBefore(chair, next ? next.chair : null);
-      podUi.plates.insertBefore(plate, next ? next.plate : null);
-      entry = { chair, plate };
+      podUi.zones.insertBefore(entry.zone, next ? next.zone : null);
+      podUi.tracks.appendChild(entry.track);
       podSeatEls.set(slot.playerId, entry);
-      if (entering) {
-        chair.style.opacity = "0";
-        plate.classList.add("entering");
-        // Pulled out at a slight angle (alternating sides so neighbours
-        // don't swing in lockstep), straightening as it reaches its seat.
-        chair.style.setProperty("--pod-sw", `${chair.classList.contains("crest") ? -16 : 16}deg`);
-        // Commit the tucked start before moving to the seat, so it slides.
-        getComputedStyle(chair.firstChild).transform;
-        chair.style.setProperty("--pod-r", `${POD_SEAT_RADIUS}px`);
-        chair.style.setProperty("--pod-sw", "0deg");
-        chair.style.opacity = "1";
-        chair.classList.add("ignite");
-        setTimeout(() => chair.classList.remove("ignite"), 700);
-        setTimeout(() => plate.classList.remove("entering"), 260);
+      if (podSeatsEntering.has(slot.playerId) && !REDUCED_MOTION.matches) {
+        entry.zone.classList.add("entering");
+        setTimeout(() => entry.zone.classList.remove("entering"), 320);
       }
     }
-    updatePodSeat(entry, slot, i, n);
+    updatePodZone(entry, slot, i);
   });
   podSeatsEntering.clear();
-  podUi.scene.classList.toggle("has-focus", editingSeatIndex !== null);
-  // Only when thrones actually move (someone joined, left or the order
-  // changed). A check result or a deck pick just restyles seats in place,
-  // and measuring the scene for 900 ms after those cost a dropped frame
-  // or two for nothing. Nameplates are centred by CSS, so new text in one
-  // doesn't need a re-measure either.
-  const layout = podSelections.map(s => s.playerId).join(",");
-  if (layout !== podChairsLayout) {
-    podChairsLayout = layout;
-    trackPodPlates(900);
-  }
+  podUi.mat.classList.toggle("has-focus", editingSeatIndex !== null);
+  layoutPodMat();
+  podUi.empty.hidden = n > 0 || !liveTableLoaded;
 }
-let podChairsLayout = null;
 
-function removePodSeatEls(id, entry) {
+function removePodZone(id, entry) {
   podSeatEls.delete(id);
-  const { chair, plate } = entry;
-  plate.classList.add("leaving");
-  setTimeout(() => plate.remove(), 180);
-  chair.classList.add("leaving");
-  chair.style.setProperty("--pod-r", `${POD_SEAT_TUCKED}px`);
-  chair.style.setProperty("--pod-sw", `${chair.classList.contains("crest") ? 10 : -10}deg`);
-  chair.style.opacity = "0";
+  entry.track.remove();
+  const { zone } = entry;
+  zone.classList.add("leaving");
   let done = false;
-  const finish = () => { if (!done) { done = true; chair.remove(); } };
-  chair.addEventListener("transitionend", e => { if (e.target === chair && e.propertyName === "opacity") finish(); });
-  // Safety net: transitionend never fires if the tab is hidden mid-exit.
-  setTimeout(finish, 450);
+  const finish = () => { if (!done) { done = true; zone.remove(); } };
+  zone.addEventListener("animationend", finish);
+  // Safety net: animationend never fires if the tab is hidden mid-exit,
+  // or under reduced motion, where there's no animation at all.
+  setTimeout(finish, REDUCED_MOTION.matches ? 0 : 220);
 }
 
-// Pins each flat nameplate under its orb by reading where the orb's anchor
-// actually lands on screen. Runs every frame only while something moves.
-// All reads first, then all writes: reading one anchor right after moving
-// the previous plate made the browser redo style and layout for the whole
-// 3D scene once per seat, every frame (~28 ms a pass on a slowed CPU).
-function positionPodPlates() {
-  if (!podUi) return;
-  const sr = podUi.scene.getBoundingClientRect();
-  if (sr.width === 0) return; // pod tab hidden; fitPodScene re-runs this on show
-  const spots = [];
-  for (const entry of podSeatEls.values()) {
-    entry.anchor ||= entry.chair.querySelector(".pod-plate-anchor");
-    const a = entry.anchor.getBoundingClientRect();
-    spots.push([entry.plate, a.left + a.width / 2 - sr.left, a.top - sr.top + 2]);
-  }
-  for (const [plate, x, y] of spots) {
-    plate.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translateX(-50%)`;
-  }
-}
-
-let podPlatesTrackUntil = 0;
-let podPlatesTracking = false;
-// Starts on the next frame rather than measuring straight away: a render
-// has usually just changed the scene, and measuring it inside the tap
-// handler forced a full restyle before the tap could paint anything. New
-// nameplates start transparent (.entering), so the frame's wait is unseen.
-function trackPodPlates(ms) {
-  podPlatesTrackUntil = Math.max(podPlatesTrackUntil, performance.now() + ms);
-  // rAF pauses in a background tab -- land the final spot by timer too.
-  setTimeout(positionPodPlates, ms + 60);
-  if (podPlatesTracking) return;
-  podPlatesTracking = true;
-  const tick = () => {
-    positionPodPlates();
-    if (performance.now() < podPlatesTrackUntil) requestAnimationFrame(tick);
-    else podPlatesTracking = false;
-  };
-  requestAnimationFrame(tick);
-}
-
-function podSigilPoint(r, deg) {
-  const rad = (deg * Math.PI) / 180;
-  return [50 - r * Math.sin(rad), 50 + r * Math.cos(rad)];
-}
-
-function renderPodSigil() {
+// The d20 in the middle: a count while decks go in, the check itself once
+// every deck is sealed (same action as the button under the mat), and who
+// goes first once the pod passes.
+function renderPodHub() {
   const n = podSelections.length;
-  const cls = (slot, prefix) => {
-    const state = podSeatState(slot);
-    return state === "flagged" ? `${prefix}-bad` : state === "waiting" ? `${prefix}-part` : `${prefix}-on`;
-  };
-  let html = "";
-  if (n === 0) {
-    html += `<circle class="seg" cx="50" cy="50" r="${POD_GROOVE_R}" stroke-dasharray="1.5 3"/>`;
-  } else if (n === 1) {
-    html += `<circle class="seg ${cls(podSelections[0], "seg")}" cx="50" cy="50" r="${POD_GROOVE_R}"/>`;
-  } else {
-    const step = 360 / n;
-    const gap = 8;
-    podSelections.forEach((slot, i) => {
-      const c = podAngle(i, n);
-      const [x1, y1] = podSigilPoint(POD_GROOVE_R, c - step / 2 + gap / 2);
-      const [x2, y2] = podSigilPoint(POD_GROOVE_R, c + step / 2 - gap / 2);
-      html += `<path class="seg ${cls(slot, "seg")}" d="M${x1.toFixed(2)} ${y1.toFixed(2)} A${POD_GROOVE_R} ${POD_GROOVE_R} 0 0 1 ${x2.toFixed(2)} ${y2.toFixed(2)}"/>`;
-    });
-    // Join the seats: a line, a triangle, a square with its cross, then stars.
-    const skips = n <= 3 ? [1] : n === 4 ? [1, 2] : n <= 6 ? [2] : [3];
-    const drawn = new Set();
-    for (const k of skips) {
-      for (let i = 0; i < n; i++) {
-        const j = (i + k) % n;
-        const key = `${Math.min(i, j)}-${Math.max(i, j)}`;
-        if (drawn.has(key)) continue;
-        drawn.add(key);
-        const [x1, y1] = podSigilPoint(POD_NODE_R, podAngle(i, n));
-        const [x2, y2] = podSigilPoint(POD_NODE_R, podAngle(j, n));
-        html += `<line class="line" x1="${x1.toFixed(2)}" y1="${y1.toFixed(2)}" x2="${x2.toFixed(2)}" y2="${y2.toFixed(2)}"/>`;
-      }
-    }
-  }
-  podSelections.forEach((slot, i) => {
-    const [x, y] = podSigilPoint(POD_NODE_R, podAngle(i, n));
-    html += `<circle class="node ${cls(slot, "node")}" cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="2.2"/>`;
-  });
-  // Every render used to rebuild the drawing even when it hadn't changed,
-  // re-laying it out on the frame a tap needed to paint.
-  if (podUi.sigilHtml !== html) {
-    podUi.sigilHtml = html;
-    podUi.sigil.innerHTML = html;
-  }
-
+  const die = podUi.die;
   const sealed = podSelections.filter(s => s.sealed && podSeatState(s) !== "flagged").length;
-  podUi.table.classList.toggle("is-ready", podRevealed);
-  podUi.count.textContent = n === 0 ? "0" : (podRevealed ? String(n) : `${sealed}/${n}`);
-  podUi.word.textContent = n === 0 ? "Seats" : (podRevealed ? "Ready" : "Sealed");
+  const first = podFirstPlayer();
+  const ready = n > 0 && !podRevealed && sealed === n && !podPendingCheck && (!liveTableCheck || liveTableStale || !liveTableCheck.passed);
+  let face, label, action = null, aria;
+  if (first) {
+    const who = podSelections.find(s => s.playerId === first.playerId);
+    face = String(first.roll);
+    label = `${who ? podNameOf(who) : "Someone"} goes first`;
+    aria = `d20: ${label}, rolled ${first.roll}`;
+  } else if (podPendingCheck) {
+    face = "…";
+    label = "Checking the spread";
+    aria = label;
+  } else if (ready) {
+    face = "20";
+    label = "Tap to shuffle up";
+    action = runPodCheck;
+    aria = "Shuffle up: check the deck power spread";
+  } else {
+    face = n ? `${sealed}/${n}` : "20";
+    label = n ? "Decks sealed" : "No seats yet";
+    aria = n ? `${sealed} of ${n} decks sealed` : label;
+  }
+  podUi.dieFace.textContent = face;
+  podUi.hubLabel.textContent = label;
+  podUi.dieAction = action;
+  die.setAttribute("aria-label", aria);
+  die.classList.toggle("is-ready", ready);
+  die.classList.toggle("is-rolled", !!first);
+  die.setAttribute("aria-disabled", action ? "false" : "true");
+  die.classList.toggle("is-checking", podPendingCheck);
+
+  // The roll plays once per passing check, when it lands on this phone --
+  // not when the app opens onto a table that already passed.
+  const rollKey = first ? liveTableCheck.id : null;
+  if (podUi.rolledFor === undefined) podUi.rolledFor = rollKey;
+  else if (rollKey && podUi.rolledFor !== rollKey) {
+    podUi.rolledFor = rollKey;
+    if (!REDUCED_MOTION.matches) {
+      die.classList.remove("is-rolling");
+      void die.offsetWidth;
+      die.classList.add("is-rolling");
+      setTimeout(() => die.classList.remove("is-rolling"), 900);
+    }
+  } else if (!rollKey) podUi.rolledFor = null;
 }
 
 function renderPodRoster() {
@@ -3531,26 +3479,14 @@ function clearPodTable() {
 async function runPodCheck() {
   if (podPendingCheck) return;
   podPendingCheck = true;
-  podUi?.table.classList.add("is-checking");
   renderPodCta();
   renderPodStatus();
+  if (podUi) renderPodHub();
   await tableOp({ op: "check" });
   podPendingCheck = false;
-  podUi?.table.classList.remove("is-checking");
   renderPodCta();
   renderPodStatus();
-}
-
-// Turns the table so seat i faces you, the short way round. Only this
-// phone's view turns.
-function turnPodTable(i) {
-  if (!podUi) return;
-  const target = -podAngle(i, podSelections.length);
-  const delta = ((((target - podSpin) % 360) + 540) % 360) - 180;
-  podSpin += delta;
-  podUi.rig.style.setProperty("--pod-spin", `${podSpin}deg`);
-  // The nameplates ride the turn (0.7s, see .pod-rig's transition).
-  if (Math.abs(delta) > 0.01) trackPodPlates(800);
+  if (podUi) renderPodHub();
 }
 
 function explainPodLock(slot) {
@@ -3571,7 +3507,6 @@ function openPodSeat(playerId) {
   if (i < 0 || podSeatLocked(podSelections[i])) return;
   const wasOpen = podEditingPlayerId !== null;
   podEditingPlayerId = playerId;
-  turnPodTable(i);
   renderPodSlots();
   if (wasOpen && !REDUCED_MOTION.matches) {
     podUi.panel.querySelector(".pod-decks")?.animate(
@@ -3587,12 +3522,12 @@ function closePodPanel() {
   const playerId = podEditingPlayerId;
   podEditingPlayerId = null;
   renderPodSlots();
-  podSeatEls.get(playerId)?.plate.focus({ preventScroll: true });
+  podSeatEls.get(playerId)?.zone.focus({ preventScroll: true });
 }
 
 // Seals a deck on the shared table. Closes the panel straight away -- the
-// pick lands on every phone within a poll -- and flares this seat's orb
-// once the relay confirms it.
+// pick lands on every phone within a poll -- and settles a deck box into
+// this seat's zone once the relay confirms it.
 async function pickPodDeck(playerId, deckId) {
   const slot = podSelections.find(s => s.playerId === playerId);
   if (!slot) return;
@@ -3602,18 +3537,18 @@ async function pickPodDeck(playerId, deckId) {
   const view = await tableOp({ op: "pick", playerId: Number(playerId), deckId: Number(deckId) });
   podPendingPicks.delete(playerId);
   renderPodSlots();
-  const orb = view ? podSeatEls.get(playerId)?.chair.querySelector(".pod-orb") : null;
-  if (orb && !REDUCED_MOTION.matches) {
-    orb.animate([{ transform: "scale(1)" }, { transform: "scale(1.16)" }, { transform: "scale(1)" }],
-      { duration: 420, easing: "cubic-bezier(0.23, 1, 0.32, 1)" });
+  const box = view ? podSeatEls.get(playerId)?.box : null;
+  if (box && !REDUCED_MOTION.matches) {
+    box.animate([{ transform: "translateY(-10px) scale(1.08)", opacity: 0.4 }, { transform: "none", opacity: 1 }],
+      { duration: 320, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)" });
   }
 }
 
-function shakeFlaggedOrbs() {
+function shakeFlaggedZones() {
   if (REDUCED_MOTION.matches) return;
   podSelections.forEach(slot => {
     if (podSeatState(slot) !== "flagged") return;
-    podSeatEls.get(slot.playerId)?.chair.querySelector(".pod-orb")?.animate(
+    podSeatEls.get(slot.playerId)?.box.animate(
       [{ transform: "translateX(0)" }, { transform: "translateX(-3px)" }, { transform: "translateX(3px)" }, { transform: "translateX(-2px)" }, { transform: "translateX(0)" }],
       { duration: 360, easing: "ease-out" }
     );
@@ -3634,8 +3569,8 @@ function renderPodSlots() {
   if (editIdx < 0 || podSeatLocked(podSelections[editIdx])) podEditingPlayerId = null;
   editingSeatIndex = podEditingPlayerId === null ? null : editIdx;
 
-  renderPodChairs();
-  renderPodSigil();
+  renderPodZones();
+  renderPodHub();
   renderPodRoster();
   renderPodStatus();
   renderPodPanel();
@@ -4519,12 +4454,12 @@ function renderPodCheckResults() {
   }
 }
 
-// A pass on any phone plays the reveal on every phone: the table's flames
-// flare first (90ms apart), then "To the Game!" opens over it. A timer, not
+// A pass on any phone plays the reveal on every phone: the deck boxes open
+// and the d20 rolls first, then "To the Game!" opens over it. A timer, not
 // an animation event, so it opens even if the animation is skipped; dropped
 // if the pod changes before it fires.
 function schedulePodReveal(checkId) {
-  // Long enough for the flames to start flaring, not to finish: a longer
+  // Long enough for the d20 to start rolling, not to finish: a longer
   // wait read as the check itself being slow.
   const delay = REDUCED_MOTION.matches ? 0 : Math.min(800, 300 + podSelections.length * 60);
   setTimeout(() => {
@@ -5608,12 +5543,7 @@ function activateTab(tabName) {
   // iOS tab bar does; an actual switch lands there instantly.
   window.scrollTo({ top: 0, behavior: switching || REDUCED_MOTION.matches ? "auto" : "smooth" });
   if (switching) playTabEnter(panel, previous);
-  // Nameplates are pinned by measuring the 3D scene, which measures as
-  // nothing while its tab is hidden.
-  if (tabName === "pod") {
-    trackPodPlates(400);
-    pollLiveTable(true);
-  }
+  if (tabName === "pod") pollLiveTable(true);
   if (tabName === "tonight") pollLiveTable(true);
   syncCompactBar();
 }
