@@ -1720,7 +1720,9 @@ function setAchievementsView(view) {
     const el = document.getElementById(id);
     if (el) el.hidden = !visible;
   }
-  document.querySelectorAll(".view-toggle-btn").forEach(btn => {
+  // Only the Trophies switch's own buttons (data-view): the Proposals and
+  // Pod switches share the class, and this used to flip theirs too.
+  document.querySelectorAll(".view-toggle-btn[data-view]").forEach(btn => {
     btn.classList.toggle("active", btn.dataset.view === view);
   });
   refreshAchievementsView();
@@ -1755,7 +1757,7 @@ function initAchievementsTab() {
     });
   }
 
-  document.querySelectorAll(".view-toggle-btn").forEach(btn => {
+  document.querySelectorAll(".view-toggle-btn[data-view]").forEach(btn => {
     btn.addEventListener("click", () => setAchievementsView(btn.dataset.view));
   });
 
@@ -2863,6 +2865,28 @@ function buildPodTable(container) {
       <span class="mat-hub-label"></span>
     </div>
     <p class="mat-empty">Tap a member below to pull up a seat.</p>`;
+
+  // "Whole mat" / "My corner" -- only while you're seated (renderPodCorner).
+  ui.viewToggle = document.createElement("div");
+  ui.viewToggle.className = "view-toggle pod-view-toggle";
+  ui.viewToggle.setAttribute("role", "group");
+  ui.viewToggle.setAttribute("aria-label", "Pod view");
+  ui.viewToggle.hidden = true;
+  for (const [view, label] of [["mat", "Whole mat"], ["corner", "My corner"]]) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "view-toggle-btn";
+    btn.dataset.podView = view;
+    btn.textContent = label;
+    btn.setAttribute("aria-pressed", "false");
+    btn.addEventListener("click", () => choosePodView(view));
+    ui.viewToggle.appendChild(btn);
+  }
+  container.appendChild(ui.viewToggle);
+  attachSelectionIndicator(ui.viewToggle, { itemSelector: ".view-toggle-btn", className: "segment-thumb" });
+
+  ui.corner = buildPodCorner();
+  container.appendChild(ui.corner);
   container.appendChild(mat);
 
   ui.mat = mat;
@@ -2919,6 +2943,202 @@ function buildPodTable(container) {
   // this sees as a resize from nothing.
   if ("ResizeObserver" in window) new ResizeObserver(() => layoutPodMat()).observe(mat);
   return ui;
+}
+
+// ---- My corner: your own seat, up close ----
+// The mockup's "your corner of the mat": a mini map of the table, your
+// command zone large, and your decks as a shelf of deck boxes to tap into
+// it. It shows on its own while it's your move -- you're seated and need a
+// deck, or yours came back over range -- and the whole mat comes back once
+// your deck is sealed. Seating others and picking for someone without
+// their phone stay on the whole mat. Only this phone ever sees your
+// corner, so your own decks' names and colours are safe to show here.
+//
+// null = automatic; "mat" or "corner" when picked on the switch, until
+// your seat's state changes (podViewChoiceKey), then automatic again.
+let podViewChoice = null;
+let podViewChoiceKey = null;
+
+function myPodSlot() {
+  const me = myPodPlayerId();
+  return me ? podSelections.find(s => s.playerId === me) || null : null;
+}
+
+function podCornerVisible() {
+  const mine = myPodSlot();
+  if (!mine) return false;
+  const key = podSeatState(mine);
+  if (podViewChoice && podViewChoiceKey !== key) podViewChoice = null;
+  if (podViewChoice) return podViewChoice === "corner";
+  return key === "waiting" || key === "flagged";
+}
+
+function choosePodView(view) {
+  const mine = myPodSlot();
+  if (!mine) return;
+  podViewChoice = view;
+  podViewChoiceKey = podSeatState(mine);
+  renderPodSlots();
+}
+
+function buildPodCorner() {
+  const corner = document.createElement("div");
+  corner.className = "corner";
+  corner.hidden = true;
+  corner.innerHTML = `
+    <div class="corner-top">
+      <span class="corner-map" role="img"></span>
+      <div class="corner-titles">
+        <h3 class="corner-title">Your corner</h3>
+        <p class="corner-sub"></p>
+      </div>
+    </div>
+    <div class="corner-toward" aria-hidden="true">${tonightSvg('<path d="m6 15 6-6 6 6"></path>')}<span>Toward the table</span></div>
+    <div class="corner-zone">
+      <span class="corner-zone-label"></span>
+      <span class="mat-box"><span class="mat-box-text"></span></span>
+      <span class="mat-range" aria-hidden="true"><span class="mat-marker"></span></span>
+      <span class="corner-zone-note"></span>
+    </div>
+    <p class="corner-shelf-label" id="corner-shelf-label">Your deck boxes</p>
+    <p class="corner-range-note" hidden>Showing only decks that fit this pod's range.</p>
+    <div class="corner-shelf" role="group" aria-labelledby="corner-shelf-label"></div>
+    <div class="corner-foot">
+      <button type="button" class="pod-leave">Leave the table</button>
+      <span class="pod-note">${uiIcon("lock")}<span>Hidden from the table once sealed</span></span>
+    </div>`;
+  corner.querySelector(".pod-leave").addEventListener("click", () => {
+    const me = myPodPlayerId();
+    if (me) removePodSeat(me);
+  });
+  return corner;
+}
+
+function renderPodCorner() {
+  const mine = myPodSlot();
+  const show = podCornerVisible();
+  podUi.viewToggle.hidden = !mine;
+  podUi.viewToggle.querySelectorAll(".view-toggle-btn").forEach(btn => {
+    const on = btn.dataset.podView === (show ? "corner" : "mat");
+    btn.classList.toggle("active", on);
+    btn.setAttribute("aria-pressed", String(on));
+  });
+  podUi.corner.hidden = !show;
+  podUi.mat.hidden = show;
+  podUi.flatBtn.hidden = show;
+  if (!show) return;
+  // The rail and the deck panel are for the whole table; your corner has
+  // its own shelf.
+  podUi.railLabel.hidden = true;
+  podUi.roster.hidden = true;
+  podUi.panel.hidden = true;
+
+  const corner = podUi.corner;
+  const n = podSelections.length;
+  const me = mine.playerId;
+  const state = podSeatState(mine);
+  const deck = podDeckOf(mine);
+  const check = podCheckEntry(me);
+  const pending = podPendingPicks.has(me);
+  const sealed = podSelections.filter(s => s.sealed && podSeatState(s) !== "flagged").length;
+
+  // Mini map: the same spots the whole mat uses, you at the bottom.
+  const map = corner.querySelector(".corner-map");
+  const mapSize = { w: 16, h: 11 };
+  const spots = podMatSpots(n, 72, 80, mapSize);
+  const mineIdx = podSelections.indexOf(mine);
+  map.innerHTML = '<span class="corner-map-die"></span>';
+  podSelections.forEach((slot, i) => {
+    const spot = spots[(((i - mineIdx) % n) + n) % n];
+    const seat = document.createElement("span");
+    seat.className = `corner-map-seat is-${podSeatState(slot)}${slot === mine ? " is-mine" : ""}`;
+    seat.style.setProperty("--sleeve", podSleeveOf(slot.playerId));
+    seat.style.left = `${(36 + spot.x - mapSize.w / 2).toFixed(1)}px`;
+    seat.style.top = `${(40 + spot.y - mapSize.h / 2).toFixed(1)}px`;
+    map.appendChild(seat);
+  });
+  map.setAttribute("aria-label", `The table: ${sealed} of ${n} decks sealed`);
+  corner.querySelector(".corner-sub").textContent =
+    `${n} at the table · ${sealed} of ${n} decks sealed`;
+
+  // Your zone, large.
+  const zone = corner.querySelector(".corner-zone");
+  zone.className = `corner-zone is-${state}`;
+  zone.style.setProperty("--sleeve", podSleeveOf(me));
+  const player = podPlayerOf(mine);
+  corner.querySelector(".corner-zone-label").textContent = `Command zone · ${player ? player.name : "You"}`;
+  const box = zone.querySelector(".mat-box");
+  const boxText = zone.querySelector(".mat-box-text");
+  box.querySelector(".id-coin, .ui-icon")?.remove();
+  const note = corner.querySelector(".corner-zone-note");
+  if (pending) {
+    boxText.textContent = "Sealing…";
+    note.textContent = "Sliding it into your zone.";
+  } else if (state === "waiting") {
+    boxText.textContent = "Empty";
+    note.textContent = "Tap a deck box below to seal it here. Only you will see which until the pod passes.";
+  } else if (state === "flagged") {
+    boxText.textContent = check && check.overBy > 0 ? `Over by ${formatPower(check.overBy)}` : "Over range";
+    note.textContent = "Your deck is over this pod's range. Pick another from the shelf.";
+  } else {
+    boxText.textContent = deck ? podShortDeckName(deck.name) : "Sealed";
+    const coin = state === "revealed" && deck ? buildIdentityCoin(deck.colorIdentity) : null;
+    if (coin) box.prepend(coin);
+    else box.insertAdjacentHTML("afterbegin", uiIcon("lock"));
+    note.textContent = state === "revealed" ? "The pod passed. Everyone can see it now." : "Sealed. Only you can see which deck this is.";
+  }
+  const range = zone.querySelector(".mat-range");
+  const measured = !!check && !check.exempt && check.rel !== null;
+  range.classList.toggle("is-measured", measured);
+  range.classList.toggle("is-over", measured && check.overBy > 0);
+  if (measured) range.firstElementChild.style.setProperty("--m", `${(Math.min(2, check.rel) * 50).toFixed(1)}%`);
+
+  // The shelf. Rebuilt only when what it shows changed: a poll landing
+  // mid-tap mustn't swap the boxes out from under a finger.
+  const decks = decksAvailableForSlot(mine);
+  const shelf = corner.querySelector(".corner-shelf");
+  const signature = JSON.stringify([me, decks.map(d => d.id), mine.deckId, pending]);
+  if (shelf.dataset.signature !== signature) {
+    shelf.dataset.signature = signature;
+    const focusedId = shelf.contains(document.activeElement) ? document.activeElement.dataset.deckId : null;
+    shelf.innerHTML = "";
+    for (const d of decks) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "corner-deck";
+      btn.dataset.deckId = String(d.id);
+      // A colour per deck box (by id), so the shelf reads as separate boxes.
+      btn.style.setProperty("--sleeve", POD_SLEEVES[Math.abs(Number(d.id) || 0) % POD_SLEEVES.length]);
+      const current = String(d.id) === mine.deckId;
+      btn.setAttribute("aria-pressed", String(current));
+      if (pending) btn.setAttribute("aria-busy", "true");
+      btn.title = d.name;
+      const name = document.createElement("span");
+      name.className = "corner-deck-name";
+      name.textContent = podShortDeckName(d.name);
+      btn.appendChild(name);
+      const foot = document.createElement("span");
+      foot.className = "corner-deck-foot";
+      const coin = buildIdentityCoin(d.colorIdentity);
+      if (coin) foot.appendChild(coin);
+      const meta = document.createElement("span");
+      // Games logged, not power -- the same hint the deck panel gives.
+      if (d.comboFlagged) {
+        meta.className = "corner-deck-combo";
+        meta.textContent = "Combo watch";
+      } else {
+        meta.textContent = d.gamesLogged === 1 ? "1 game" : `${d.gamesLogged || 0} games`;
+      }
+      foot.appendChild(meta);
+      btn.appendChild(foot);
+      btn.setAttribute("aria-label", `${d.name}${current ? ", sealed in your zone" : ""}${d.comboFlagged ? ", on combo watch" : ""}`);
+      btn.addEventListener("click", () => { if (!podPendingPicks.has(me)) pickPodDeck(me, String(d.id)); });
+      shelf.appendChild(btn);
+    }
+    if (focusedId) shelf.querySelector(`[data-deck-id="${focusedId}"]`)?.focus({ preventScroll: true });
+  }
+  const activeCount = player ? player.decks.filter(d => !d.archived).length : decks.length;
+  corner.querySelector(".corner-range-note").hidden = !(mine.outOfRange && lastCeiling !== null && decks.length < activeCount);
 }
 
 function buildPodZone(playerId) {
@@ -3414,6 +3634,11 @@ function renderPodCta() {
   if (mineIdx < 0 && canSit) {
     return n >= POD_MAX_SEATS ? set("The table is full", null) : set("Take a seat", () => addPodSeat(me));
   }
+  if (mineIdx >= 0 && podCornerVisible()) {
+    const state = podSeatState(podSelections[mineIdx]);
+    if (podPendingPicks.has(me)) return set("Sealing your deck…", null, { busy: true });
+    if (state === "waiting" || state === "flagged") return set("Tap a deck box above", null);
+  }
   if (mineIdx >= 0) {
     const state = podSeatState(podSelections[mineIdx]);
     if (state === "waiting") return set("Pick your deck", () => openPodSeat(me));
@@ -3569,12 +3794,20 @@ function renderPodSlots() {
   if (editIdx < 0 || podSeatLocked(podSelections[editIdx])) podEditingPlayerId = null;
   editingSeatIndex = podEditingPlayerId === null ? null : editIdx;
 
+  // Your own deck is picked on your corner's shelf while it shows, not in
+  // the deck panel (addPodSeat opens that panel for whoever just sat).
+  if (podEditingPlayerId !== null && podEditingPlayerId === myPodPlayerId() && podCornerVisible()) {
+    podEditingPlayerId = null;
+    editingSeatIndex = null;
+  }
+
   renderPodZones();
   renderPodHub();
   renderPodRoster();
   renderPodStatus();
   renderPodPanel();
   renderPodCta();
+  renderPodCorner();
 }
 
 // ---------- reveal modal (Scryfall commander art) ----------
