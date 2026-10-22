@@ -17,7 +17,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="style.css?v=66">
+<link rel="stylesheet" href="style.css?v=67">
 
 <!-- Home-screen icon (iOS "Add to Home Screen" + Android/Chrome install).
      Generated from icon-source.png via scripts/generate_icons.py -- rerun
@@ -157,9 +157,10 @@
 
   <div id="tab-pod" class="tab-panel" hidden>
     <section class="card" id="pod-section">
-      <h2>Set Up Pod</h2>
+      <!-- buildPodTable adds the mat's "Lay flat" toggle beside the heading. -->
+      <div class="pod-head"><h2>Set Up Pod</h2></div>
 
-      <!-- The gathering table: built once by buildPodTable and re-rendered
+      <!-- The command zone mat: built once by buildPodTable and re-rendered
            by renderPodSlots in app.js. Shared through the relay's /table, so
            every phone sees and edits the same one (see applyLiveTable). No
            player-count control -- the pod is however many are seated. -->
@@ -478,6 +479,6 @@
   </div>
 </div>
 
-<script src="app.js?v=73"></script>
+<script src="app.js?v=74"></script>
 </body>
 </html>
