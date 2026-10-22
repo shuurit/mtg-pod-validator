@@ -381,10 +381,213 @@ function tonightTableCopy() {
   return { title: "Ready to check", sub: `All ${n} decks sealed` };
 }
 
+// ---------- Game night ----------
+// Tonight follows the evening: before the game (the pod forming), during it
+// (the pod passed: who's playing what, and for how long), and after (each
+// of tonight's games, logged or waiting for its debrief).
+
+// When this phone first saw each passing check, by check id: the game
+// clock's start. The relay doesn't timestamp a check, and every phone polls
+// within a few seconds of the pass, so they agree to within a poll. Opening
+// the app onto a pod that already passed starts the clock then.
+const POD_LIVE_KEY = "podLiveSince";
+function podLiveSince(checkId) {
+  try {
+    const all = JSON.parse(localStorage.getItem(POD_LIVE_KEY) || "{}");
+    return typeof all[checkId] === "number" ? all[checkId] : null;
+  } catch { return null; }
+}
+function notePodLive(checkId) {
+  try {
+    const all = JSON.parse(localStorage.getItem(POD_LIVE_KEY) || "{}");
+    if (typeof all[checkId] === "number") return;
+    all[checkId] = Date.now();
+    // Only the last few nights matter.
+    const keep = Object.entries(all).sort((a, b) => b[1] - a[1]).slice(0, 10);
+    localStorage.setItem(POD_LIVE_KEY, JSON.stringify(Object.fromEntries(keep)));
+  } catch { /* storage blocked -- the clock just won't show */ }
+}
+
+function formatGameClock(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = String(s % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
+}
+
+// Today's local calendar day as playgroup.gg writes a game's date.
+function tonightDay() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// Tonight's playgroup.gg games, oldest first, each with whether the Game
+// Log has it yet. Empty until the Game Log has loaded: logged-or-not needs
+// it, and (as with buildTonightRecentGames) checking gameLogLoaded first
+// keeps this from touching data declared further down the file during the
+// load-time render.
+function tonightPlaygroupGames() {
+  if (!gameLogLoaded || !playgroupGamesData) return [];
+  const day = tonightDay();
+  const games = playgroupGamesData.games
+    .filter(g => String(g.date || "").slice(0, 10) === day)
+    .sort((a, b) => Number(a.playgroup_game_id) - Number(b.playgroup_game_id));
+  const logged = computeLoggedMatches(games);
+  return games.map(g => ({ game: g, logged: logged.has(g.playgroup_game_id) }));
+}
+
+// Straight into a game's debrief (the Games to Update form, one player at
+// a time -- see buildGtuDebrief).
+function openGameDebrief(pgGame) {
+  activateTab("games-to-update");
+  openGameForm(pgGame);
+}
+
+let tonightClockTimer = 0;
+function tickTonightClock() {
+  const el = document.querySelector(".tonight-live-clock");
+  const since = el ? Number(el.dataset.since) : 0;
+  if (!el || !since) { clearInterval(tonightClockTimer); tonightClockTimer = 0; return; }
+  el.textContent = formatGameClock(Date.now() - since);
+}
+
+// The pod passed: the game is on. Who's at the table with what, who goes
+// first, how long it's been running, and the way to its debrief.
+function buildTonightLive() {
+  const live = document.createElement("section");
+  live.className = "tonight-live";
+  live.setAttribute("aria-label", "Game in play");
+  const gameNo = tonightPlaygroupGames().length + 1;
+  const since = liveTableCheck ? podLiveSince(liveTableCheck.id) : null;
+
+  const head = document.createElement("div");
+  head.className = "tonight-live-head";
+  const tag = document.createElement("span");
+  tag.className = "tonight-live-tag";
+  tag.innerHTML = '<span class="tonight-live-dot" aria-hidden="true"></span>';
+  tag.append(`Game ${gameNo} in play`);
+  head.appendChild(tag);
+  if (since) {
+    const clock = document.createElement("span");
+    clock.className = "tonight-live-clock";
+    clock.dataset.since = String(since);
+    clock.textContent = formatGameClock(Date.now() - since);
+    clock.title = "Time since the pod passed";
+    head.appendChild(clock);
+  }
+  live.appendChild(head);
+
+  const first = podFirstPlayer();
+  const seats = document.createElement("ul");
+  seats.className = "tonight-live-seats";
+  for (const slot of podSelections) {
+    const deck = podDeckOf(slot);
+    const li = document.createElement("li");
+    li.className = "tonight-live-seat";
+    li.style.setProperty("--sleeve", podSleeveOf(slot.playerId));
+    const isFirst = !!first && first.playerId === slot.playerId;
+    li.classList.toggle("is-first", isFirst);
+    const name = document.createElement("span");
+    name.className = "tonight-live-name";
+    name.textContent = isFirst ? `${podNameOf(slot)} · 1st` : podNameOf(slot);
+    const what = document.createElement("span");
+    what.className = "tonight-live-deck";
+    what.textContent = deck ? podShortDeckName(deck.name) : "";
+    if (deck) li.title = deck.name;
+    li.append(name, what);
+    seats.appendChild(li);
+  }
+  live.appendChild(seats);
+
+  const note = document.createElement("p");
+  note.className = "tonight-live-note";
+  note.hidden = true;
+
+  const actions = document.createElement("div");
+  actions.className = "tonight-live-actions";
+  const over = document.createElement("button");
+  over.type = "button";
+  over.className = "primary";
+  over.textContent = "Game over: debrief it";
+  over.addEventListener("click", () => {
+    const pending = tonightPlaygroupGames().filter(e => !e.logged);
+    if (pending.length) { openGameDebrief(pending[pending.length - 1].game); return; }
+    // The debrief needs the game on playgroup.gg first (Place, KOs and
+    // turn come from its event log).
+    note.textContent = "";
+    note.append("playgroup.gg hasn't got this game yet. Record it there and it'll be right here to debrief. ");
+    const link = document.createElement("a");
+    link.href = PLAYGROUP_URL;
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.textContent = "Open playgroup.gg";
+    note.appendChild(link);
+    note.hidden = false;
+  });
+  const pod = document.createElement("button");
+  pod.type = "button";
+  pod.textContent = "Open the pod";
+  pod.addEventListener("click", () => activateTab("pod"));
+  actions.append(over, pod);
+  live.append(actions, note);
+  return live;
+}
+
+// Each of tonight's games: who won with what, and either logged or a
+// Debrief button straight into it.
+function buildTonightGames(entries) {
+  const list = document.createElement("div");
+  list.className = "tonight-games";
+  entries.forEach(({ game, logged }, i) => {
+    const item = document.createElement("div");
+    item.className = "tonight-game";
+    const num = document.createElement("span");
+    num.className = "tonight-game-date tonight-game-num";
+    num.textContent = `Game ${i + 1}`;
+    const what = document.createElement("span");
+    what.className = "tonight-game-text";
+    const winner = game.participants.find(p => p.result === "win");
+    const who = document.createElement("strong");
+    who.textContent = winner ? winner.player : "No winner yet";
+    what.appendChild(who);
+    if (winner) what.appendChild(document.createTextNode(` won with ${stripDeckDisambiguation(winner.commander)}`));
+    item.append(num, what);
+    if (logged) {
+      const done = document.createElement("span");
+      done.className = "tonight-game-logged";
+      done.innerHTML = tonightSvg('<path d="M5 12.5 10 17 19 7"></path>');
+      done.setAttribute("role", "img");
+      done.setAttribute("aria-label", "Logged");
+      item.appendChild(done);
+    } else {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "tonight-game-debrief";
+      btn.textContent = "Debrief";
+      btn.setAttribute("aria-label", `Debrief game ${i + 1}`);
+      btn.addEventListener("click", () => openGameDebrief(game));
+      item.appendChild(btn);
+    }
+    list.appendChild(item);
+  });
+  return list;
+}
+
 function renderTonight() {
   const host = document.getElementById("tonight-body");
   if (!host) return;
   host.innerHTML = "";
+
+  // --- during the game ---
+  // Once the pod passes, the evening's main card is the game itself.
+  if (podTableReady && podRevealed && podSelections.length) {
+    if (liveTableCheck) notePodLive(liveTableCheck.id);
+    host.appendChild(buildTonightLive());
+    if (!tonightClockTimer && document.querySelector(".tonight-live-clock")) {
+      tonightClockTimer = setInterval(tickTonightClock, 1000);
+    }
+  }
 
   // --- primary action ---
   // Follows the shared table once it's loaded: an empty table invites you
@@ -403,7 +606,17 @@ function renderTonight() {
   action.querySelector(".tonight-action-title").textContent = tableCopy.title;
   action.querySelector(".tonight-action-sub").textContent = tableCopy.sub;
   action.addEventListener("click", () => activateTab("pod"));
-  host.appendChild(action);
+  if (!host.querySelector(".tonight-live")) host.appendChild(action);
+
+  // --- tonight's games ---
+  const tonightGames = tonightPlaygroupGames();
+  if (tonightGames.length) {
+    const gamesLabel = document.createElement("div");
+    gamesLabel.className = "tonight-label";
+    gamesLabel.textContent = "Tonight's games";
+    host.appendChild(gamesLabel);
+    host.appendChild(buildTonightGames(tonightGames));
+  }
 
   // --- needs you ---
   // Straight after the main action: these are the only other things on
@@ -418,8 +631,8 @@ function renderTonight() {
   list.className = "tonight-list";
 
   list.appendChild(buildTonightCountItem(tonightCounts.gamesToLog, {
-    one: "game to log",
-    many: "games to log",
+    one: "game to debrief",
+    many: "games to debrief",
     done: "Every game is logged",
     loading: "Checking for unlogged games…",
     error: "Couldn't check for unlogged games — tap to retry",
@@ -486,6 +699,30 @@ function renderTonight() {
   const myRow = myName && latestStandings
     ? latestStandings.rows.find(r => r.name === myName)
     : null;
+
+  // --- your night ---
+  // Only once you've played tonight: games and wins from tonight's
+  // playgroup.gg games, logged or not.
+  const mine = myName ? tonightGames.filter(({ game }) => game.participants.some(p => p.player === myName)) : [];
+  if (mine.length) {
+    const nightLabel = document.createElement("div");
+    nightLabel.className = "tonight-label";
+    nightLabel.textContent = "Your night";
+    host.appendChild(nightLabel);
+    const wins = mine.filter(({ game }) => game.participants.some(p => p.player === myName && p.result === "win")).length;
+    const night = document.createElement("div");
+    night.className = "tonight-stats";
+    night.innerHTML = `
+      <div class="tonight-stat">
+        <div class="tonight-stat-value">${mine.length}</div>
+        <div class="tonight-stat-label">${mine.length === 1 ? "Game" : "Games"}</div>
+      </div>
+      <div class="tonight-stat">
+        <div class="tonight-stat-value">${wins}</div>
+        <div class="tonight-stat-label">${wins === 1 ? "Win" : "Wins"}</div>
+      </div>`;
+    host.appendChild(night);
+  }
 
   const leaders = buildTonightLeaders(myName);
   const hasMyStats = !!myRow && myRow.adjPct !== null;
@@ -7157,11 +7394,97 @@ function openGameForm(pgGame) {
 
   box.appendChild(calcBtn);
   box.appendChild(resultsEl);
+  buildGtuDebrief(box, cardList, calcBtn, pgGame);
   areaEl.appendChild(box);
   // "start", not "nearest": the form opens below every pending game, and
   // on a phone "nearest" only nudged its top edge into view, leaving the
   // tap looking like it did nothing.
   box.scrollIntoView({ behavior: REDUCED_MOTION.matches ? "auto" : "smooth", block: "start" });
+}
+
+// The debrief: the same form, one player at a time. Player chips across the
+// top (tap to jump), Back / "Next: Kai" under the card, and Calculate only
+// on the last player. Every card stays in the DOM, just hidden, so drafts,
+// the playgroup.gg pre-fill and calculateGameToUpdate (which all find
+// inputs by class + data-i) work exactly as before. "Everyone at once"
+// brings back the full list, remembered per phone.
+const GTU_LIST_KEY = "gtuDebriefList";
+function buildGtuDebrief(box, cardList, calcBtn, pgGame) {
+  const cards = [...cardList.children];
+  if (cards.length < 2) return;
+  cards.forEach((c, i) => {
+    c.tabIndex = -1;
+    c.setAttribute("aria-label", `${pgGame.participants[i].player}, player ${i + 1} of ${cards.length}`);
+  });
+  let at = 0;
+  let listMode = false;
+  try { listMode = localStorage.getItem(GTU_LIST_KEY) === "1"; } catch { /* storage blocked -- one at a time */ }
+
+  const steps = document.createElement("div");
+  steps.className = "gtu-debrief-steps";
+  steps.setAttribute("role", "group");
+  steps.setAttribute("aria-label", "Players in this game");
+  const chips = pgGame.participants.map((p, i) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "gtu-debrief-step";
+    chip.textContent = p.player;
+    chip.addEventListener("click", () => show(i, true));
+    steps.appendChild(chip);
+    return chip;
+  });
+
+  const mode = document.createElement("button");
+  mode.type = "button";
+  mode.className = "gtu-debrief-mode";
+  mode.addEventListener("click", () => {
+    listMode = !listMode;
+    try { localStorage.setItem(GTU_LIST_KEY, listMode ? "1" : "0"); } catch { /* not remembered */ }
+    show(at, false);
+  });
+
+  const controls = document.createElement("div");
+  controls.className = "gtu-debrief-controls";
+  const back = document.createElement("button");
+  back.type = "button";
+  back.textContent = "Back";
+  back.addEventListener("click", () => show(at - 1, true));
+  const next = document.createElement("button");
+  next.type = "button";
+  next.className = "primary";
+  next.addEventListener("click", () => show(at + 1, true));
+  controls.append(back, next, calcBtn);
+
+  const visited = new Set([0]);
+  function show(i, move) {
+    at = Math.max(0, Math.min(cards.length - 1, i));
+    visited.add(at);
+    const last = at === cards.length - 1;
+    box.classList.toggle("is-debrief", !listMode);
+    cards.forEach((c, j) => { c.hidden = !listMode && j !== at; });
+    chips.forEach((chip, j) => {
+      chip.classList.toggle("is-visited", visited.has(j) && j !== at);
+      if (!listMode && j === at) chip.setAttribute("aria-current", "step");
+      else chip.removeAttribute("aria-current");
+    });
+    steps.hidden = listMode;
+    back.hidden = listMode || at === 0;
+    next.hidden = listMode || last;
+    next.textContent = last ? "" : `Next: ${pgGame.participants[at + 1].player}`;
+    calcBtn.hidden = !listMode && !last;
+    mode.textContent = listMode ? "One player at a time" : "Everyone at once";
+    if (move && !listMode) {
+      cards[at].scrollIntoView({ behavior: REDUCED_MOTION.matches ? "auto" : "smooth", block: "nearest" });
+      // The card, not its first field: focusing a number input would open
+      // the phone's keyboard on every step.
+      cards[at].focus({ preventScroll: true });
+    }
+  }
+
+  cardList.before(steps);
+  cardList.after(controls);
+  controls.after(mode);
+  show(0, false);
 }
 
 function calculateGameToUpdate(pgGame, box, resultsEl) {
