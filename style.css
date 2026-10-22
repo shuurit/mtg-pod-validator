@@ -6297,3 +6297,280 @@ button.dossier-back svg { width: 18px; height: 18px; }
   margin: 0 auto;
   box-shadow: 0 14px 32px rgba(0, 0, 0, 0.45);
 }
+
+/* ---------- The Vault (Players & Decks) ----------
+   See the Vault section in app.js. Deck boxes in each player's sleeve
+   colour -- the same boxes as the Set Up Pod mat -- standing on that
+   player's shelf; sealed boxes for new arrivals. Box colours are fixed
+   material (sleeves), the same in either theme. */
+.vault-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  margin: 4px 0 12px;
+  padding: 0 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-accent);
+  color: var(--muted);
+}
+.vault-search svg { width: 18px; height: 18px; flex: 0 0 auto; }
+.vault-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 1rem;
+  padding: 10px 0;
+}
+.vault-search input:focus { outline: none; }
+.vault-search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus-ring); }
+
+.vault-arrivals {
+  margin-bottom: 14px;
+  padding: 12px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+}
+.vault-arrivals-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.vault-arrivals-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.25rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.vault-arrivals-from { font-size: 0.75rem; color: var(--muted); }
+.vault-arrivals-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+/* A sealed box: shrink-wrap stripes, a gold seal edge, the light
+   catching it now and then. */
+button.vault-sealed {
+  position: relative;
+  overflow: hidden;
+  min-height: 88px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 2px;
+  padding: 10px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: repeating-linear-gradient(45deg, #3b2a6b 0 7px, #2d2058 7px 14px);
+  box-shadow: inset 0 0 0 1.5px rgba(220, 181, 90, 0.6), 0 8px 16px rgba(0, 0, 0, 0.35);
+  color: #efe6d2;
+  text-align: left;
+}
+button.vault-sealed::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(115deg, transparent 38%, rgba(255, 255, 255, 0.2) 50%, transparent 62%);
+  transform: translateX(-160%);
+  animation: reveal-foil-sweep 3.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  button.vault-sealed::after { animation: none; display: none; }
+}
+@media (hover: hover) and (pointer: fine) {
+  button.vault-sealed:hover { color: #efe6d2; box-shadow: inset 0 0 0 2px #dcb55a, 0 8px 16px rgba(0, 0, 0, 0.35); }
+}
+.vault-sealed-kind {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  padding: 2px 8px;
+  border-radius: 8px;
+  background: #dcb55a;
+  color: #1b1405;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.vault-sealed-kind.is-player { background: #efe6d2; }
+.vault-sealed-title {
+  max-width: 100%;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.15rem;
+  line-height: 1;
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
+}
+.vault-sealed-sub { font-size: 0.72rem; color: #d9cfee; }
+button.vault-arrivals-more {
+  margin-top: 10px;
+  width: 100%;
+  min-height: 44px;
+}
+
+/* A player's shelf: their boxes three to a row under the name. */
+.vault-shelf {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 2px 0 14px;
+}
+button.vault-box {
+  min-height: 84px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--sleeve);
+  box-shadow: inset 0 -8px 0 rgba(0, 0, 0, 0.22), inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 4px 10px rgba(0, 0, 0, 0.18);
+  color: #efe6d2;
+  text-align: left;
+}
+@media (hover: hover) and (pointer: fine) {
+  button.vault-box:hover { color: #efe6d2; box-shadow: inset 0 -8px 0 rgba(0, 0, 0, 0.22), 0 0 0 2px var(--foil); }
+}
+.vault-box-name {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.98rem;
+  line-height: 1.02;
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
+}
+.vault-box-tags { display: flex; flex-wrap: wrap; gap: 3px; }
+.vault-box-tag {
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.vault-box-tag.is-new { color: #f3dc9b; }
+.vault-box-tag.is-combo { color: #ffc0b3; }
+.vault-box-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+.vault-box-bracket {
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.3);
+  font-weight: 600;
+}
+.deck-plate.is-found {
+  animation: vault-found 1.4s ease-out;
+}
+@keyframes vault-found {
+  0%, 30% { box-shadow: 0 0 0 2px var(--accent); }
+  100% { box-shadow: 0 0 0 2px transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .deck-plate.is-found { animation: none; outline: 2px solid var(--accent); }
+}
+
+/* ---------- Unboxing (New Players/Decks) ----------
+   A pending deck is a sealed box until opened: the lid (.uta-lid) covers
+   the card while its checkbox is clear, and opening it ticks the box.
+   The card underneath keeps its size so nothing jumps when it opens. */
+.uta-deck-card {
+  position: relative;
+  overflow: hidden;
+}
+.uta-lid {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: inherit;
+  background: repeating-linear-gradient(45deg, #3b2a6b 0 9px, #2d2058 9px 18px);
+  box-shadow: inset 0 0 0 1.5px rgba(220, 181, 90, 0.6);
+  color: #efe6d2;
+  font: inherit;
+}
+.uta-deck-card:not(:has(.uta-deck-check:checked)) .uta-lid { display: flex; }
+@media (hover: hover) and (pointer: fine) {
+  .uta-lid:hover { color: #efe6d2; box-shadow: inset 0 0 0 2px #dcb55a; }
+}
+.uta-lid-kind {
+  padding: 3px 9px;
+  border-radius: 8px;
+  background: #dcb55a;
+  color: #1b1405;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.uta-lid-cta {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+/* Opening it: the contents rise out of the box. */
+.uta-deck-card.is-unboxing > :not(.uta-lid) {
+  animation: uta-unbox 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes uta-unbox { from { opacity: 0; transform: translate3d(0, 12px, 0); } }
+@media (prefers-reduced-motion: reduce) {
+  .uta-deck-card.is-unboxing > :not(.uta-lid) { animation: none; }
+}
+
+/* The bracket, picked from five named buttons (the select underneath is
+   hidden but still what the form reads). */
+.uta-deck-card-controls { flex: 1 1 100%; flex-wrap: wrap; }
+.uta-brackets {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 5px;
+}
+button.uta-bracket-btn {
+  min-height: 56px;
+  padding: 5px 2px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+button.uta-bracket-btn[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.uta-bracket-n {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.3rem;
+  line-height: 1;
+}
+.uta-bracket-name {
+  font-size: 0.6rem;
+  font-weight: 600;
+  white-space: nowrap;
+}

@@ -17,7 +17,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="style.css?v=73">
+<link rel="stylesheet" href="style.css?v=74">
 
 <!-- Home-screen icon (iOS "Add to Home Screen" + Android/Chrome install).
      Generated from icon-source.png via scripts/generate_icons.py -- rerun
@@ -180,9 +180,16 @@
     </section>
 
     <section class="card" id="manage-section">
-      <h2>Players &amp; Decks</h2>
-      <p class="hint">Tap a player to see their decks. Tap a deck's power to declare a new bracket before its next game.</p>
+      <h2>The Vault</h2>
+      <p class="hint">Every player's shelf of deck boxes. Tap a box to open that player's decks; tap a deck's power to declare a new bracket before its next game.</p>
       <p class="hint" id="sync-status">Shuffling up the deck list…</p>
+      <!-- Filters the shelves below -- see renderPlayersTable. -->
+      <label class="vault-search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"></circle><path d="m20 20-4.2-4.2"></path></svg>
+        <input type="search" id="vault-search" placeholder="Find a deck, commander or player" autocomplete="off" aria-label="Find a deck, commander or player">
+      </label>
+      <!-- New on playgroup.gg, still sealed: renderVaultArrivals. -->
+      <div id="vault-arrivals"></div>
 
       <div id="players-table"></div>
       <!-- Admin only -- renderActivePlayersAdmin in app.js fills and shows
@@ -212,7 +219,7 @@
         Tonight
       </button>
       <h2>New Players/Decks</h2>
-      <p class="hint">New playgroup.gg members and new decks for tracked players. Tick what to add, pick a bracket (1–5) for each, then submit once.</p>
+      <p class="hint">New playgroup.gg members and new decks for tracked players, still sealed. Unbox what to add, pick a bracket (1–5) for each, then submit once.</p>
       <p class="hint" id="uta-status">Shuffling up…</p>
       <div id="uta-list"></div>
       <div id="uta-form-area"></div>
@@ -485,6 +492,6 @@
   </div>
 </div>
 
-<script src="app.js?v=79"></script>
+<script src="app.js?v=80"></script>
 </body>
 </html>

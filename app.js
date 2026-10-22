@@ -202,6 +202,17 @@ let podUi = null;
 // bounded regardless of how many players get tracked over time. null means
 // everyone's collapsed.
 let expandedPlayerId = null;
+// The Vault's search, lower-cased and trimmed, and the deck whose box was
+// just tapped (to bring its plate into view) -- see the Vault section.
+// Up here because renderPlayersTable first runs while this file loads.
+let vaultQuery = "";
+let vaultFocusDeckId = null;
+const VAULT_ARRIVALS_SHOWN = 4;
+// Deck-box sleeve colours (the Set Up Pod mat's boxes and the Vault's), one per player (by id, so a player keeps theirs
+// from pod to pod). Fixed material like the pips: card sleeves, not theme.
+// Deliberately not derived from the deck: a sealed box mustn't hint at
+// which deck is inside it. Up here for the same load-order reason.
+const POD_SLEEVES = ["#7a2e2e", "#24486e", "#2f5e40", "#5c3d6e", "#7a5a22", "#2d5a5e", "#6e2f55", "#4a4f57"];
 
 // Set by a player row's own tap and consumed by the very next render, so
 // only that tap plays the chevron turn and the decks dealing in -- a data
@@ -2663,7 +2674,127 @@ function findPlaygroupPowerLevel(playerName, deck) {
   return match && typeof match.power_level === "number" ? match.power_level : null;
 }
 
+// ---------- The Vault ----------
+// Players & Decks as shelves of deck boxes: every player's decks stand on
+// their shelf in that player's sleeve colour (the same boxes they carry
+// onto the Set Up Pod mat), so the whole collection reads at a glance. A
+// box opens its player, whose full deck plates (bracket edit, combo watch)
+// take the shelf's place. New arrivals from playgroup.gg wait at the top
+// as sealed boxes until someone unboxes them in New Players/Decks.
+
+
+function vaultMatches(text) {
+  return !vaultQuery || String(text).toLowerCase().includes(vaultQuery);
+}
+
+function buildVaultBox(player, deck) {
+  const box = document.createElement("button");
+  box.type = "button";
+  box.className = "vault-box";
+  box.style.setProperty("--sleeve", podSleeveOf(player.id));
+  const name = document.createElement("span");
+  name.className = "vault-box-name";
+  name.textContent = podShortDeckName(deck.name);
+  box.appendChild(name);
+  const tags = [];
+  if (deck.newDeck) tags.push(["New", "is-new"]);
+  if (deck.comboFlagged) tags.push(["Combo watch", "is-combo"]);
+  if (tags.length) {
+    const tagLine = document.createElement("span");
+    tagLine.className = "vault-box-tags";
+    for (const [text, cls] of tags) {
+      const t = document.createElement("span");
+      t.className = `vault-box-tag ${cls}`;
+      t.textContent = text;
+      tagLine.appendChild(t);
+    }
+    box.appendChild(tagLine);
+  }
+  const foot = document.createElement("span");
+  foot.className = "vault-box-foot";
+  const bracket = document.createElement("span");
+  bracket.className = "vault-box-bracket";
+  bracket.textContent = deck.bracket ? `B${deck.bracket}` : "B?";
+  const games = document.createElement("span");
+  games.textContent = `${deck.gamesLogged} ${deck.gamesLogged === 1 ? "game" : "games"}`;
+  foot.append(bracket, games);
+  box.appendChild(foot);
+  box.setAttribute("aria-label", `${deck.name}, ${player.name}'s deck, ${deck.bracket ? "bracket " + deck.bracket : "no bracket yet"}, ${deck.gamesLogged} games logged. Open ${player.name}'s decks.`);
+  box.addEventListener("click", () => {
+    playerBlockToggle = { id: player.id, opening: true };
+    expandedPlayerId = player.id;
+    vaultFocusDeckId = deck.id;
+    renderPlayersTable();
+  });
+  return box;
+}
+
+// Sealed boxes for what playgroup.gg has that the app doesn't yet: one per
+// new player (with how many decks are inside) and one per new deck for a
+// tracked player. All of them lead to New Players/Decks, where they're
+// unboxed. Shows the first four; the rest are counted.
+function renderVaultArrivals() {
+  const host = document.getElementById("vault-arrivals");
+  if (!host) return;
+  host.innerHTML = "";
+  if (!rosterDiffData) return;
+  const { newPlayers, newDecksForExisting } = computeRosterDiff(rosterDiffData);
+  const arrivals = [
+    ...newPlayers.map(p => ({ kind: "New player", title: p.suggestedDisplayName, sub: `${p.decks.length} ${p.decks.length === 1 ? "deck" : "decks"} inside` })),
+    ...newDecksForExisting.flatMap(g => g.decks.map(() => ({ kind: "New deck", title: `For ${g.player}`, sub: "Tap to unbox" }))),
+  ];
+  if (!arrivals.length) return;
+  const wrap = document.createElement("div");
+  wrap.className = "vault-arrivals";
+  const head = document.createElement("div");
+  head.className = "vault-arrivals-head";
+  head.innerHTML = '<span class="vault-arrivals-title">Arrivals</span><span class="vault-arrivals-from">new on playgroup.gg</span>';
+  wrap.appendChild(head);
+  const grid = document.createElement("div");
+  grid.className = "vault-arrivals-grid";
+  for (const a of arrivals.slice(0, VAULT_ARRIVALS_SHOWN)) {
+    const box = document.createElement("button");
+    box.type = "button";
+    box.className = "vault-sealed";
+    box.setAttribute("aria-label", `${a.kind}: ${a.title}. ${a.sub}. Open New Players/Decks.`);
+    const kind = document.createElement("span");
+    kind.className = a.kind === "New player" ? "vault-sealed-kind is-player" : "vault-sealed-kind";
+    kind.textContent = a.kind;
+    const title = document.createElement("span");
+    title.className = "vault-sealed-title";
+    title.textContent = a.title;
+    const sub = document.createElement("span");
+    sub.className = "vault-sealed-sub";
+    sub.textContent = a.sub;
+    box.append(kind, title, sub);
+    box.addEventListener("click", () => activateTab("update-app"));
+    grid.appendChild(box);
+  }
+  wrap.appendChild(grid);
+  if (arrivals.length > VAULT_ARRIVALS_SHOWN) {
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "vault-arrivals-more";
+    more.textContent = `${arrivals.length - VAULT_ARRIVALS_SHOWN} more waiting`;
+    more.addEventListener("click", () => activateTab("update-app"));
+    wrap.appendChild(more);
+  }
+  host.appendChild(wrap);
+}
+
+function initVaultSearch() {
+  const input = document.getElementById("vault-search");
+  if (!input || input._wired) return;
+  input._wired = true;
+  input.addEventListener("input", () => {
+    vaultQuery = input.value.trim().toLowerCase();
+    renderPlayersTable();
+  });
+}
+
 function renderPlayersTable() {
+  initVaultSearch();
+  renderVaultArrivals();
   const container = document.getElementById("players-table");
   container.innerHTML = "";
   const toggle = playerBlockToggle;
@@ -2677,11 +2808,18 @@ function renderPlayersTable() {
     return;
   }
 
+  let shown = 0;
   for (const player of podPlayers) {
     const isExpanded = expandedPlayerId === player.id;
     // Archived on playgroup.gg means retired -- not shown here, and not
     // offered in Set Up Pod either (see renderPodSlots).
     const activeDecks = player.decks.filter(d => !d.archived);
+    // A search for a player shows their whole shelf; a search for a
+    // commander shows just the boxes that match.
+    const nameHit = vaultMatches(player.name);
+    const shelfDecks = nameHit ? activeDecks : activeDecks.filter(d => vaultMatches(d.name));
+    if (!nameHit && !shelfDecks.length) continue;
+    shown++;
 
     const block = document.createElement("div");
     block.className = "player-block";
@@ -2741,6 +2879,12 @@ function renderPlayersTable() {
     block.appendChild(header);
 
     if (!isExpanded) {
+      if (shelfDecks.length) {
+        const shelf = document.createElement("div");
+        shelf.className = "vault-shelf";
+        for (const deck of [...shelfDecks].sort((a, b) => a.name.localeCompare(b.name))) shelf.appendChild(buildVaultBox(player, deck));
+        block.appendChild(shelf);
+      }
       container.appendChild(block);
       continue;
     }
@@ -2788,6 +2932,24 @@ function renderPlayersTable() {
     if (toggle && toggle.id === player.id && toggle.opening) block.classList.add("is-dealing");
     block.appendChild(plateList);
     container.appendChild(block);
+  }
+
+  if (!shown) {
+    const none = document.createElement("p");
+    none.className = "hint vault-none";
+    none.textContent = `Nothing in the vault matches "${vaultQuery}".`;
+    container.appendChild(none);
+  }
+
+  // The box that was tapped: its plate, brought into view and marked.
+  if (vaultFocusDeckId !== null) {
+    const plate = container.querySelector(`.deck-plate[data-flip-key="${CSS.escape(String(vaultFocusDeckId))}"]`);
+    vaultFocusDeckId = null;
+    if (plate) {
+      plate.scrollIntoView({ block: "center", behavior: REDUCED_MOTION.matches ? "auto" : "smooth" });
+      plate.classList.add("is-found");
+      setTimeout(() => plate.classList.remove("is-found"), 1600);
+    }
   }
 }
 
@@ -3130,11 +3292,7 @@ function decksAvailableForSlot(slot) {
 // setPlayers triggers, and the pod tab is behind the sign-in gate anyway.
 
 const POD_MAX_SEATS = 8;
-// Deck-box sleeve colours, one per player (by id, so a player keeps theirs
-// from pod to pod). Fixed material like the pips: card sleeves, not theme.
-// Deliberately not derived from the deck: a sealed box mustn't hint at
-// which deck is inside it.
-const POD_SLEEVES = ["#7a2e2e", "#24486e", "#2f5e40", "#5c3d6e", "#7a5a22", "#2d5a5e", "#6e2f55", "#4a4f57"];
+// Deck-box sleeve colours: see POD_SLEEVES near the top of this file.
 // Zone size on the mat, px. Seven or eight seats use the narrow zone so
 // neighbours round the curve don't overlap.
 const POD_ZONE = { w: 108, h: 80 };
@@ -8530,7 +8688,30 @@ function buildUtaDeckCard(deck) {
     bracketSelect.appendChild(opt);
   }
   bracketSelect.value = state.bracket;
+  // The select stays the source of truth (wireRosterUpdateGroupInputs
+  // listens to it); the five named buttons below are what you tap.
+  bracketSelect.hidden = true;
   controls.appendChild(bracketSelect);
+
+  const bracketGroup = document.createElement("div");
+  bracketGroup.className = "uta-brackets";
+  bracketGroup.setAttribute("role", "group");
+  bracketGroup.setAttribute("aria-label", `${deck.commander_name}'s bracket`);
+  BRACKET_NAMES.forEach((label, i) => {
+    const b = String(i + 1);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "uta-bracket-btn";
+    btn.setAttribute("aria-pressed", state.bracket === b ? "true" : "false");
+    btn.innerHTML = `<span class="uta-bracket-n">${b}</span><span class="uta-bracket-name">${label}</span>`;
+    btn.addEventListener("click", () => {
+      bracketSelect.value = b;
+      bracketSelect.dispatchEvent(new Event("change"));
+      bracketGroup.querySelectorAll(".uta-bracket-btn").forEach(x => x.setAttribute("aria-pressed", x === btn ? "true" : "false"));
+    });
+    bracketGroup.appendChild(btn);
+  });
+  controls.appendChild(bracketGroup);
 
   const b4Btn = document.createElement("button");
   b4Btn.type = "button";
@@ -8547,8 +8728,31 @@ function buildUtaDeckCard(deck) {
   controls.appendChild(b4Btn);
 
   card.appendChild(controls);
+
+  // Sealed until someone opens it: the lid covers the card while its
+  // checkbox is clear (see .uta-deck-card:has(...) in style.css), and
+  // opening it is the same as ticking the box. Select All opens every lid
+  // the same way, since it's the checkbox the lid follows.
+  const lid = document.createElement("button");
+  lid.type = "button";
+  lid.className = "uta-lid";
+  lid.innerHTML = `<span class="uta-lid-kind">${deck.replacesCommanderName ? "Commander swap" : "New deck"}</span><span class="uta-lid-cta">Tap to unbox</span>`;
+  lid.setAttribute("aria-label", `Unbox ${deck.commander_name} and add it`);
+  lid.addEventListener("click", () => {
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event("change"));
+    if (!REDUCED_MOTION.matches) {
+      card.classList.add("is-unboxing");
+      setTimeout(() => card.classList.remove("is-unboxing"), 700);
+    }
+    bracketGroup.querySelector(".uta-bracket-btn")?.focus({ preventScroll: true });
+  });
+  card.appendChild(lid);
   return card;
 }
+
+// The five Commander brackets, by name.
+const BRACKET_NAMES = ["Exhibition", "Core", "Upgraded", "Optimized", "cEDH"];
 
 // Wires up live state-capture on a just-rendered group's inputs, so every
 // keystroke/click is saved to rosterUpdateDeckState/rosterUpdateNameState
