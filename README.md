@@ -64,6 +64,12 @@ playgroup.gg  <--->  Cloudflare Worker relay  <--->  app.js (this site)
 ## Repo layout
 
 - `index.html`, `app.js`, `style.css` — the app itself.
+- `deck-tally.js` — the per-deck game tally's stats (games, W–L, win rate,
+  last played, history), derived from the logged league games for this
+  season or all seasons (the Vault's "Games:" switch).
+  Kept separate from `app.js` so `tests/deck-tally.test.js` can run it with
+  Node's built-in test runner — no packages to install:
+  `node --test tests/*.test.js`.
 - `cloudflare-worker/` — the relay Worker, its D1 schema, and its own
   README.
 - `deck-strength.xlsx` — the pre-D1 spreadsheet, kept as a frozen

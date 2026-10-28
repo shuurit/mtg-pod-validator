@@ -207,6 +207,8 @@ let expandedPlayerId = null;
 // Up here because renderPlayersTable first runs while this file loads.
 let vaultQuery = "";
 let vaultFocusDeckId = null;
+// Deck plates whose game tally is open underneath -- see buildDeckTally.
+const openTallyDeckIds = new Set();
 const VAULT_ARRIVALS_SHOWN = 4;
 // Deck-box sleeve colours (the Set Up Pod mat's boxes and the Vault's), one per player (by id, so a player keeps theirs
 // from pod to pod). Fixed material like the pips: card sleeves, not theme.
@@ -232,7 +234,22 @@ const PLAYER_DECK_COLUMNS = [
   { key: "deck", label: "Deck", defaultDir: "asc", numeric: false },
   { key: "power", label: "Power", defaultDir: "desc", numeric: true },
   { key: "pgPower", label: "Playgroup Power", defaultDir: "desc", numeric: true },
+  { key: "games", label: "Games", defaultDir: "desc", numeric: true },
 ];
+const VAULT_SHELF_COLUMNS = [
+  { key: "name", label: "Name", defaultDir: "asc" },
+  { key: "games", label: "Most played", defaultDir: "desc" },
+];
+const VAULT_SHELF_SORT_KEY = "vaultShelfSort";
+// How each player's shelf of boxes is ordered (Name or Most played) --
+// one choice for the whole Vault, remembered per device. See
+// renderPlayersTable.
+let vaultShelfSort = loadVaultShelfSort();
+// Which games every count in the Vault reads -- "season" (the current one)
+// or "all" (every season's). One choice for the whole Vault, remembered
+// per device. See deckGameRowIndex.
+const VAULT_SCOPE_KEY = "vaultGamesScope";
+let vaultGamesScope = loadVaultGamesScope();
 
 // ---------- deriving players/decks from source data ----------
 // Current Deck Strength (deck-strength.xlsx) is the only source for this --
@@ -1004,11 +1021,18 @@ function gameRowFromD1(g) {
     gameNum: g.gameNum,
     date: new Date(g.date),
     player: g.player,
+    // null from a relay that predates deckId -- rowsForDeck then falls
+    // back to matching on player + commander name.
+    deckId: g.deckId ?? null,
+    // Shown on each game in a deck's all-seasons tally.
+    seasonLabel: g.seasonLabel,
     commander: g.commander,
     playgroupGameId: g.playgroupGameId,
     commanderStrength: g.commanderStrength,
     result: g.result,
     podSize: g.podSize,
+    place: g.place,
+    knockouts: g.knockouts,
     bracket: g.bracket,
     J: g.adjustedPodSizeScore,
     K: g.knockoutScore,
@@ -1056,6 +1080,9 @@ async function syncFromD1() {
     gameLogSeason3Rows = gameLogRowsFromD1(gamesData);
     gameLogAllRows = gamesData.games.map(gameRowFromD1);
     gameLogLoaded = true;
+    // Deck plates show each deck's record and open tallies list its games,
+    // both read from the rows just loaded.
+    renderPlayersTable();
     renderGamesToUpdate();
     renderWinRatesTable(playgroupGamesData);
     // Tonight's "Last games" reads these rows. renderWinRatesTable redraws
@@ -2606,15 +2633,27 @@ function buildBracketEditRow(deck) {
 // exact same interactive right side a table cell used to hold (combo badge,
 // flame toggle, power coin, bracket pencil -- see buildPowerCell/
 // buildBracketEditRow, untouched, just relocated).
-function buildDeckPlate(deck, pgPower) {
+function buildDeckPlate(player, deck, pgPower) {
   const plate = document.createElement("div");
   plate.className = `deck-plate ${powerTierClass(deck.power, "deck-plate")}`;
   plate.dataset.flipKey = String(deck.id);
 
-  const left = document.createElement("div");
-  left.className = "deck-plate-left";
+  // The name side opens this deck's game tally underneath (buildDeckTally).
+  // A button of its own rather than the whole plate, so it never competes
+  // with the bracket/combo controls on the right.
+  const isOpen = openTallyDeckIds.has(deck.id);
+  const left = document.createElement("button");
+  left.type = "button";
+  left.className = "deck-plate-left deck-plate-open";
+  left.setAttribute("aria-expanded", isOpen ? "true" : "false");
+  if (isOpen) left.setAttribute("aria-controls", `deck-tally-${deck.id}`);
+  left.addEventListener("click", () => {
+    if (isOpen) openTallyDeckIds.delete(deck.id);
+    else openTallyDeckIds.add(deck.id);
+    renderPlayersTable();
+  });
 
-  const nameLine = document.createElement("div");
+  const nameLine = document.createElement("span");
   nameLine.className = "deck-plate-name";
   const coin = buildIdentityCoin(deck.colorIdentity);
   if (coin) nameLine.appendChild(coin);
@@ -2628,21 +2667,37 @@ function buildDeckPlate(deck, pgPower) {
   // -- decks.new_deck is cleared the moment a game actually gets logged for
   // it (see handleGamesWrite), so a deck is never both at once. Playgroup
   // Power sits alongside whichever of the two applies, not instead of it.
+  // Once the game log has loaded, the record rides along with the count
+  // ("12 games · 5–7"), in whichever scope the Vault is showing; before
+  // that, this season's count /players already sent. Under All seasons a
+  // deck new this season can still have games from before, so those show.
   const subParts = [];
-  if (deck.newDeck) {
+  const gameCount = deckGamesCount(player, deck);
+  if (deck.newDeck && !(vaultGamesScope === "all" && gameCount > 0)) {
     subParts.push("New deck");
-  } else if (deck.gamesLogged > 0) {
-    subParts.push(`Logged ${deck.gamesLogged} game${deck.gamesLogged === 1 ? "" : "s"}`);
+  } else if (gameCount > 0) {
+    const games = `${gameCount} game${gameCount === 1 ? "" : "s"}`;
+    if (gameLogLoaded) {
+      const tally = deckTallyFor(player, deck);
+      subParts.push(`${games} · ${tally.wins}–${tally.losses}`);
+    } else {
+      subParts.push(games);
+    }
   }
   if (pgPower !== null) {
     subParts.push(`Playgroup Power: ${formatPower(pgPower)}`);
   }
   if (subParts.length > 0) {
-    const sub = document.createElement("div");
+    const sub = document.createElement("span");
     sub.className = "deck-plate-sub";
     sub.textContent = subParts.join(" · ");
     left.appendChild(sub);
   }
+
+  const chevron = document.createElement("span");
+  chevron.className = "deck-plate-chevron";
+  chevron.innerHTML = tonightSvg('<path d="m6 9 6 6 6-6"></path>');
+  left.appendChild(chevron);
 
   plate.appendChild(left);
 
@@ -2652,6 +2707,120 @@ function buildDeckPlate(deck, pgPower) {
   plate.appendChild(right);
 
   return plate;
+}
+
+// The game log rows the Vault is showing (this season's or every season's),
+// grouped by deck -- see indexRowsByDeck in deck-tally.js. Rebuilt only when
+// the scope changes or syncFromD1 swaps in fresh rows (a new array), not on
+// every render. Nothing extra is fetched: GET /games already returns every
+// season.
+let deckRowIndexCache = { rows: null, index: null };
+function deckGameRowIndex() {
+  const rows = vaultGamesScope === "all" ? gameLogAllRows : gameLogSeason3Rows;
+  if (deckRowIndexCache.rows !== rows) deckRowIndexCache = { rows, index: indexRowsByDeck(rows) };
+  return deckRowIndexCache.index;
+}
+
+function deckTallyFor(player, deck) {
+  return computeDeckTally(rowsForDeck(deckGameRowIndex(), player.name, deck));
+}
+
+// A deck's game count in the Vault's scope. Before the game log loads, this
+// season's count from /players stands in -- the only one there is yet.
+function deckGamesCount(player, deck) {
+  if (!gameLogLoaded) return deck.gamesLogged || 0;
+  return rowsForDeck(deckGameRowIndex(), player.name, deck).length;
+}
+
+function vaultScopeText() {
+  return vaultGamesScope === "all" ? "across all seasons" : "this season";
+}
+
+// A deck's game tally, opened under its plate: games, record, win rate and
+// last played, then every game in the Vault's scope (this season or all
+// seasons), newest first. Read-only on
+// purpose -- these are the league's own games, logged (and corrected)
+// through Games to Update, so this view shows them rather than editing them.
+function buildDeckTally(player, deck) {
+  const panel = document.createElement("div");
+  panel.className = "deck-tally";
+  panel.id = `deck-tally-${deck.id}`;
+
+  if (!gameLogLoaded) {
+    const wait = document.createElement("p");
+    wait.className = "hint";
+    wait.textContent = "Fetching games…";
+    panel.appendChild(wait);
+    return panel;
+  }
+
+  const tally = deckTallyFor(player, deck);
+  const stats = document.createElement("dl");
+  stats.className = "deck-tally-stats";
+  const stat = (label, value) => {
+    const cell = document.createElement("div");
+    cell.className = "deck-tally-stat";
+    const dd = document.createElement("dd");
+    dd.textContent = value;
+    const dt = document.createElement("dt");
+    dt.textContent = label;
+    cell.append(dd, dt);
+    stats.appendChild(cell);
+  };
+  stat("Games", String(tally.games));
+  stat("W–L", `${tally.wins}–${tally.losses}`);
+  stat("Win rate", formatWinRate(tally.winRate));
+  stat("Last played", tally.lastPlayed ? formatTallyDay(tally.lastPlayed, false) : "—");
+  panel.appendChild(stats);
+
+  if (!tally.games) {
+    const none = document.createElement("p");
+    none.className = "hint deck-tally-empty";
+    none.textContent = `No league games with this deck ${vaultScopeText()} yet.`;
+    panel.appendChild(none);
+    return panel;
+  }
+
+  const list = document.createElement("ol");
+  list.className = "deck-tally-history";
+  list.setAttribute("aria-label", `${deck.name}'s games ${vaultScopeText()}, newest first`);
+  for (const g of tally.history) {
+    const item = document.createElement("li");
+    item.className = "deck-tally-game";
+    const won = g.result === 1;
+    const badge = document.createElement("span");
+    badge.className = `deck-tally-result ${won ? "is-win" : "is-loss"}`;
+    badge.textContent = won ? "W" : "L";
+    badge.setAttribute("aria-label", won ? "Win" : "Loss");
+    const main = document.createElement("span");
+    main.className = "deck-tally-game-main";
+    const top = document.createElement("span");
+    top.className = "deck-tally-game-top";
+    top.textContent = `Game ${g.gameNum} · ${formatTallyDay(g.date)}`;
+    const sub = document.createElement("span");
+    sub.className = "deck-tally-game-sub";
+    const subParts = [];
+    // Game numbers restart every season, so across seasons each game says
+    // which one it's from.
+    if (vaultGamesScope === "all" && g.seasonLabel) subParts.push(g.seasonLabel);
+    if (g.podSize) subParts.push(`${g.podSize}-player pod`);
+    if (g.place) subParts.push(ordinal(g.place));
+    if (typeof g.knockouts === "number") subParts.push(`${g.knockouts} KO${g.knockouts === 1 ? "" : "s"}`);
+    sub.textContent = subParts.join(" · ");
+    main.append(top, sub);
+    item.append(badge, main);
+    list.appendChild(item);
+  }
+  panel.appendChild(list);
+  return panel;
+}
+
+// Game Log dates are plain calendar days parsed as UTC midnight -- formatted
+// in UTC too, or anyone west of Greenwich sees the day before (same as
+// buildTonightRecentGames). The stat strip drops the weekday to fit.
+function formatTallyDay(d, withWeekday = true) {
+  if (!(d instanceof Date) || isNaN(d)) return "";
+  return d.toLocaleDateString(undefined, { ...(withWeekday && { weekday: "short" }), month: "short", day: "numeric", timeZone: "UTC" });
 }
 
 // Looks up a deck's power_level as playgroup.gg itself has it rated, for
@@ -2682,6 +2851,53 @@ function findPlaygroupPowerLevel(playerName, deck) {
 // take the shelf's place. New arrivals from playgroup.gg wait at the top
 // as sealed boxes until someone unboxes them in New Players/Decks.
 
+
+function loadVaultShelfSort() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(VAULT_SHELF_SORT_KEY));
+    if (saved && VAULT_SHELF_COLUMNS.some(c => c.key === saved.column) && (saved.direction === "asc" || saved.direction === "desc")) return saved;
+  } catch { /* storage blocked or unreadable -- fall back to Name */ }
+  return { column: "name", direction: "asc" };
+}
+
+function loadVaultGamesScope() {
+  try { return localStorage.getItem(VAULT_SCOPE_KEY) === "all" ? "all" : "season"; } catch { return "season"; }
+}
+
+// This season / All seasons, above the shelves. Pressed-state buttons
+// rather than a sort, so it reuses .sort-bar's look with aria-pressed.
+function buildVaultScopeBar() {
+  const bar = document.createElement("div");
+  bar.className = "sort-bar vault-scope";
+  bar.setAttribute("role", "group");
+  bar.setAttribute("aria-label", "Count games from");
+  const label = document.createElement("span");
+  label.className = "sort-bar-label";
+  label.textContent = "Games:";
+  bar.appendChild(label);
+  for (const [key, text] of [["season", "This season"], ["all", "All seasons"]]) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "sort-btn" + (vaultGamesScope === key ? " active" : "");
+    btn.setAttribute("aria-pressed", vaultGamesScope === key ? "true" : "false");
+    btn.textContent = text;
+    btn.addEventListener("click", () => {
+      if (vaultGamesScope === key) return;
+      vaultGamesScope = key;
+      try { localStorage.setItem(VAULT_SCOPE_KEY, key); } catch { /* storage blocked -- the scope just won't be remembered */ }
+      renderPlayersTable();
+    });
+    bar.appendChild(btn);
+  }
+  return bar;
+}
+
+function sortShelfDecks(player, decks) {
+  const { column, direction } = vaultShelfSort;
+  if (column === "games") return [...decks].sort((a, b) => compareDecksByGames(a, b, direction, d => deckGamesCount(player, d)));
+  const dir = direction === "desc" ? -1 : 1;
+  return [...decks].sort((a, b) => a.name.localeCompare(b.name) * dir);
+}
 
 function vaultMatches(text) {
   return !vaultQuery || String(text).toLowerCase().includes(vaultQuery);
@@ -2716,10 +2932,11 @@ function buildVaultBox(player, deck) {
   bracket.className = "vault-box-bracket";
   bracket.textContent = deck.bracket ? `B${deck.bracket}` : "B?";
   const games = document.createElement("span");
-  games.textContent = `${deck.gamesLogged} ${deck.gamesLogged === 1 ? "game" : "games"}`;
+  const gameCount = deckGamesCount(player, deck);
+  games.textContent = `${gameCount} ${gameCount === 1 ? "game" : "games"}`;
   foot.append(bracket, games);
   box.appendChild(foot);
-  box.setAttribute("aria-label", `${deck.name}, ${player.name}'s deck, ${deck.bracket ? "bracket " + deck.bracket : "no bracket yet"}, ${deck.gamesLogged} games logged. Open ${player.name}'s decks.`);
+  box.setAttribute("aria-label", `${deck.name}, ${player.name}'s deck, ${deck.bracket ? "bracket " + deck.bracket : "no bracket yet"}, ${gameCount} games logged ${vaultScopeText()}. Open ${player.name}'s decks.`);
   box.addEventListener("click", () => {
     playerBlockToggle = { id: player.id, opening: true };
     expandedPlayerId = player.id;
@@ -2808,6 +3025,16 @@ function renderPlayersTable() {
     return;
   }
 
+  container.appendChild(buildSortBar(VAULT_SHELF_COLUMNS, vaultShelfSort.column, vaultShelfSort.direction, col => {
+    vaultShelfSort = vaultShelfSort.column === col.key
+      ? { column: col.key, direction: vaultShelfSort.direction === "desc" ? "asc" : "desc" }
+      : { column: col.key, direction: col.defaultDir };
+    try { localStorage.setItem(VAULT_SHELF_SORT_KEY, JSON.stringify(vaultShelfSort)); } catch { /* storage blocked -- the sort just won't be remembered */ }
+    renderPlayersTable();
+  }));
+  container.lastChild.classList.add("vault-shelf-sort");
+  container.appendChild(buildVaultScopeBar());
+
   let shown = 0;
   for (const player of podPlayers) {
     const isExpanded = expandedPlayerId === player.id;
@@ -2870,7 +3097,8 @@ function renderPlayersTable() {
     meta.className = "player-block-meta";
     const deckCount = document.createElement("span");
     deckCount.className = "deck-count";
-    deckCount.textContent = `${activeDecks.length} deck${activeDecks.length === 1 ? "" : "s"}`;
+    const playerGames = activeDecks.reduce((n, d) => n + deckGamesCount(player, d), 0);
+    deckCount.textContent = `${activeDecks.length} deck${activeDecks.length === 1 ? "" : "s"} · ${playerGames} game${playerGames === 1 ? "" : "s"}`;
     meta.appendChild(deckCount);
     const rangePill = buildPowerRangePill(activeDecks);
     if (rangePill) meta.appendChild(rangePill);
@@ -2882,7 +3110,7 @@ function renderPlayersTable() {
       if (shelfDecks.length) {
         const shelf = document.createElement("div");
         shelf.className = "vault-shelf";
-        for (const deck of [...shelfDecks].sort((a, b) => a.name.localeCompare(b.name))) shelf.appendChild(buildVaultBox(player, deck));
+        for (const deck of sortShelfDecks(player, shelfDecks)) shelf.appendChild(buildVaultBox(player, deck));
         block.appendChild(shelf);
       }
       container.appendChild(block);
@@ -2898,6 +3126,7 @@ function renderPlayersTable() {
       const dir = sortState.direction === "asc" ? 1 : -1;
       deckRows.sort((a, b) => {
         if (sortState.column === "deck") return a.deck.name.localeCompare(b.deck.name) * dir;
+        if (sortState.column === "games") return compareDecksByGames(a.deck, b.deck, sortState.direction, d => deckGamesCount(player, d));
         const av = sortState.column === "power" ? a.deck.power : a.pgPower;
         const bv = sortState.column === "power" ? b.deck.power : b.pgPower;
         // Missing Playgroup Power always sorts last regardless of
@@ -2924,9 +3153,10 @@ function renderPlayersTable() {
     const plateList = document.createElement("div");
     plateList.className = "deck-plate-list";
     deckRows.forEach(({ deck, pgPower }, i) => {
-      const plate = buildDeckPlate(deck, pgPower);
+      const plate = buildDeckPlate(player, deck, pgPower);
       plate.style.setProperty("--deal-index", String(Math.min(i, 8)));
       plateList.appendChild(plate);
+      if (openTallyDeckIds.has(deck.id)) plateList.appendChild(buildDeckTally(player, deck));
     });
     // Decks deal in under the row that was just opened, top to bottom.
     if (toggle && toggle.id === player.id && toggle.opening) block.classList.add("is-dealing");
