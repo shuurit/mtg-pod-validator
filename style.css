@@ -2408,12 +2408,142 @@ td.num {
   overflow-wrap: anywhere;
 }
 .deck-plate-sub {
+  display: block;
   margin-top: 3px;
   font-size: 0.78rem;
   color: var(--muted);
 }
 .deck-plate-right {
   flex: 0 0 auto;
+}
+
+/* The name side of a deck plate is the button that opens its game tally
+   (buildDeckPlate in app.js) -- stripped of button chrome so the plate
+   still reads as one nameplate, with a chevron saying it opens. Stretched
+   to fill the plate's left so the whole name area is the tap target. */
+button.deck-plate-open {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 8px;
+  min-height: 44px;
+  margin: -6px 0;
+  padding: 6px 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+button.deck-plate-open:active { transform: none; }
+.deck-plate-chevron {
+  /* Right of both the name and its subtitle, centred between them. */
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  display: inline-flex;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+.deck-plate-chevron svg {
+  width: 16px;
+  height: 16px;
+}
+.deck-plate-open[aria-expanded="true"] .deck-plate-chevron {
+  transform: rotate(180deg);
+  color: var(--accent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .deck-plate-chevron { transition: none; }
+}
+
+/* A deck's game tally, under its plate -- see buildDeckTally in app.js.
+   Border only, no fill of its own, same as .deck-plate, so it sits on the
+   card's glass rather than stacking a second solid panel. Tucked up under
+   the plate (negative margin against .deck-plate-list's gap) so the two
+   read as one unit. */
+.deck-tally {
+  margin-top: -4px;
+  padding: 12px 14px 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+}
+.deck-tally-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0 0 6px;
+  text-align: center;
+}
+/* dd comes before dt in the DOM, so the number reads first. */
+.deck-tally-stat dd {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.45rem;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.deck-tally-stat dt {
+  margin-top: 4px;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.deck-tally-empty {
+  margin: 8px 0 6px;
+}
+.deck-tally-history {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+.deck-tally-game {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border-soft);
+}
+/* W/L in the letter as well as the colour, so the result never rests on
+   colour alone. */
+.deck-tally-result {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+.deck-tally-result.is-win { color: var(--good); background: var(--good-bg); border-color: var(--good-border); }
+.deck-tally-result.is-loss { color: var(--bad); background: var(--bad-bg); border-color: var(--bad-border); }
+.deck-tally-game-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.deck-tally-game-top {
+  font-size: 0.84rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.deck-tally-game-sub {
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+
+/* The Vault-wide shelf sort (Name / Most played) above every player --
+   see renderPlayersTable. Sits just under the search box. */
+.vault-shelf-sort {
+  margin: 4px 0 6px;
 }
 
 /* A deck's color identity -- see buildIdentityCoin in app.js. Same dark

@@ -1936,7 +1936,7 @@ async function computeGamesData(env) {
   const { results } = await env.DB.prepare(`
     SELECT g.id AS game_id, g.season_id, s.label AS season_label, g.game_num,
            g.played_at, g.pod_size, g.playgroup_game_id,
-           p.name AS player, d.name AS commander,
+           p.name AS player, gr.deck_id, d.name AS commander,
            gr.commander_strength, gr.result, gr.place, gr.knockouts, gr.tov,
            gr.pop_off, gr.disruptions, gr.recoveries, gr.games_clearly_behind,
            gr.bracket, gr.adjusted_pod_size_score, gr.knockout_score,
@@ -1961,6 +1961,10 @@ async function computeGamesData(env) {
     podSize: r.pod_size,
     playgroupGameId: r.playgroup_game_id,
     player: r.player,
+    // The deck's own id alongside its name -- app.js's deck tally matches
+    // games to a deck by this (see isDeckGameRow in deck-tally.js), since
+    // one player can have two decks with the same commander name.
+    deckId: r.deck_id,
     commander: r.commander,
     commanderStrength: r.commander_strength,
     result: r.result,
