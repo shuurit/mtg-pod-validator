@@ -2,7 +2,7 @@
 // Uses only Node's built-in test runner -- no packages to install.
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { isDeckGameRow, computeDeckTally, formatWinRate, compareDecksByGames } = require("../deck-tally.js");
+const { indexRowsByDeck, rowsForDeck, computeDeckTally, formatWinRate, compareDecksByGames } = require("../deck-tally.js");
 
 const row = (gameNum, date, result, extra = {}) => ({ gameNum, date: new Date(date), result, player: "Mateo", commander: "Atraxa", ...extra });
 
@@ -50,17 +50,30 @@ test("a result that is neither win nor loss counts as a game but not either", ()
 });
 
 test("rows match a deck by id when the relay sends one", () => {
-  const deck = { id: 12, name: "Atraxa" };
-  assert.equal(isDeckGameRow(row(1, "2026-10-01", 1, { deckId: 12 }), "Mateo", deck), true);
-  // Same names, different deck id (a player's two decks sharing a name): not this deck.
-  assert.equal(isDeckGameRow(row(1, "2026-10-01", 1, { deckId: 13 }), "Mateo", deck), false);
+  // Same player and name, different deck ids (a player's two decks sharing a name).
+  const index = indexRowsByDeck([row(1, "2026-10-01", 1, { deckId: 12 }), row(2, "2026-10-08", 0, { deckId: 13 }), row(3, "2026-10-15", 1, { deckId: 12 })]);
+  assert.deepEqual(rowsForDeck(index, "Mateo", { id: 12, name: "Atraxa" }).map(r => r.gameNum), [1, 3]);
+  assert.deepEqual(rowsForDeck(index, "Mateo", { id: 13, name: "Atraxa" }).map(r => r.gameNum), [2]);
 });
 
 test("rows without a deck id fall back to player and commander name", () => {
-  const deck = { id: 12, name: "Atraxa" };
-  assert.equal(isDeckGameRow(row(1, "2026-10-01", 1), "Mateo", deck), true);
-  assert.equal(isDeckGameRow(row(1, "2026-10-01", 1), "Becca", deck), false);
-  assert.equal(isDeckGameRow(row(1, "2026-10-01", 1, { commander: "Prossh" }), "Mateo", deck), false);
+  const index = indexRowsByDeck([row(1, "2026-10-01", 1), row(2, "2026-10-08", 0, { player: "Becca" }), row(3, "2026-10-15", 1, { commander: "Prossh" })]);
+  assert.deepEqual(rowsForDeck(index, "Mateo", { id: 12, name: "Atraxa" }).map(r => r.gameNum), [1]);
+  assert.deepEqual(rowsForDeck(index, "Becca", { id: 20, name: "Atraxa" }).map(r => r.gameNum), [2]);
+  assert.deepEqual(rowsForDeck(index, "Mateo", { id: 99, name: "Krenko" }), []);
+});
+
+test("a deck's games across seasons all count toward its all-seasons tally", () => {
+  const rows = [
+    row(40, "2026-06-01", 1, { deckId: 12, seasonLabel: "Season 3" }),
+    row(2, "2026-10-08", 0, { deckId: 12, seasonLabel: "Season 4" }),
+    row(5, "2026-10-25", 1, { deckId: 12, seasonLabel: "Season 4" }),
+  ];
+  const t = computeDeckTally(rowsForDeck(indexRowsByDeck(rows), "Mateo", { id: 12, name: "Atraxa" }));
+  assert.equal(t.games, 3);
+  assert.equal(t.wins, 2);
+  // Newest first by date, even though the older season has the higher game number.
+  assert.deepEqual(t.history.map(r => r.seasonLabel), ["Season 4", "Season 4", "Season 3"]);
 });
 
 test("win rate formats as a whole percent, or a dash with no games", () => {
@@ -79,6 +92,12 @@ test("decks sort by games played, ties alphabetical in either direction", () => 
   ];
   assert.deepEqual([...decks].sort((a, b) => compareDecksByGames(a, b)).map(d => d.name), ["Atraxa", "Eshki", "Yuriko", "Krenko"]);
   assert.deepEqual([...decks].sort((a, b) => compareDecksByGames(a, b, "asc")).map(d => d.name), ["Krenko", "Eshki", "Yuriko", "Atraxa"]);
+});
+
+test("decks can sort by a count other than this season's", () => {
+  const allSeasons = { Atraxa: 3, Yuriko: 30 };
+  const decks = [{ name: "Atraxa", gamesLogged: 24 }, { name: "Yuriko", gamesLogged: 8 }];
+  assert.deepEqual(decks.sort((a, b) => compareDecksByGames(a, b, "desc", d => allSeasons[d.name])).map(d => d.name), ["Yuriko", "Atraxa"]);
 });
 
 test("a deck missing a games count sorts as zero", () => {

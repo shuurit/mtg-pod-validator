@@ -2540,10 +2540,21 @@ button.deck-plate-open:active { transform: none; }
   color: var(--muted);
 }
 
-/* The Vault-wide shelf sort (Name / Most played) above every player --
-   see renderPlayersTable. Sits just under the search box. */
+/* The Vault-wide shelf sort (Name / Most played) and games scope (This
+   season / All seasons) above every player -- see renderPlayersTable and
+   buildVaultScopeBar. Stacked tight under the search box as one control
+   group. */
 .vault-shelf-sort {
-  margin: 4px 0 6px;
+  margin: 4px 0 0;
+}
+.vault-scope {
+  margin: 6px 0 6px;
+}
+/* .sort-btn's invisible 44px tap area reaches 10px past each pill on
+   touch; 20px between the two bars (the same row gap .sort-bar uses on
+   touch) keeps a tap from landing on the other bar's button. */
+@media (pointer: coarse) {
+  .vault-scope { margin-top: 20px; }
 }
 
 /* A deck's color identity -- see buildIdentityCoin in app.js. Same dark

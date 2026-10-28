@@ -65,7 +65,8 @@ playgroup.gg  <--->  Cloudflare Worker relay  <--->  app.js (this site)
 
 - `index.html`, `app.js`, `style.css` — the app itself.
 - `deck-tally.js` — the per-deck game tally's stats (games, W–L, win rate,
-  last played, history), derived from this season's logged league games.
+  last played, history), derived from the logged league games for this
+  season or all seasons (the Vault's "Games:" switch).
   Kept separate from `app.js` so `tests/deck-tally.test.js` can run it with
   Node's built-in test runner — no packages to install:
   `node --test tests/*.test.js`.
