@@ -7970,9 +7970,25 @@ function deriveGameFieldsFromRawGame(rawGame) {
   // relay.js's computeAndStoreGameEventStats. A plain per-event count
   // over-counts, so KOs is the number of distinct opponents (by
   // receiver_user_id) a killer actually eliminated, not the raw event count.
+  //
+  // playgroup.gg also sometimes logs a kill as self-inflicted -- the
+  // eliminated player as both user_id and receiver_user_id -- with no
+  // record of who landed the blow (Season 4 game 7: both kills were logged
+  // against their victims). A self-logged kill goes to whoever last damaged
+  // that player before it, or to no one if nobody did. Same rule as
+  // resolveKnockouts in relay.js, which feeds the trophy stats.
+  const damageKinds = new Set(["normal_damage", "commander_damage", "poison_tokens"]);
+  const lastDamagerOf = {};
   const knockoutReceiversByDeckName = {};
-  for (const e of killEvents) {
-    const deckName = deckNameByUserId[e.user_id];
+  const allEventsInOrder = [...(rawGame.events || [])].sort((a, b) => new Date(a.happened_at) - new Date(b.happened_at));
+  for (const e of allEventsInOrder) {
+    if (damageKinds.has(e.kind) && e.user_id != null && e.receiver_user_id != null && e.user_id !== e.receiver_user_id) {
+      lastDamagerOf[e.receiver_user_id] = e.user_id;
+      continue;
+    }
+    if (e.kind !== "kill" || e.receiver_user_id == null) continue;
+    const killerUserId = e.user_id != null && e.user_id !== e.receiver_user_id ? e.user_id : lastDamagerOf[e.receiver_user_id];
+    const deckName = deckNameByUserId[killerUserId];
     if (!deckName) continue;
     if (!knockoutReceiversByDeckName[deckName]) knockoutReceiversByDeckName[deckName] = new Set();
     knockoutReceiversByDeckName[deckName].add(e.receiver_user_id);

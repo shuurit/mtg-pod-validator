@@ -921,6 +921,31 @@ function emptyEventTotals() {
   };
 }
 
+// Who knocked out whom, from a game's raw events. playgroup.gg sometimes
+// logs a kill as self-inflicted -- the eliminated player as both user_id
+// and receiver_user_id -- with no record of who landed the blow (seen in
+// Season 4 game 7: Shuurit dealt Ecthelion the final damage, and Thoros
+// dealt Shuurit his, but both kills were logged against the victim). A
+// self-logged kill goes to whoever last damaged that player before it; if
+// nobody did, no one is credited. Kept in step with
+// deriveGameFieldsFromRawGame in app.js, which applies the same rule to
+// the Games to Update KOs prefill.
+const DAMAGE_EVENT_KINDS = new Set(["normal_damage", "commander_damage", "poison_tokens"]);
+function resolveKnockouts(events) {
+  const sorted = [...(events || [])].sort((a, b) => new Date(a.happened_at) - new Date(b.happened_at));
+  const lastDamagerOf = {}; // receiver_user_id -> user_id of the latest opponent to damage them
+  const knockouts = [];
+  for (const e of sorted) {
+    if (DAMAGE_EVENT_KINDS.has(e.kind) && e.user_id != null && e.receiver_user_id != null && e.user_id !== e.receiver_user_id) {
+      lastDamagerOf[e.receiver_user_id] = e.user_id;
+    } else if (e.kind === "kill" && e.receiver_user_id != null) {
+      const killerUserId = e.user_id != null && e.user_id !== e.receiver_user_id ? e.user_id : lastDamagerOf[e.receiver_user_id];
+      if (killerUserId != null) knockouts.push({ killerUserId, receiverUserId: e.receiver_user_id });
+    }
+  }
+  return knockouts;
+}
+
 // eloCache (optional) is shared across calls in one backfill run: a deck's
 // league elo_history covers every game it played that league, so it only
 // needs fetching once per run, not once per game.
@@ -958,11 +983,6 @@ async function computeAndStoreGameEventStats(env, gameId, playgroupGameId, eloCa
     } else if (e.kind === "healing") {
       if (playerId) get(playerId).healing_done += e.amount || 0;
       if (receiverPlayerId) get(receiverPlayerId).healing_received += e.amount || 0;
-    } else if (e.kind === "kill") {
-      if (playerId) {
-        if (!knockoutReceiversByPlayer[playerId]) knockoutReceiversByPlayer[playerId] = new Set();
-        knockoutReceiversByPlayer[playerId].add(e.receiver_user_id);
-      }
     } else if (e.kind === "self_rating") {
       if (playerId) get(playerId).self_rating = e.amount ?? null;
     } else if (e.kind === "starting_player") {
@@ -991,6 +1011,12 @@ async function computeAndStoreGameEventStats(env, gameId, playgroupGameId, eloCa
     } else if (e.kind === "keep_hand") {
       if (playerId) get(playerId).kept_hand = true;
     }
+  }
+  for (const { killerUserId, receiverUserId } of resolveKnockouts(raw.events)) {
+    const playerId = userIdToPlayerId[killerUserId];
+    if (!playerId) continue;
+    if (!knockoutReceiversByPlayer[playerId]) knockoutReceiversByPlayer[playerId] = new Set();
+    knockoutReceiversByPlayer[playerId].add(receiverUserId);
   }
   for (const [playerId, receivers] of Object.entries(knockoutReceiversByPlayer)) {
     get(playerId).knockouts = receivers.size;
