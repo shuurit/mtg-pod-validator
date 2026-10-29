@@ -3014,6 +3014,9 @@ function showVaultArt(face, url) {
   img.alt = "";
   img.decoding = "async";
   img.loading = "lazy";
+  // Your corner's boxes drag into your zone (wireCornerDrag); a mouse must
+  // lift the box, not start the browser's own image drag.
+  img.draggable = false;
   img.src = url;
   // Shown only once it's in, so a slow image never flashes half-drawn.
   img.addEventListener("load", () => face.classList.add("is-loaded"), { once: true });
@@ -4135,6 +4138,8 @@ function renderPodCorner() {
       const name = document.createElement("span");
       name.className = "corner-deck-name";
       name.textContent = podShortDeckName(d.name);
+      // The commander's art fills the box, as on the Vault's shelves.
+      if (player) btn.appendChild(buildVaultArt(player, d));
       btn.appendChild(name);
       const foot = document.createElement("span");
       foot.className = "corner-deck-foot";
