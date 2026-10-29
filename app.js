@@ -3652,7 +3652,7 @@ const POD_MAX_SEATS = 8;
 const POD_ZONE = { w: 108, h: 80 };
 const POD_ZONE_DENSE = { w: 84, h: 74 };
 // The goblet's half-width, px: where every range track starts.
-const POD_HUB_R = 44;
+const POD_HUB_R = 34;
 
 // playerId -> { zone, name, box, boxText, range, marker, track } per seat.
 const podSeatEls = new Map();
@@ -3753,55 +3753,45 @@ const POD_SIGIL_SVG = (() => {
     `${medals}</svg>`;
 })();
 
-// The goblet in the middle of the mat: a bronze chalice with the five mana
-// gems set into its band, holding a flame. Each stage feeds the fire
-// (renderPodHub sets --flame and the state classes): every sealed deck lights
-// another gem and lifts the flame; ready, it breathes; checking, it roars;
-// a pass burns white-gold, a fail gutters crimson and smokes. Stops use
-// CSS variables so the metal and fire recolour with the state.
-const POD_GOBLET_SVG = (() => {
-  const gems = MANA_ORDER.map((c, k) => {
-    // Round the bowl's band: the outer two foreshortened.
-    const x = [31, 40.5, 50, 59.5, 69][k];
-    const y = [79, 81.2, 82, 81.2, 79][k];
-    const r = [3, 3.6, 4, 3.6, 3][k];
-    return `<circle class="gob-gem" data-i="${k}" style="--c:var(--pip-${c})" cx="${x}" cy="${y}" r="${r}"/>`;
-  }).join("");
+// The goblet in the middle of the mat: a painted, jewelled chalice
+// (goblet.webp, cut out from an illustration made for this mat) holding a
+// fire drawn over it. The fire sits behind the painting so it rises from
+// inside the bowl; the bowl's mouth and the five set gems glow on top.
+// Each stage feeds the fire (renderPodHub sets --flame and the state
+// classes): every sealed deck lights another gem and lifts the flame;
+// ready, it breathes; checking, it roars; a pass burns white-gold, a fail
+// gutters crimson and smokes.
+const POD_GOBLET_GEMS = [
+  // Gem centres on the painting, % of its box: W U B R G.
+  ["w", 13.7, 20.5], ["u", 29.6, 21.9], ["b", 50, 21.6], ["r", 71.1, 21.8], ["g", 87.7, 21],
+];
+const POD_GOBLET_HTML = (() => {
   const sparks = Array.from({ length: 7 }, (_, k) =>
     `<circle class="gob-spark" style="--i:${k};--x:${(-14 + k * 4.7).toFixed(1)}px" cx="50" cy="56" r="${k % 2 ? 0.9 : 1.2}"/>`).join("");
   const smoke = Array.from({ length: 4 }, (_, k) =>
     `<circle class="gob-smoke" style="--i:${k};--x:${(-6 + k * 4).toFixed(1)}px" cx="50" cy="54" r="7"/>`).join("");
   // Three tongues: a tall centre and a lick either side.
   const flame = '<path d="M50 2c2.5 11 9 15.5 11.5 25 2-4.5 1.5-9-.5-13.5 7.5 7 12.5 18.5 11 31.5C70.6 57.6 61.5 66 50 66s-20.6-8.4-22-21c-1-9 2.6-16.4 8.2-23-.4 5.8 1.2 9.6 4 12.4C39 22 44.2 13 50 2z"/>';
-  return '<svg class="gob" viewBox="0 0 100 150" aria-hidden="true"><defs>' +
-    '<linearGradient id="gob-metal" x1="0" x2="1"><stop offset="0" style="stop-color:var(--gob-3)"/><stop offset=".3" style="stop-color:var(--gob-1)"/><stop offset=".45" style="stop-color:var(--gob-hi)"/><stop offset=".7" style="stop-color:var(--gob-2)"/><stop offset="1" style="stop-color:var(--gob-3)"/></linearGradient>' +
-    '<radialGradient id="gob-glow"><stop offset="0" style="stop-color:var(--fire-mid)" stop-opacity=".9"/><stop offset="1" style="stop-color:var(--fire-outer)" stop-opacity="0"/></radialGradient>' +
+  const gems = POD_GOBLET_GEMS.map(([c, x, y], k) =>
+    `<span class="gob-gem" data-i="${k}" style="--c:var(--pip-${c});--i:${k};left:${x}%;top:${y}%"></span>`).join("");
+  return '<span class="gob" aria-hidden="true">' +
+    '<svg class="gob-fx" viewBox="0 0 100 70"><defs>' +
     // The fire's colour runs from its hot base to a fading tip; one per layer.
     ['outer', 'mid', 'core'].map(l => `<linearGradient id="gob-fire-${l}" x1="0" y1="1" x2="0" y2="0"><stop offset="0" style="stop-color:var(--fire-${l === 'outer' ? 'mid' : 'core'})"/><stop offset=".3" style="stop-color:var(--fire-${l})"/><stop offset="1" style="stop-color:var(--fire-${l})" stop-opacity="0"/></linearGradient>`).join("") +
     '<filter id="gob-soft" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="1.6"/></filter>' +
+    '<radialGradient id="gob-glow"><stop offset="0" style="stop-color:var(--fire-mid)" stop-opacity=".9"/><stop offset="1" style="stop-color:var(--fire-outer)" stop-opacity="0"/></radialGradient>' +
     '<radialGradient id="gob-smoke-fill"><stop offset="0" stop-color="#3a3330" stop-opacity=".7"/><stop offset="1" stop-color="#3a3330" stop-opacity="0"/></radialGradient>' +
     '</defs>' +
-    '<ellipse class="gob-halo" cx="50" cy="44" rx="44" ry="40" fill="url(#gob-glow)"/>' +
+    '<ellipse class="gob-halo" cx="50" cy="44" rx="46" ry="36" fill="url(#gob-glow)"/>' +
     `<g class="gob-smokes">${smoke}</g>` +
-    // Inner layers shrink toward the rim's centre (50,66) in the SVG itself,
+    // Inner layers shrink toward the flame's base (50,66) in the SVG itself,
     // so the CSS flicker on each layer composes with it.
     `<g class="gob-fire"><g class="gob-flame is-outer" fill="url(#gob-fire-outer)" filter="url(#gob-soft)">${flame}</g>` +
     `<g class="gob-flame is-mid" fill="url(#gob-fire-mid)"><g transform="translate(50 66) scale(.62 .68) translate(-50 -66)">${flame}</g></g>` +
     `<g class="gob-flame is-core" fill="url(#gob-fire-core)"><g transform="translate(50 66) scale(.32 .4) translate(-50 -66)">${flame}</g></g></g>` +
-    `<g class="gob-sparks">${sparks}</g>` +
-    // Foot, stem and knot, then the bowl and its rim.
-    '<path class="gob-metal" fill="url(#gob-metal)" d="M29 141c3-7 13-10 18-12h6c5 2 15 5 18 12z"/>' +
-    '<ellipse class="gob-metal" fill="url(#gob-metal)" cx="50" cy="141" rx="21" ry="4.2"/>' +
-    '<path class="gob-metal" fill="url(#gob-metal)" d="M46.5 100h7l-1 29h-5z"/>' +
-    '<ellipse class="gob-metal" fill="url(#gob-metal)" cx="50" cy="107" rx="7.5" ry="4.6"/>' +
-    '<ellipse class="gob-metal" fill="url(#gob-metal)" cx="50" cy="118" rx="4.6" ry="2.4"/>' +
-    '<path class="gob-metal" fill="url(#gob-metal)" d="M20 62c0 24 13 39 30 39s30-15 30-39z"/>' +
-    // Engraving: a filigree line under the rim, the gem band, a scroll below.
-    '<path class="gob-engrave" d="M23.5 70c8 3.5 18 5 26.5 5s18.5-1.5 26.5-5M27 88c7 3 15 4.2 23 4.2s16-1.2 23-4.2M50 92.4l-3 4 3 3.2 3-3.2z"/>' +
-    `<g class="gob-gems">${gems}</g>` +
-    '<ellipse class="gob-metal is-rim" fill="url(#gob-metal)" cx="50" cy="62" rx="30" ry="6"/>' +
-    '<ellipse class="gob-mouth" cx="50" cy="62" rx="26.5" ry="4.2"/>' +
-    '</svg>';
+    `<g class="gob-sparks">${sparks}</g></svg>` +
+    '<span class="gob-cup"><img class="gob-art" src="goblet.webp" alt="" draggable="false" decoding="async">' +
+    `<span class="gob-mouth"></span>${gems}</span></span>`;
 })();
 
 function podMatFlatSaved() {
@@ -3819,7 +3809,7 @@ function buildPodTable(container) {
     <div class="mat-tracks" aria-hidden="true"></div>
     <div class="mat-zones"></div>
     <div class="mat-hub">
-      <button type="button" class="mat-emblem">${POD_GOBLET_SVG}</button>
+      <button type="button" class="mat-emblem">${POD_GOBLET_HTML}</button>
       <span class="mat-hub-label"></span>
     </div>
     <p class="mat-empty">Tap a member below to pull up a seat.</p>`;
@@ -4467,7 +4457,7 @@ function renderPodHub() {
   } else if (failed) {
     label = "Spread too wide";
     aria = "The goblet gutters: a deck is over this pod's range";
-    flame = 0.5;
+    flame = 0.6;
     lit = 0;
   } else {
     label = n ? `${sealed} of ${n} decks sealed` : "No seats yet";
