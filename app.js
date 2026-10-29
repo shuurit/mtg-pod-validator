@@ -227,6 +227,8 @@ let rosterDiffData = null; // raw playgroup.gg roster/decks from loadRosterDiff,
 // pumpVaultArt). Up here because renderPlayersTable first runs while this
 // file loads.
 let vaultArtObserver = null;
+// Every season's game rows by deck, for deckDisplayBracket (allGameRowIndex).
+let allRowIndexCache = { rows: null, index: null };
 const vaultArtQueue = [];
 let vaultArtBusy = false;
 const VAULT_ART_KEY = "vaultCommanderArt";
@@ -2738,8 +2740,8 @@ function deckGamesCount(player, deck) {
 }
 
 // Every season's rows by deck, whatever the Vault's scope: a deck's bracket
-// carries over from season to season.
-let allRowIndexCache = { rows: null, index: null };
+// carries over from season to season. Its cache is declared up with the
+// Vault art state, since renderPlayersTable first runs while this file loads.
 function allGameRowIndex() {
   if (allRowIndexCache.rows !== gameLogAllRows) allRowIndexCache = { rows: gameLogAllRows, index: indexRowsByDeck(gameLogAllRows) };
   return allRowIndexCache.index;
@@ -2751,7 +2753,9 @@ function allGameRowIndex() {
 // playgroup.gg's own rating for the deck.
 function deckDisplayBracket(player, deck) {
   if (deck.bracket) return deck.bracket;
-  const logged = rowsForDeck(allGameRowIndex(), player.name, deck).filter(r => Number.isInteger(r.bracket) && r.bracket > 0);
+  // Checked first: the first render runs while this file loads, before the
+  // game log rows even exist (same guard as deckGamesCount).
+  const logged = !gameLogLoaded ? [] : rowsForDeck(allGameRowIndex(), player.name, deck).filter(r => Number.isInteger(r.bracket) && r.bracket > 0);
   if (logged.length) return computeDeckTally(logged).history[0].bracket;
   const pg = findPlaygroupDeck(player.name, deck);
   return pg && Number.isInteger(pg.bracket) && pg.bracket > 0 ? pg.bracket : null;
