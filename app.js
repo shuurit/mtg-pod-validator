@@ -3624,7 +3624,7 @@ function decksAvailableForSlot(slot) {
 
 // ---------- Set Up Pod: the command zone mat ----------
 // The pod as a printed playmat: one command zone per seat round the edge,
-// the Sol Ring in the middle. Your own seat is always the zone nearest you (the
+// the goblet in the middle. Your own seat is always the zone nearest you (the
 // bottom); everyone else follows clockwise. A seat's zone carries its whole
 // state (see podSeatState):
 //   waiting  -- seated, no deck yet: an empty dashed zone
@@ -3635,7 +3635,7 @@ function decksAvailableForSlot(slot) {
 // Each zone carries that seat's range gauge. It stays hidden until a
 // check, then a marker lands on it: the gold half is in range, the red half
 // is over. Same relative numbers the gauge under the mat draws -- never a
-// deck's own power. A line runs from the Sol Ring to every zone, lit gold or
+// deck's own power. A line runs from the goblet to every zone, lit gold or
 // red by the same check.
 //
 // "Lay flat" turns every zone to face its own edge, for a phone or tablet
@@ -3651,8 +3651,8 @@ const POD_MAX_SEATS = 8;
 // neighbours round the curve don't overlap.
 const POD_ZONE = { w: 108, h: 80 };
 const POD_ZONE_DENSE = { w: 84, h: 74 };
-// The Sol Ring's radius, px: where every range track starts.
-const POD_HUB_R = 54;
+// The goblet's half-width, px: where every range track starts.
+const POD_HUB_R = 34;
 
 // playerId -> { zone, name, box, boxText, range, marker, track } per seat.
 const podSeatEls = new Map();
@@ -3703,34 +3703,59 @@ function podCheckEntry(playerId) {
   return liveTableCheck.entries.find(e => String(e.playerId) === playerId) || null;
 }
 
-// The Sol Ring in the middle of the mat: a metal band lying on the felt,
-// drawn in CSS 3D, with the five mana stones (WUBRG, clockwise from the
-// top) set into it. Its outer and inner walls are rings of thin plates,
-// each shaded once by where it sits against the light. Dull while decks go
-// in; gold with every stone lit when the power spread passes, rusted iron
-// with embers when it fails (renderPodHub sets the state classes).
-const POD_RING_PLATES = 32;
-const POD_RING_HTML = (() => {
-  let plates = "";
-  for (let k = 0; k < POD_RING_PLATES; k++) {
-    const a = (k / POD_RING_PLATES) * 360;
-    const shade = ((0.55 - 0.5 * Math.cos(((a - 30) * Math.PI) / 180)) * 0.6).toFixed(2);
-    // Outer wall only: an inner wall barely shows from this angle, and its
-    // plates z-fought the band's top while the ring turned.
-    plates += `<i class="sol-plate" style="--shade:${shade};transform:rotateZ(${a}deg) translateY(50px) translateZ(5px) rotateX(-90deg)"></i>`;
-  }
-  const stones = ["w", "u", "b", "r", "g"].map((c, k) =>
-    `<i class="sol-stone" style="--c:var(--pip-${c});--i:${k};transform:rotateZ(${k * 72}deg) translateY(-43px) translateZ(10.5px)"></i>`).join("");
-  const embers = Array.from({ length: 6 }, (_, k) =>
-    `<i style="--i:${k};--x:${-30 + k * 12}px;--dx:${(k % 2 ? 1 : -1) * (4 + k * 2)}px"></i>`).join("");
-  return '<span class="sol-stage" aria-hidden="true">' +
-    '<span class="sol-tilt"><span class="sol-pool"></span><span class="sol-shadow"></span>' +
-    `<span class="sol-spin"><span class="sol-top"></span><span class="sol-groove"></span>${plates}${stones}</span></span>` +
-    `<span class="sol-beam"></span><span class="sol-embers">${embers}</span></span>`;
-})();
+// The playmat's art (mat-art.webp, painted for this mat): tooled leather
+// with a gold summoning circle and the five mana medallions round it. It's
+// laid out at the art's own 2:3 shape, fitted to the mat's width and
+// centred, so these medallion spots (% of the art) land on the painting
+// whatever the mat's height. Each takes its mana colour when the pod
+// passes (.mat.is-passed, set by renderPodHub); a fail reddens the circle.
+const POD_MAT_MEDALS = [
+  ["w", 50, 21.5], ["u", 85, 36.5], ["b", 77.2, 65.8], ["r", 22.7, 65.8], ["g", 14.6, 36.5],
+];
+const POD_MAT_ART_HTML = '<div class="mat-art" aria-hidden="true">' +
+  POD_MAT_MEDALS.map(([c, x, y]) => `<span class="mat-medal" style="--c:var(--pip-${c});left:${x}%;top:${y}%"></span>`).join("") +
+  "</div>";
 
-const POD_MARK_TICK = '<svg class="sol-mark" viewBox="0 0 26 26" aria-hidden="true"><path d="M5 13.5 L10.5 19 L21 7.5"/></svg>';
-const POD_MARK_CROSS = '<svg class="sol-mark" viewBox="0 0 26 26" aria-hidden="true"><path d="M7 7 L19 19 M19 7 L7 19"/></svg>';
+// The goblet in the middle of the mat: a painted, jewelled chalice
+// (goblet.webp, cut out from an illustration made for this mat) holding a
+// fire drawn over it. The fire sits behind the painting so it rises from
+// inside the bowl; the bowl's mouth and the five set gems glow on top.
+// Each stage feeds the fire (renderPodHub sets --flame and the state
+// classes): every sealed deck lights another gem and lifts the flame;
+// ready, it breathes; checking, it roars; a pass burns white-gold, a fail
+// gutters crimson and smokes.
+const POD_GOBLET_GEMS = [
+  // Gem centres on the painting, % of its box: W U B R G.
+  ["w", 13.7, 20.5], ["u", 29.6, 21.9], ["b", 50, 21.6], ["r", 71.1, 21.8], ["g", 87.7, 21],
+];
+const POD_GOBLET_HTML = (() => {
+  const sparks = Array.from({ length: 7 }, (_, k) =>
+    `<circle class="gob-spark" style="--i:${k};--x:${(-14 + k * 4.7).toFixed(1)}px" cx="50" cy="56" r="${k % 2 ? 0.9 : 1.2}"/>`).join("");
+  const smoke = Array.from({ length: 4 }, (_, k) =>
+    `<circle class="gob-smoke" style="--i:${k};--x:${(-6 + k * 4).toFixed(1)}px" cx="50" cy="54" r="7"/>`).join("");
+  // Three tongues: a tall centre and a lick either side.
+  const flame = '<path d="M50 2c2.5 11 9 15.5 11.5 25 2-4.5 1.5-9-.5-13.5 7.5 7 12.5 18.5 11 31.5C70.6 57.6 61.5 66 50 66s-20.6-8.4-22-21c-1-9 2.6-16.4 8.2-23-.4 5.8 1.2 9.6 4 12.4C39 22 44.2 13 50 2z"/>';
+  const gems = POD_GOBLET_GEMS.map(([c, x, y], k) =>
+    `<span class="gob-gem" data-i="${k}" style="--c:var(--pip-${c});--i:${k};left:${x}%;top:${y}%"></span>`).join("");
+  return '<span class="gob" aria-hidden="true">' +
+    '<svg class="gob-fx" viewBox="0 0 100 70"><defs>' +
+    // The fire's colour runs from its hot base to a fading tip; one per layer.
+    ['outer', 'mid', 'core'].map(l => `<linearGradient id="gob-fire-${l}" x1="0" y1="1" x2="0" y2="0"><stop offset="0" style="stop-color:var(--fire-${l === 'outer' ? 'mid' : 'core'})"/><stop offset=".3" style="stop-color:var(--fire-${l})"/><stop offset="1" style="stop-color:var(--fire-${l})" stop-opacity="0"/></linearGradient>`).join("") +
+    '<filter id="gob-soft" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="1.6"/></filter>' +
+    '<radialGradient id="gob-glow"><stop offset="0" style="stop-color:var(--fire-mid)" stop-opacity=".9"/><stop offset="1" style="stop-color:var(--fire-outer)" stop-opacity="0"/></radialGradient>' +
+    '<radialGradient id="gob-smoke-fill"><stop offset="0" stop-color="#3a3330" stop-opacity=".7"/><stop offset="1" stop-color="#3a3330" stop-opacity="0"/></radialGradient>' +
+    '</defs>' +
+    '<ellipse class="gob-halo" cx="50" cy="44" rx="46" ry="36" fill="url(#gob-glow)"/>' +
+    `<g class="gob-smokes">${smoke}</g>` +
+    // Inner layers shrink toward the flame's base (50,66) in the SVG itself,
+    // so the CSS flicker on each layer composes with it.
+    `<g class="gob-fire"><g class="gob-flame is-outer" fill="url(#gob-fire-outer)" filter="url(#gob-soft)">${flame}</g>` +
+    `<g class="gob-flame is-mid" fill="url(#gob-fire-mid)"><g transform="translate(50 66) scale(.62 .68) translate(-50 -66)">${flame}</g></g>` +
+    `<g class="gob-flame is-core" fill="url(#gob-fire-core)"><g transform="translate(50 66) scale(.32 .4) translate(-50 -66)">${flame}</g></g></g>` +
+    `<g class="gob-sparks">${sparks}</g></svg>` +
+    '<span class="gob-cup"><img class="gob-art" src="goblet.webp" alt="" draggable="false" decoding="async">' +
+    `<span class="gob-mouth"></span>${gems}</span></span>`;
+})();
 
 function podMatFlatSaved() {
   try { return localStorage.getItem("podMatFlat") === "1"; } catch { return false; }
@@ -3743,11 +3768,11 @@ function buildPodTable(container) {
   mat.className = "mat";
   mat.classList.toggle("is-flat", podMatFlatSaved());
   mat.innerHTML = `
-    <span class="mat-ring" aria-hidden="true"></span>
+    ${POD_MAT_ART_HTML}
     <div class="mat-tracks" aria-hidden="true"></div>
     <div class="mat-zones"></div>
     <div class="mat-hub">
-      <button type="button" class="mat-emblem">${POD_RING_HTML}<span class="mat-emblem-face"></span></button>
+      <button type="button" class="mat-emblem">${POD_GOBLET_HTML}</button>
       <span class="mat-hub-label"></span>
     </div>
     <p class="mat-empty">Tap a member below to pull up a seat.</p>`;
@@ -3779,7 +3804,7 @@ function buildPodTable(container) {
   ui.tracks = mat.querySelector(".mat-tracks");
   ui.zones = mat.querySelector(".mat-zones");
   ui.emblem = mat.querySelector(".mat-emblem");
-  ui.emblemFace = mat.querySelector(".mat-emblem-face");
+  ui.gems = [...mat.querySelectorAll(".gob-gem")];
   ui.hubLabel = mat.querySelector(".mat-hub-label");
   ui.empty = mat.querySelector(".mat-empty");
   // Beside the card's heading rather than on the mat, where a seven- or
@@ -4362,10 +4387,11 @@ function removePodZone(id, entry) {
   setTimeout(finish, REDUCED_MOTION.matches ? 0 : 220);
 }
 
-// The Sol Ring in the middle: a count while decks go in, the check itself
-// once every deck is sealed (same action as the button under the mat), then
-// gold with every stone lit when the spread passes, or rusted when it
-// doesn't.
+// The goblet in the middle: its fire tracks the table. Each sealed deck
+// lights another gem and lifts the flame; once every deck is in it's the
+// check itself (same action as the button under the mat); then it burns
+// white-gold on a pass or gutters crimson on a fail, and the mat's sigil
+// lights with it.
 function renderPodHub() {
   const n = podSelections.length;
   const emblem = podUi.emblem;
@@ -4373,40 +4399,49 @@ function renderPodHub() {
   const passed = podRevealed && !!liveTableCheck;
   const ready = n > 0 && !podRevealed && sealed === n && !podPendingCheck && (!liveTableCheck || liveTableStale || !liveTableCheck.passed);
   const failed = !passed && !ready && !podPendingCheck && !!liveTableCheck && !liveTableStale && !liveTableCheck.passed;
-  let face, label, action = null, aria;
+  const share = n ? sealed / n : 0;
+  let label, action = null, aria, flame, lit;
   if (passed) {
-    face = POD_MARK_TICK;
     label = "Power spread passes";
-    aria = `Sol Ring lit: ${label.toLowerCase()}`;
+    aria = "The goblet burns gold: the power spread passes";
+    flame = 1.25;
+    lit = 5;
   } else if (podPendingCheck) {
-    face = "";
     label = "Checking the spread";
     aria = label;
+    flame = 1.15;
+    lit = 5;
   } else if (ready) {
-    face = "Go";
     label = "Tap to shuffle up";
     action = runPodCheck;
     aria = "Shuffle up: check the deck power spread";
+    flame = 0.9;
+    lit = 5;
   } else if (failed) {
-    face = POD_MARK_CROSS;
     label = "Spread too wide";
-    aria = "Power spread fails: a deck is over this pod's range";
+    aria = "The goblet gutters: a deck is over this pod's range";
+    flame = 0.6;
+    lit = 0;
   } else {
-    face = n ? `${sealed}/${n}` : "";
-    label = n ? "Decks sealed" : "No seats yet";
-    aria = n ? `${sealed} of ${n} decks sealed` : label;
+    label = n ? `${sealed} of ${n} decks sealed` : "No seats yet";
+    aria = label;
+    // Unlit with no one seated; then an ember that grows with each deck.
+    flame = n ? 0.22 + share * 0.5 : 0;
+    lit = Math.round(share * 5);
   }
-  // Only the two drawn marks are markup; counts and "Go" stay text.
-  if (face.startsWith("<svg")) podUi.emblemFace.innerHTML = face;
-  else podUi.emblemFace.textContent = face;
   podUi.hubLabel.textContent = label;
   podUi.emblemAction = action;
   emblem.setAttribute("aria-label", aria);
+  emblem.style.setProperty("--flame", flame.toFixed(2));
+  podUi.gems.forEach((g, i) => g.classList.toggle("is-lit", i < lit));
+  emblem.classList.toggle("is-cold", flame === 0);
   emblem.classList.toggle("is-ready", ready);
   emblem.classList.toggle("is-passed", passed);
   emblem.classList.toggle("is-failed", failed);
   emblem.setAttribute("aria-disabled", action ? "false" : "true");
   emblem.classList.toggle("is-checking", podPendingCheck);
+  podUi.mat.classList.toggle("is-passed", passed);
+  podUi.mat.classList.toggle("is-failed", failed);
 
   // The flare plays once per check result, when it lands on this phone --
   // not when the app opens onto a table that already passed or failed.
@@ -4418,7 +4453,7 @@ function renderPodHub() {
       emblem.classList.remove("is-flaring");
       void emblem.offsetWidth;
       emblem.classList.add("is-flaring");
-      setTimeout(() => emblem.classList.remove("is-flaring"), 1000);
+      setTimeout(() => emblem.classList.remove("is-flaring"), 1200);
     }
   } else if (!resultKey) podUi.litFor = null;
 }
@@ -5716,11 +5751,11 @@ function renderPodCheckResults() {
 }
 
 // A pass on any phone plays the reveal on every phone: the deck boxes open
-// and the Sol Ring lights first, then "To the Game!" opens over it. A timer, not
+// and the goblet flares first, then "To the Game!" opens over it. A timer, not
 // an animation event, so it opens even if the animation is skipped; dropped
 // if the pod changes before it fires.
 function schedulePodReveal(checkId) {
-  // Long enough for the Sol Ring to start lighting, not to finish: a longer
+  // Long enough for the goblet to start flaring, not to finish: a longer
   // wait read as the check itself being slow.
   const delay = REDUCED_MOTION.matches ? 0 : Math.min(800, 300 + podSelections.length * 60);
   setTimeout(() => {
