@@ -3617,7 +3617,7 @@ function decksAvailableForSlot(slot) {
 
 // ---------- Set Up Pod: the command zone mat ----------
 // The pod as a printed playmat: one command zone per seat round the edge,
-// the mana emblem in the middle. Your own seat is always the zone nearest you (the
+// the Sol Ring in the middle. Your own seat is always the zone nearest you (the
 // bottom); everyone else follows clockwise. A seat's zone carries its whole
 // state (see podSeatState):
 //   waiting  -- seated, no deck yet: an empty dashed zone
@@ -3628,7 +3628,7 @@ function decksAvailableForSlot(slot) {
 // Each zone carries that seat's range gauge. It stays hidden until a
 // check, then a marker lands on it: the gold half is in range, the red half
 // is over. Same relative numbers the gauge under the mat draws -- never a
-// deck's own power. A line runs from the emblem to every zone, lit gold or
+// deck's own power. A line runs from the Sol Ring to every zone, lit gold or
 // red by the same check.
 //
 // "Lay flat" turns every zone to face its own edge, for a phone or tablet
@@ -3644,8 +3644,8 @@ const POD_MAX_SEATS = 8;
 // neighbours round the curve don't overlap.
 const POD_ZONE = { w: 108, h: 80 };
 const POD_ZONE_DENSE = { w: 84, h: 74 };
-// The emblem's radius, px: where every range track starts.
-const POD_HUB_R = 48;
+// The Sol Ring's radius, px: where every range track starts.
+const POD_HUB_R = 54;
 
 // playerId -> { zone, name, box, boxText, range, marker, track } per seat.
 const podSeatEls = new Map();
@@ -3696,20 +3696,34 @@ function podCheckEntry(playerId) {
   return liveTableCheck.entries.find(e => String(e.playerId) === playerId) || null;
 }
 
-// The five mana pips round a ring, WUBRG clockwise from the top. Dim while
-// decks go in; every pip lights in its own colour when the pod's power
-// spread passes, and the ring goes red when it doesn't (renderPodHub).
-const POD_EMBLEM_SVG = (() => {
-  const pips = ["w", "u", "b", "r", "g"].map((c, k) => {
-    const a = ((-90 + k * 72) * Math.PI) / 180;
-    return `<circle class="mat-emblem-pip" style="--pip: var(--pip-${c})" cx="${(20 + 12.5 * Math.cos(a)).toFixed(2)}" cy="${(20 + 12.5 * Math.sin(a)).toFixed(2)}" r="4.3"/>`;
-  }).join("");
-  return '<svg class="mat-emblem-svg" viewBox="0 0 40 40" aria-hidden="true">' +
-    '<circle class="mat-emblem-body" cx="20" cy="20" r="18.6"/>' +
-    '<circle class="mat-emblem-ring" cx="20" cy="20" r="12.5"/>' +
-    pips +
-    '<circle class="mat-emblem-core" cx="20" cy="20" r="7.6"/></svg>';
+// The Sol Ring in the middle of the mat: a metal band lying on the felt,
+// drawn in CSS 3D, with the five mana stones (WUBRG, clockwise from the
+// top) set into it. Its outer and inner walls are rings of thin plates,
+// each shaded once by where it sits against the light. Dull while decks go
+// in; gold with every stone lit when the power spread passes, rusted iron
+// with embers when it fails (renderPodHub sets the state classes).
+const POD_RING_PLATES = 32;
+const POD_RING_HTML = (() => {
+  let plates = "";
+  for (let k = 0; k < POD_RING_PLATES; k++) {
+    const a = (k / POD_RING_PLATES) * 360;
+    const shade = ((0.55 - 0.5 * Math.cos(((a - 30) * Math.PI) / 180)) * 0.6).toFixed(2);
+    // Outer wall only: an inner wall barely shows from this angle, and its
+    // plates z-fought the band's top while the ring turned.
+    plates += `<i class="sol-plate" style="--shade:${shade};transform:rotateZ(${a}deg) translateY(50px) translateZ(5px) rotateX(-90deg)"></i>`;
+  }
+  const stones = ["w", "u", "b", "r", "g"].map((c, k) =>
+    `<i class="sol-stone" style="--c:var(--pip-${c});--i:${k};transform:rotateZ(${k * 72}deg) translateY(-43px) translateZ(10.5px)"></i>`).join("");
+  const embers = Array.from({ length: 6 }, (_, k) =>
+    `<i style="--i:${k};--x:${-30 + k * 12}px;--dx:${(k % 2 ? 1 : -1) * (4 + k * 2)}px"></i>`).join("");
+  return '<span class="sol-stage" aria-hidden="true">' +
+    '<span class="sol-tilt"><span class="sol-pool"></span><span class="sol-shadow"></span>' +
+    `<span class="sol-spin"><span class="sol-top"></span><span class="sol-groove"></span>${plates}${stones}</span></span>` +
+    `<span class="sol-beam"></span><span class="sol-embers">${embers}</span></span>`;
 })();
+
+const POD_MARK_TICK = '<svg class="sol-mark" viewBox="0 0 26 26" aria-hidden="true"><path d="M5 13.5 L10.5 19 L21 7.5"/></svg>';
+const POD_MARK_CROSS = '<svg class="sol-mark" viewBox="0 0 26 26" aria-hidden="true"><path d="M7 7 L19 19 M19 7 L7 19"/></svg>';
 
 function podMatFlatSaved() {
   try { return localStorage.getItem("podMatFlat") === "1"; } catch { return false; }
@@ -3726,7 +3740,7 @@ function buildPodTable(container) {
     <div class="mat-tracks" aria-hidden="true"></div>
     <div class="mat-zones"></div>
     <div class="mat-hub">
-      <button type="button" class="mat-emblem">${POD_EMBLEM_SVG}<span class="mat-emblem-face"></span></button>
+      <button type="button" class="mat-emblem">${POD_RING_HTML}<span class="mat-emblem-face"></span></button>
       <span class="mat-hub-label"></span>
     </div>
     <p class="mat-empty">Tap a member below to pull up a seat.</p>`;
@@ -4290,7 +4304,7 @@ function layoutPodMat() {
     entry.zone.style.setProperty("--r", flat ? `${spot.edge * 90}deg` : "0deg");
     const dist = Math.hypot(spot.x, spot.y);
     const a = (Math.atan2(spot.y, spot.x) * 180) / Math.PI;
-    // From the emblem's edge to the zone's: the line runs under the zone, so
+    // From the ring's edge to the zone's: the line runs under the zone, so
     // stopping at its edge just keeps it from showing through the border.
     const end = dist - podZoneEntry(spot.x / dist, spot.y / dist, size);
     entry.track.style.setProperty("--a", `${a.toFixed(1)}deg`);
@@ -4339,9 +4353,9 @@ function removePodZone(id, entry) {
   setTimeout(finish, REDUCED_MOTION.matches ? 0 : 220);
 }
 
-// The emblem in the middle: a count while decks go in, the check itself
+// The Sol Ring in the middle: a count while decks go in, the check itself
 // once every deck is sealed (same action as the button under the mat), then
-// lit -- every pip in its colour -- when the spread passes, or red when it
+// gold with every stone lit when the spread passes, or rusted when it
 // doesn't.
 function renderPodHub() {
   const n = podSelections.length;
@@ -4352,11 +4366,11 @@ function renderPodHub() {
   const failed = !passed && !ready && !podPendingCheck && !!liveTableCheck && !liveTableStale && !liveTableCheck.passed;
   let face, label, action = null, aria;
   if (passed) {
-    face = "✓";
+    face = POD_MARK_TICK;
     label = "Power spread passes";
-    aria = `Emblem lit: ${label.toLowerCase()}`;
+    aria = `Sol Ring lit: ${label.toLowerCase()}`;
   } else if (podPendingCheck) {
-    face = "…";
+    face = "";
     label = "Checking the spread";
     aria = label;
   } else if (ready) {
@@ -4365,7 +4379,7 @@ function renderPodHub() {
     action = runPodCheck;
     aria = "Shuffle up: check the deck power spread";
   } else if (failed) {
-    face = "✕";
+    face = POD_MARK_CROSS;
     label = "Spread too wide";
     aria = "Power spread fails: a deck is over this pod's range";
   } else {
@@ -4373,7 +4387,9 @@ function renderPodHub() {
     label = n ? "Decks sealed" : "No seats yet";
     aria = n ? `${sealed} of ${n} decks sealed` : label;
   }
-  podUi.emblemFace.textContent = face;
+  // Only the two drawn marks are markup; counts and "Go" stay text.
+  if (face.startsWith("<svg")) podUi.emblemFace.innerHTML = face;
+  else podUi.emblemFace.textContent = face;
   podUi.hubLabel.textContent = label;
   podUi.emblemAction = action;
   emblem.setAttribute("aria-label", aria);
@@ -4393,7 +4409,7 @@ function renderPodHub() {
       emblem.classList.remove("is-flaring");
       void emblem.offsetWidth;
       emblem.classList.add("is-flaring");
-      setTimeout(() => emblem.classList.remove("is-flaring"), 900);
+      setTimeout(() => emblem.classList.remove("is-flaring"), 1000);
     }
   } else if (!resultKey) podUi.litFor = null;
 }
@@ -5691,11 +5707,11 @@ function renderPodCheckResults() {
 }
 
 // A pass on any phone plays the reveal on every phone: the deck boxes open
-// and the emblem lights first, then "To the Game!" opens over it. A timer, not
+// and the Sol Ring lights first, then "To the Game!" opens over it. A timer, not
 // an animation event, so it opens even if the animation is skipped; dropped
 // if the pod changes before it fires.
 function schedulePodReveal(checkId) {
-  // Long enough for the emblem to start lighting, not to finish: a longer
+  // Long enough for the Sol Ring to start lighting, not to finish: a longer
   // wait read as the check itself being slow.
   const delay = REDUCED_MOTION.matches ? 0 : Math.min(800, 300 + podSelections.length * 60);
   setTimeout(() => {
