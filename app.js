@@ -222,9 +222,10 @@ const POD_SLEEVES = ["#7a2e2e", "#24486e", "#2f5e40", "#5c3d6e", "#7a5a22", "#2d
 // (web-animation rule 7).
 let playerBlockToggle = null; // { id, opening }
 let rosterDiffData = null; // raw playgroup.gg roster/decks from loadRosterDiff, used for the Playgroup Power comparison column too
-// Vault box commander portraits: loaded as boxes scroll near view, one
-// Scryfall lookup at a time (see pumpVaultArt). Up here because
-// renderPlayersTable first runs while this file loads.
+// Vault box commander art from Scryfall, for decks playgroup.gg has no art
+// for: loaded as boxes scroll near view, one lookup at a time (see
+// pumpVaultArt). Up here because renderPlayersTable first runs while this
+// file loads.
 let vaultArtObserver = null;
 const vaultArtQueue = [];
 let vaultArtBusy = false;
@@ -2736,6 +2737,26 @@ function deckGamesCount(player, deck) {
   return rowsForDeck(deckGameRowIndex(), player.name, deck).length;
 }
 
+// Every season's rows by deck, whatever the Vault's scope: a deck's bracket
+// carries over from season to season.
+let allRowIndexCache = { rows: null, index: null };
+function allGameRowIndex() {
+  if (allRowIndexCache.rows !== gameLogAllRows) allRowIndexCache = { rows: gameLogAllRows, index: indexRowsByDeck(gameLogAllRows) };
+  return allRowIndexCache.index;
+}
+
+// The bracket a Vault box shows. /players only sends a declared one
+// (decks.bracket), so most decks came through empty; after that comes the
+// bracket of the deck's latest logged game in any season, then
+// playgroup.gg's own rating for the deck.
+function deckDisplayBracket(player, deck) {
+  if (deck.bracket) return deck.bracket;
+  const logged = rowsForDeck(allGameRowIndex(), player.name, deck).filter(r => Number.isInteger(r.bracket) && r.bracket > 0);
+  if (logged.length) return computeDeckTally(logged).history[0].bracket;
+  const pg = findPlaygroupDeck(player.name, deck);
+  return pg && Number.isInteger(pg.bracket) && pg.bracket > 0 ? pg.bracket : null;
+}
+
 function vaultScopeText() {
   return vaultGamesScope === "all" ? "across all seasons" : "this season";
 }
@@ -2835,6 +2856,13 @@ function formatTallyDay(d, withWeekday = true) {
 // Returns null if roster-diff data hasn't loaded, the player has no
 // linked playgroup.gg account, or no matching deck is found there.
 function findPlaygroupPowerLevel(playerName, deck) {
+  const match = findPlaygroupDeck(playerName, deck);
+  return match && typeof match.power_level === "number" ? match.power_level : null;
+}
+
+// The playgroup.gg deck behind one of ours (see findPlaygroupPowerLevel for
+// the matching), or null.
+function findPlaygroupDeck(playerName, deck) {
   if (!rosterDiffData) return null;
   const member = rosterDiffData.members.find(m => m.mapped_player === playerName);
   if (!member) return null;
@@ -2844,7 +2872,7 @@ function findPlaygroupPowerLevel(playerName, deck) {
     const target = normalizeCommanderName(deck.name);
     match = pgDecks.find(d => normalizeCommanderName(d.commander_name) === target);
   }
-  return match && typeof match.power_level === "number" ? match.power_level : null;
+  return match || null;
 }
 
 // ---------- The Vault ----------
@@ -2915,7 +2943,7 @@ function buildVaultBox(player, deck) {
   const name = document.createElement("span");
   name.className = "vault-box-name";
   name.textContent = podShortDeckName(deck.name);
-  box.append(buildVaultArt(deck), name);
+  box.append(buildVaultArt(player, deck), name);
   const tags = [];
   if (deck.newDeck) tags.push(["New", "is-new"]);
   if (deck.comboFlagged) tags.push(["Combo watch", "is-combo"]);
@@ -2934,13 +2962,15 @@ function buildVaultBox(player, deck) {
   foot.className = "vault-box-foot";
   const bracket = document.createElement("span");
   bracket.className = "vault-box-bracket";
-  bracket.textContent = deck.bracket ? `B${deck.bracket}` : "B?";
+  const bracketNum = deckDisplayBracket(player, deck);
+  bracket.textContent = bracketNum ? `B${bracketNum}` : "B?";
+  bracket.title = bracketNum ? `Bracket ${bracketNum}` : "No bracket yet";
   const games = document.createElement("span");
   const gameCount = deckGamesCount(player, deck);
   games.textContent = `${gameCount} ${gameCount === 1 ? "game" : "games"}`;
   foot.append(bracket, games);
   box.appendChild(foot);
-  box.setAttribute("aria-label", `${deck.name}, ${player.name}'s deck, ${deck.bracket ? "bracket " + deck.bracket : "no bracket yet"}, ${gameCount} games logged ${vaultScopeText()}. Open ${player.name}'s decks.`);
+  box.setAttribute("aria-label", `${deck.name}, ${player.name}'s deck, ${bracketNum ? "bracket " + bracketNum : "no bracket yet"}, ${gameCount} games logged ${vaultScopeText()}. Open ${player.name}'s decks.`);
   box.addEventListener("click", () => {
     playerBlockToggle = { id: player.id, opening: true };
     expandedPlayerId = player.id;
@@ -2950,25 +2980,44 @@ function buildVaultBox(player, deck) {
   return box;
 }
 
-// One round portrait per commander (two for partners), filled in by
-// pumpVaultArt. Decorative: the box's name and aria-label already say whose
-// deck it is.
-function buildVaultArt(deck) {
+// The commander's art fills the whole box (partners split it down the
+// middle). playgroup.gg already hands over each deck's art crop; only a deck
+// it doesn't know waits on a Scryfall lookup (pumpVaultArt). Decorative: the
+// box's name and aria-label already say whose deck it is.
+function buildVaultArt(player, deck) {
   const wrap = document.createElement("span");
   wrap.className = "vault-box-art";
   wrap.setAttribute("aria-hidden", "true");
-  for (const card of splitCommanderNames(deck.name).slice(0, 2)) {
-    const coin = document.createElement("span");
-    coin.className = "vault-art-coin";
-    coin.dataset.card = card;
-    wrap.appendChild(coin);
-    observeVaultArt(coin);
+  const pg = findPlaygroupDeck(player.name, deck);
+  const known = pg ? [pg.commander_art_url, pg.partner_art_url].filter(Boolean) : [];
+  const cards = splitCommanderNames(deck.name).slice(0, 2);
+  const count = Math.max(known.length, cards.length) || 1;
+  for (let k = 0; k < count; k++) {
+    const face = document.createElement("span");
+    face.className = "vault-art-face";
+    if (known[k]) showVaultArt(face, known[k]);
+    else if (cards[k]) {
+      face.dataset.card = cards[k];
+      observeVaultArt(face);
+    }
+    wrap.appendChild(face);
   }
   return wrap;
 }
 
-function observeVaultArt(coin) {
-  if (!("IntersectionObserver" in window)) { queueVaultArt(coin); return; }
+function showVaultArt(face, url) {
+  const img = document.createElement("img");
+  img.alt = "";
+  img.decoding = "async";
+  img.loading = "lazy";
+  img.src = url;
+  // Shown only once it's in, so a slow image never flashes half-drawn.
+  img.addEventListener("load", () => face.classList.add("is-loaded"), { once: true });
+  face.appendChild(img);
+}
+
+function observeVaultArt(face) {
+  if (!("IntersectionObserver" in window)) { queueVaultArt(face); return; }
   vaultArtObserver ||= new IntersectionObserver(entries => {
     for (const e of entries) {
       if (!e.isIntersecting) continue;
@@ -2976,29 +3025,29 @@ function observeVaultArt(coin) {
       queueVaultArt(e.target);
     }
   }, { rootMargin: "200px" });
-  vaultArtObserver.observe(coin);
+  vaultArtObserver.observe(face);
 }
 
 function loadVaultArtUrls() {
   try { return JSON.parse(localStorage.getItem(VAULT_ART_KEY)) || {}; } catch { return {}; }
 }
 
-function queueVaultArt(coin) {
-  vaultArtQueue.push(coin);
+function queueVaultArt(face) {
+  vaultArtQueue.push(face);
   pumpVaultArt();
 }
 
 // Art URLs are remembered on this phone, so only a commander it has never
 // shown costs a Scryfall lookup -- spaced 100ms apart, as Scryfall asks.
-// A lookup that fails just leaves the plain coin.
+// A lookup that fails just leaves the sleeve colour showing.
 async function pumpVaultArt() {
   if (vaultArtBusy) return;
   vaultArtBusy = true;
   const saved = loadVaultArtUrls();
   while (vaultArtQueue.length) {
-    const coin = vaultArtQueue.shift();
-    if (!coin.isConnected) continue;
-    const card = coin.dataset.card;
+    const face = vaultArtQueue.shift();
+    if (!face.isConnected) continue;
+    const card = face.dataset.card;
     let url = saved[card];
     if (!url) {
       const art = await fetchCommanderArt(card);
@@ -3009,14 +3058,7 @@ async function pumpVaultArt() {
       }
       await new Promise(r => setTimeout(r, 100));
     }
-    if (!url) continue;
-    const img = document.createElement("img");
-    img.alt = "";
-    img.decoding = "async";
-    img.src = url;
-    // Shown only once it's in, so a slow image never flashes half-drawn.
-    img.addEventListener("load", () => coin.classList.add("is-loaded"), { once: true });
-    coin.appendChild(img);
+    if (url) showVaultArt(face, url);
   }
   vaultArtBusy = false;
 }
@@ -3575,7 +3617,7 @@ function decksAvailableForSlot(slot) {
 
 // ---------- Set Up Pod: the command zone mat ----------
 // The pod as a printed playmat: one command zone per seat round the edge,
-// the mana emblem in the middle. Your own seat is always the zone nearest you (the
+// the Sol Ring in the middle. Your own seat is always the zone nearest you (the
 // bottom); everyone else follows clockwise. A seat's zone carries its whole
 // state (see podSeatState):
 //   waiting  -- seated, no deck yet: an empty dashed zone
@@ -3586,7 +3628,7 @@ function decksAvailableForSlot(slot) {
 // Each zone carries that seat's range gauge. It stays hidden until a
 // check, then a marker lands on it: the gold half is in range, the red half
 // is over. Same relative numbers the gauge under the mat draws -- never a
-// deck's own power. A line runs from the emblem to every zone, lit gold or
+// deck's own power. A line runs from the Sol Ring to every zone, lit gold or
 // red by the same check.
 //
 // "Lay flat" turns every zone to face its own edge, for a phone or tablet
@@ -3602,8 +3644,8 @@ const POD_MAX_SEATS = 8;
 // neighbours round the curve don't overlap.
 const POD_ZONE = { w: 108, h: 80 };
 const POD_ZONE_DENSE = { w: 84, h: 74 };
-// The emblem's radius, px: where every range track starts.
-const POD_HUB_R = 48;
+// The Sol Ring's radius, px: where every range track starts.
+const POD_HUB_R = 54;
 
 // playerId -> { zone, name, box, boxText, range, marker, track } per seat.
 const podSeatEls = new Map();
@@ -3654,20 +3696,34 @@ function podCheckEntry(playerId) {
   return liveTableCheck.entries.find(e => String(e.playerId) === playerId) || null;
 }
 
-// The five mana pips round a ring, WUBRG clockwise from the top. Dim while
-// decks go in; every pip lights in its own colour when the pod's power
-// spread passes, and the ring goes red when it doesn't (renderPodHub).
-const POD_EMBLEM_SVG = (() => {
-  const pips = ["w", "u", "b", "r", "g"].map((c, k) => {
-    const a = ((-90 + k * 72) * Math.PI) / 180;
-    return `<circle class="mat-emblem-pip" style="--pip: var(--pip-${c})" cx="${(20 + 12.5 * Math.cos(a)).toFixed(2)}" cy="${(20 + 12.5 * Math.sin(a)).toFixed(2)}" r="4.3"/>`;
-  }).join("");
-  return '<svg class="mat-emblem-svg" viewBox="0 0 40 40" aria-hidden="true">' +
-    '<circle class="mat-emblem-body" cx="20" cy="20" r="18.6"/>' +
-    '<circle class="mat-emblem-ring" cx="20" cy="20" r="12.5"/>' +
-    pips +
-    '<circle class="mat-emblem-core" cx="20" cy="20" r="7.6"/></svg>';
+// The Sol Ring in the middle of the mat: a metal band lying on the felt,
+// drawn in CSS 3D, with the five mana stones (WUBRG, clockwise from the
+// top) set into it. Its outer and inner walls are rings of thin plates,
+// each shaded once by where it sits against the light. Dull while decks go
+// in; gold with every stone lit when the power spread passes, rusted iron
+// with embers when it fails (renderPodHub sets the state classes).
+const POD_RING_PLATES = 32;
+const POD_RING_HTML = (() => {
+  let plates = "";
+  for (let k = 0; k < POD_RING_PLATES; k++) {
+    const a = (k / POD_RING_PLATES) * 360;
+    const shade = ((0.55 - 0.5 * Math.cos(((a - 30) * Math.PI) / 180)) * 0.6).toFixed(2);
+    // Outer wall only: an inner wall barely shows from this angle, and its
+    // plates z-fought the band's top while the ring turned.
+    plates += `<i class="sol-plate" style="--shade:${shade};transform:rotateZ(${a}deg) translateY(50px) translateZ(5px) rotateX(-90deg)"></i>`;
+  }
+  const stones = ["w", "u", "b", "r", "g"].map((c, k) =>
+    `<i class="sol-stone" style="--c:var(--pip-${c});--i:${k};transform:rotateZ(${k * 72}deg) translateY(-43px) translateZ(10.5px)"></i>`).join("");
+  const embers = Array.from({ length: 6 }, (_, k) =>
+    `<i style="--i:${k};--x:${-30 + k * 12}px;--dx:${(k % 2 ? 1 : -1) * (4 + k * 2)}px"></i>`).join("");
+  return '<span class="sol-stage" aria-hidden="true">' +
+    '<span class="sol-tilt"><span class="sol-pool"></span><span class="sol-shadow"></span>' +
+    `<span class="sol-spin"><span class="sol-top"></span><span class="sol-groove"></span>${plates}${stones}</span></span>` +
+    `<span class="sol-beam"></span><span class="sol-embers">${embers}</span></span>`;
 })();
+
+const POD_MARK_TICK = '<svg class="sol-mark" viewBox="0 0 26 26" aria-hidden="true"><path d="M5 13.5 L10.5 19 L21 7.5"/></svg>';
+const POD_MARK_CROSS = '<svg class="sol-mark" viewBox="0 0 26 26" aria-hidden="true"><path d="M7 7 L19 19 M19 7 L7 19"/></svg>';
 
 function podMatFlatSaved() {
   try { return localStorage.getItem("podMatFlat") === "1"; } catch { return false; }
@@ -3684,7 +3740,7 @@ function buildPodTable(container) {
     <div class="mat-tracks" aria-hidden="true"></div>
     <div class="mat-zones"></div>
     <div class="mat-hub">
-      <button type="button" class="mat-emblem">${POD_EMBLEM_SVG}<span class="mat-emblem-face"></span></button>
+      <button type="button" class="mat-emblem">${POD_RING_HTML}<span class="mat-emblem-face"></span></button>
       <span class="mat-hub-label"></span>
     </div>
     <p class="mat-empty">Tap a member below to pull up a seat.</p>`;
@@ -4248,7 +4304,7 @@ function layoutPodMat() {
     entry.zone.style.setProperty("--r", flat ? `${spot.edge * 90}deg` : "0deg");
     const dist = Math.hypot(spot.x, spot.y);
     const a = (Math.atan2(spot.y, spot.x) * 180) / Math.PI;
-    // From the emblem's edge to the zone's: the line runs under the zone, so
+    // From the ring's edge to the zone's: the line runs under the zone, so
     // stopping at its edge just keeps it from showing through the border.
     const end = dist - podZoneEntry(spot.x / dist, spot.y / dist, size);
     entry.track.style.setProperty("--a", `${a.toFixed(1)}deg`);
@@ -4297,9 +4353,9 @@ function removePodZone(id, entry) {
   setTimeout(finish, REDUCED_MOTION.matches ? 0 : 220);
 }
 
-// The emblem in the middle: a count while decks go in, the check itself
+// The Sol Ring in the middle: a count while decks go in, the check itself
 // once every deck is sealed (same action as the button under the mat), then
-// lit -- every pip in its colour -- when the spread passes, or red when it
+// gold with every stone lit when the spread passes, or rusted when it
 // doesn't.
 function renderPodHub() {
   const n = podSelections.length;
@@ -4310,11 +4366,11 @@ function renderPodHub() {
   const failed = !passed && !ready && !podPendingCheck && !!liveTableCheck && !liveTableStale && !liveTableCheck.passed;
   let face, label, action = null, aria;
   if (passed) {
-    face = "✓";
+    face = POD_MARK_TICK;
     label = "Power spread passes";
-    aria = `Emblem lit: ${label.toLowerCase()}`;
+    aria = `Sol Ring lit: ${label.toLowerCase()}`;
   } else if (podPendingCheck) {
-    face = "…";
+    face = "";
     label = "Checking the spread";
     aria = label;
   } else if (ready) {
@@ -4323,7 +4379,7 @@ function renderPodHub() {
     action = runPodCheck;
     aria = "Shuffle up: check the deck power spread";
   } else if (failed) {
-    face = "✕";
+    face = POD_MARK_CROSS;
     label = "Spread too wide";
     aria = "Power spread fails: a deck is over this pod's range";
   } else {
@@ -4331,7 +4387,9 @@ function renderPodHub() {
     label = n ? "Decks sealed" : "No seats yet";
     aria = n ? `${sealed} of ${n} decks sealed` : label;
   }
-  podUi.emblemFace.textContent = face;
+  // Only the two drawn marks are markup; counts and "Go" stay text.
+  if (face.startsWith("<svg")) podUi.emblemFace.innerHTML = face;
+  else podUi.emblemFace.textContent = face;
   podUi.hubLabel.textContent = label;
   podUi.emblemAction = action;
   emblem.setAttribute("aria-label", aria);
@@ -4351,7 +4409,7 @@ function renderPodHub() {
       emblem.classList.remove("is-flaring");
       void emblem.offsetWidth;
       emblem.classList.add("is-flaring");
-      setTimeout(() => emblem.classList.remove("is-flaring"), 900);
+      setTimeout(() => emblem.classList.remove("is-flaring"), 1000);
     }
   } else if (!resultKey) podUi.litFor = null;
 }
@@ -5649,11 +5707,11 @@ function renderPodCheckResults() {
 }
 
 // A pass on any phone plays the reveal on every phone: the deck boxes open
-// and the emblem lights first, then "To the Game!" opens over it. A timer, not
+// and the Sol Ring lights first, then "To the Game!" opens over it. A timer, not
 // an animation event, so it opens even if the animation is skipped; dropped
 // if the pod changes before it fires.
 function schedulePodReveal(checkId) {
-  // Long enough for the emblem to start lighting, not to finish: a longer
+  // Long enough for the Sol Ring to start lighting, not to finish: a longer
   // wait read as the check itself being slow.
   const delay = REDUCED_MOTION.matches ? 0 : Math.min(800, 300 + podSelections.length * 60);
   setTimeout(() => {
