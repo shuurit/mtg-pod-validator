@@ -6587,59 +6587,82 @@ button.vault-arrivals-more {
   gap: 8px;
   padding: 2px 0 14px;
 }
+/* A deck box is a card: the commander's art edge to edge (buildVaultArt),
+   framed in the player's sleeve colour, with the name and foot set on a
+   scrim at the bottom like a card's type line. Without art (still loading,
+   or no match) the sleeve colour fills it, as the boxes always were. */
 button.vault-box {
-  min-height: 84px;
+  position: relative;
+  isolation: isolate;
+  aspect-ratio: 63 / 88;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 4px;
-  padding: 8px 9px;
+  padding: 8px 8px 7px;
+  overflow: hidden;
   border: 0;
   border-radius: 9px;
   background: var(--sleeve);
-  box-shadow: inset 0 -8px 0 rgba(0, 0, 0, 0.22), inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 4px 10px rgba(0, 0, 0, 0.18);
+  box-shadow: inset 0 0 0 2.5px var(--sleeve), inset 0 0 0 3.5px rgba(255, 255, 255, 0.16), 0 6px 14px rgba(0, 0, 0, 0.28);
   color: #efe6d2;
   text-align: left;
 }
 @media (hover: hover) and (pointer: fine) {
-  button.vault-box:hover { color: #efe6d2; box-shadow: inset 0 -8px 0 rgba(0, 0, 0, 0.22), 0 0 0 2px var(--foil); }
+  button.vault-box:hover { color: #efe6d2; box-shadow: inset 0 0 0 2.5px var(--sleeve), 0 0 0 2px var(--foil), 0 6px 14px rgba(0, 0, 0, 0.28); }
+  button.vault-box:hover .vault-art-face img { transform: scale(1.06); }
 }
-.vault-box-name {
-  font-family: var(--font-display);
-  font-weight: 600;
-  font-size: 0.98rem;
-  line-height: 1.02;
-  text-transform: uppercase;
-  overflow-wrap: anywhere;
+.vault-box-art {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  display: flex;
 }
-/* Commander portraits (buildVaultArt): a dark coin until pumpVaultArt's
-   art_crop arrives, then the art fades in. Partners overlap. */
-.vault-box-art { display: flex; min-height: 30px; }
-.vault-art-coin {
-  position: relative;
-  width: 30px;
-  height: 30px;
-  flex: none;
+/* The scrim: clear over the face, dark under the text. Tinted with the
+   sleeve so the type line still says whose deck it is. */
+.vault-box-art::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(to bottom, rgba(8, 10, 9, 0.55) 0%, transparent 22%, transparent 42%, color-mix(in srgb, var(--sleeve) 35%, rgba(8, 10, 9, 0.92)) 78%);
+}
+.vault-art-face {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.28);
-  box-shadow: 0 0 0 1.5px rgba(201, 161, 63, 0.7), 0 2px 4px rgba(0, 0, 0, 0.3);
 }
-.vault-art-coin + .vault-art-coin { margin-left: -9px; }
-.vault-art-coin img {
+.vault-art-face + .vault-art-face { box-shadow: -1px 0 0 rgba(0, 0, 0, 0.6); }
+.vault-art-face img {
   width: 100%;
   height: 100%;
   display: block;
   object-fit: cover;
+  /* art_crop centres the subject; a face usually sits a little above. */
+  object-position: 50% 30%;
   opacity: 0;
-  transition: opacity 0.25s ease-out;
+  transition: opacity 0.3s ease-out, transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-.vault-art-coin.is-loaded img { opacity: 1; }
+.vault-art-face.is-loaded img { opacity: 1; }
 @media (prefers-reduced-motion: reduce) {
-  .vault-art-coin img { transition: none; }
+  .vault-art-face img { transition: none; }
 }
-.vault-box-tags { display: flex; flex-wrap: wrap; gap: 3px; }
+.vault-box-name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 0.98rem;
+  line-height: 1.02;
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+/* Tags ride the top edge, over the art, out of the type line's way. */
+.vault-box-tags { order: -1; margin-bottom: auto; display: flex; flex-wrap: wrap; gap: 3px; }
 .vault-box-tag {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(8, 10, 9, 0.72);
   font-size: 0.6rem;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -6653,12 +6676,16 @@ button.vault-box {
   gap: 4px;
   font-size: 0.68rem;
   white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
 }
 .vault-box-bracket {
   padding: 0 5px;
   border-radius: 4px;
-  background: rgba(0, 0, 0, 0.3);
-  font-weight: 600;
+  background: rgba(8, 10, 9, 0.6);
+  box-shadow: inset 0 0 0 1px rgba(201, 161, 63, 0.55);
+  color: #f3dc9b;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 .deck-plate.is-found {
   animation: vault-found 1.4s ease-out;

@@ -222,9 +222,10 @@ const POD_SLEEVES = ["#7a2e2e", "#24486e", "#2f5e40", "#5c3d6e", "#7a5a22", "#2d
 // (web-animation rule 7).
 let playerBlockToggle = null; // { id, opening }
 let rosterDiffData = null; // raw playgroup.gg roster/decks from loadRosterDiff, used for the Playgroup Power comparison column too
-// Vault box commander portraits: loaded as boxes scroll near view, one
-// Scryfall lookup at a time (see pumpVaultArt). Up here because
-// renderPlayersTable first runs while this file loads.
+// Vault box commander art from Scryfall, for decks playgroup.gg has no art
+// for: loaded as boxes scroll near view, one lookup at a time (see
+// pumpVaultArt). Up here because renderPlayersTable first runs while this
+// file loads.
 let vaultArtObserver = null;
 const vaultArtQueue = [];
 let vaultArtBusy = false;
@@ -2736,6 +2737,26 @@ function deckGamesCount(player, deck) {
   return rowsForDeck(deckGameRowIndex(), player.name, deck).length;
 }
 
+// Every season's rows by deck, whatever the Vault's scope: a deck's bracket
+// carries over from season to season.
+let allRowIndexCache = { rows: null, index: null };
+function allGameRowIndex() {
+  if (allRowIndexCache.rows !== gameLogAllRows) allRowIndexCache = { rows: gameLogAllRows, index: indexRowsByDeck(gameLogAllRows) };
+  return allRowIndexCache.index;
+}
+
+// The bracket a Vault box shows. /players only sends a declared one
+// (decks.bracket), so most decks came through empty; after that comes the
+// bracket of the deck's latest logged game in any season, then
+// playgroup.gg's own rating for the deck.
+function deckDisplayBracket(player, deck) {
+  if (deck.bracket) return deck.bracket;
+  const logged = rowsForDeck(allGameRowIndex(), player.name, deck).filter(r => Number.isInteger(r.bracket) && r.bracket > 0);
+  if (logged.length) return computeDeckTally(logged).history[0].bracket;
+  const pg = findPlaygroupDeck(player.name, deck);
+  return pg && Number.isInteger(pg.bracket) && pg.bracket > 0 ? pg.bracket : null;
+}
+
 function vaultScopeText() {
   return vaultGamesScope === "all" ? "across all seasons" : "this season";
 }
@@ -2835,6 +2856,13 @@ function formatTallyDay(d, withWeekday = true) {
 // Returns null if roster-diff data hasn't loaded, the player has no
 // linked playgroup.gg account, or no matching deck is found there.
 function findPlaygroupPowerLevel(playerName, deck) {
+  const match = findPlaygroupDeck(playerName, deck);
+  return match && typeof match.power_level === "number" ? match.power_level : null;
+}
+
+// The playgroup.gg deck behind one of ours (see findPlaygroupPowerLevel for
+// the matching), or null.
+function findPlaygroupDeck(playerName, deck) {
   if (!rosterDiffData) return null;
   const member = rosterDiffData.members.find(m => m.mapped_player === playerName);
   if (!member) return null;
@@ -2844,7 +2872,7 @@ function findPlaygroupPowerLevel(playerName, deck) {
     const target = normalizeCommanderName(deck.name);
     match = pgDecks.find(d => normalizeCommanderName(d.commander_name) === target);
   }
-  return match && typeof match.power_level === "number" ? match.power_level : null;
+  return match || null;
 }
 
 // ---------- The Vault ----------
@@ -2915,7 +2943,7 @@ function buildVaultBox(player, deck) {
   const name = document.createElement("span");
   name.className = "vault-box-name";
   name.textContent = podShortDeckName(deck.name);
-  box.append(buildVaultArt(deck), name);
+  box.append(buildVaultArt(player, deck), name);
   const tags = [];
   if (deck.newDeck) tags.push(["New", "is-new"]);
   if (deck.comboFlagged) tags.push(["Combo watch", "is-combo"]);
@@ -2934,13 +2962,15 @@ function buildVaultBox(player, deck) {
   foot.className = "vault-box-foot";
   const bracket = document.createElement("span");
   bracket.className = "vault-box-bracket";
-  bracket.textContent = deck.bracket ? `B${deck.bracket}` : "B?";
+  const bracketNum = deckDisplayBracket(player, deck);
+  bracket.textContent = bracketNum ? `B${bracketNum}` : "B?";
+  bracket.title = bracketNum ? `Bracket ${bracketNum}` : "No bracket yet";
   const games = document.createElement("span");
   const gameCount = deckGamesCount(player, deck);
   games.textContent = `${gameCount} ${gameCount === 1 ? "game" : "games"}`;
   foot.append(bracket, games);
   box.appendChild(foot);
-  box.setAttribute("aria-label", `${deck.name}, ${player.name}'s deck, ${deck.bracket ? "bracket " + deck.bracket : "no bracket yet"}, ${gameCount} games logged ${vaultScopeText()}. Open ${player.name}'s decks.`);
+  box.setAttribute("aria-label", `${deck.name}, ${player.name}'s deck, ${bracketNum ? "bracket " + bracketNum : "no bracket yet"}, ${gameCount} games logged ${vaultScopeText()}. Open ${player.name}'s decks.`);
   box.addEventListener("click", () => {
     playerBlockToggle = { id: player.id, opening: true };
     expandedPlayerId = player.id;
@@ -2950,25 +2980,44 @@ function buildVaultBox(player, deck) {
   return box;
 }
 
-// One round portrait per commander (two for partners), filled in by
-// pumpVaultArt. Decorative: the box's name and aria-label already say whose
-// deck it is.
-function buildVaultArt(deck) {
+// The commander's art fills the whole box (partners split it down the
+// middle). playgroup.gg already hands over each deck's art crop; only a deck
+// it doesn't know waits on a Scryfall lookup (pumpVaultArt). Decorative: the
+// box's name and aria-label already say whose deck it is.
+function buildVaultArt(player, deck) {
   const wrap = document.createElement("span");
   wrap.className = "vault-box-art";
   wrap.setAttribute("aria-hidden", "true");
-  for (const card of splitCommanderNames(deck.name).slice(0, 2)) {
-    const coin = document.createElement("span");
-    coin.className = "vault-art-coin";
-    coin.dataset.card = card;
-    wrap.appendChild(coin);
-    observeVaultArt(coin);
+  const pg = findPlaygroupDeck(player.name, deck);
+  const known = pg ? [pg.commander_art_url, pg.partner_art_url].filter(Boolean) : [];
+  const cards = splitCommanderNames(deck.name).slice(0, 2);
+  const count = Math.max(known.length, cards.length) || 1;
+  for (let k = 0; k < count; k++) {
+    const face = document.createElement("span");
+    face.className = "vault-art-face";
+    if (known[k]) showVaultArt(face, known[k]);
+    else if (cards[k]) {
+      face.dataset.card = cards[k];
+      observeVaultArt(face);
+    }
+    wrap.appendChild(face);
   }
   return wrap;
 }
 
-function observeVaultArt(coin) {
-  if (!("IntersectionObserver" in window)) { queueVaultArt(coin); return; }
+function showVaultArt(face, url) {
+  const img = document.createElement("img");
+  img.alt = "";
+  img.decoding = "async";
+  img.loading = "lazy";
+  img.src = url;
+  // Shown only once it's in, so a slow image never flashes half-drawn.
+  img.addEventListener("load", () => face.classList.add("is-loaded"), { once: true });
+  face.appendChild(img);
+}
+
+function observeVaultArt(face) {
+  if (!("IntersectionObserver" in window)) { queueVaultArt(face); return; }
   vaultArtObserver ||= new IntersectionObserver(entries => {
     for (const e of entries) {
       if (!e.isIntersecting) continue;
@@ -2976,29 +3025,29 @@ function observeVaultArt(coin) {
       queueVaultArt(e.target);
     }
   }, { rootMargin: "200px" });
-  vaultArtObserver.observe(coin);
+  vaultArtObserver.observe(face);
 }
 
 function loadVaultArtUrls() {
   try { return JSON.parse(localStorage.getItem(VAULT_ART_KEY)) || {}; } catch { return {}; }
 }
 
-function queueVaultArt(coin) {
-  vaultArtQueue.push(coin);
+function queueVaultArt(face) {
+  vaultArtQueue.push(face);
   pumpVaultArt();
 }
 
 // Art URLs are remembered on this phone, so only a commander it has never
 // shown costs a Scryfall lookup -- spaced 100ms apart, as Scryfall asks.
-// A lookup that fails just leaves the plain coin.
+// A lookup that fails just leaves the sleeve colour showing.
 async function pumpVaultArt() {
   if (vaultArtBusy) return;
   vaultArtBusy = true;
   const saved = loadVaultArtUrls();
   while (vaultArtQueue.length) {
-    const coin = vaultArtQueue.shift();
-    if (!coin.isConnected) continue;
-    const card = coin.dataset.card;
+    const face = vaultArtQueue.shift();
+    if (!face.isConnected) continue;
+    const card = face.dataset.card;
     let url = saved[card];
     if (!url) {
       const art = await fetchCommanderArt(card);
@@ -3009,14 +3058,7 @@ async function pumpVaultArt() {
       }
       await new Promise(r => setTimeout(r, 100));
     }
-    if (!url) continue;
-    const img = document.createElement("img");
-    img.alt = "";
-    img.decoding = "async";
-    img.src = url;
-    // Shown only once it's in, so a slow image never flashes half-drawn.
-    img.addEventListener("load", () => coin.classList.add("is-loaded"), { once: true });
-    coin.appendChild(img);
+    if (url) showVaultArt(face, url);
   }
   vaultArtBusy = false;
 }
