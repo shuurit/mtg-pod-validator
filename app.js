@@ -3651,8 +3651,9 @@ const POD_MAX_SEATS = 8;
 // neighbours round the curve don't overlap.
 const POD_ZONE = { w: 108, h: 80 };
 const POD_ZONE_DENSE = { w: 84, h: 74 };
-// The goblet's half-width, px: where every range track starts.
-const POD_HUB_R = 34;
+// Where every range track starts, px: just outside the goblet's rim as
+// seen from above.
+const POD_HUB_R = 58;
 
 // playerId -> { zone, name, box, boxText, range, marker, track } per seat.
 const podSeatEls = new Map();
@@ -3716,46 +3717,294 @@ const POD_MAT_ART_HTML = '<div class="mat-art" aria-hidden="true">' +
   POD_MAT_MEDALS.map(([c, x, y]) => `<span class="mat-medal" style="--c:var(--pip-${c});left:${x}%;top:${y}%"></span>`).join("") +
   "</div>";
 
-// The goblet in the middle of the mat: a painted, jewelled chalice
-// (goblet.webp, cut out from an illustration made for this mat) holding a
-// fire drawn over it. The fire sits behind the painting so it rises from
-// inside the bowl; the bowl's mouth and the five set gems glow on top.
-// Each stage feeds the fire (renderPodHub sets --flame and the state
-// classes): every sealed deck lights another gem and lifts the flame;
-// ready, it breathes; checking, it roars; a pass burns white-gold, a fail
-// gutters crimson and smokes.
-const POD_GOBLET_GEMS = [
-  // Gem centres on the painting, % of its box: W U B R G.
-  ["w", 13.7, 20.5], ["u", 29.6, 21.9], ["b", 50, 21.6], ["r", 71.1, 21.8], ["g", 87.7, 21],
-];
+// The goblet in the middle of the mat, in two paintings made for this mat.
+// While decks go in the table looks straight down into it (goblet-top.webp):
+// a fire in the bowl that grows with each sealed deck, and an orb that flies
+// in from a seat each time one seals (launchPodOrb). Once the check has a
+// result it turns to stand on the mat (goblet.webp), burning gold on a
+// pass or guttering crimson on a fail. Both fires are canvas particle fires
+// (createGobletFire); the set gems light one per sealed deck.
+const POD_GOBLET_GEMS = {
+  // Gem centres on each painting, % of its box: W U B R G.
+  side: [["w", 13.7, 20.5], ["u", 29.6, 21.9], ["b", 50, 21.6], ["r", 71.1, 21.8], ["g", 87.7, 21]],
+  top: [["w", 50, 7], ["u", 89, 33.3], ["b", 79.7, 78.1], ["r", 20.1, 78.1], ["g", 11, 33.3]],
+};
 const POD_GOBLET_HTML = (() => {
-  const sparks = Array.from({ length: 7 }, (_, k) =>
-    `<circle class="gob-spark" style="--i:${k};--x:${(-14 + k * 4.7).toFixed(1)}px" cx="50" cy="56" r="${k % 2 ? 0.9 : 1.2}"/>`).join("");
-  const smoke = Array.from({ length: 4 }, (_, k) =>
-    `<circle class="gob-smoke" style="--i:${k};--x:${(-6 + k * 4).toFixed(1)}px" cx="50" cy="54" r="7"/>`).join("");
-  // Three tongues: a tall centre and a lick either side.
-  const flame = '<path d="M50 2c2.5 11 9 15.5 11.5 25 2-4.5 1.5-9-.5-13.5 7.5 7 12.5 18.5 11 31.5C70.6 57.6 61.5 66 50 66s-20.6-8.4-22-21c-1-9 2.6-16.4 8.2-23-.4 5.8 1.2 9.6 4 12.4C39 22 44.2 13 50 2z"/>';
-  const gems = POD_GOBLET_GEMS.map(([c, x, y], k) =>
+  const gems = (view) => POD_GOBLET_GEMS[view].map(([c, x, y], k) =>
     `<span class="gob-gem" data-i="${k}" style="--c:var(--pip-${c});--i:${k};left:${x}%;top:${y}%"></span>`).join("");
   return '<span class="gob" aria-hidden="true">' +
-    '<svg class="gob-fx" viewBox="0 0 100 70"><defs>' +
-    // The fire's colour runs from its hot base to a fading tip; one per layer.
-    ['outer', 'mid', 'core'].map(l => `<linearGradient id="gob-fire-${l}" x1="0" y1="1" x2="0" y2="0"><stop offset="0" style="stop-color:var(--fire-${l === 'outer' ? 'mid' : 'core'})"/><stop offset=".3" style="stop-color:var(--fire-${l})"/><stop offset="1" style="stop-color:var(--fire-${l})" stop-opacity="0"/></linearGradient>`).join("") +
-    '<filter id="gob-soft" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="1.6"/></filter>' +
-    '<radialGradient id="gob-glow"><stop offset="0" style="stop-color:var(--fire-mid)" stop-opacity=".9"/><stop offset="1" style="stop-color:var(--fire-outer)" stop-opacity="0"/></radialGradient>' +
-    '<radialGradient id="gob-smoke-fill"><stop offset="0" stop-color="#3a3330" stop-opacity=".7"/><stop offset="1" stop-color="#3a3330" stop-opacity="0"/></radialGradient>' +
-    '</defs>' +
-    '<ellipse class="gob-halo" cx="50" cy="44" rx="46" ry="36" fill="url(#gob-glow)"/>' +
-    `<g class="gob-smokes">${smoke}</g>` +
-    // Inner layers shrink toward the flame's base (50,66) in the SVG itself,
-    // so the CSS flicker on each layer composes with it.
-    `<g class="gob-fire"><g class="gob-flame is-outer" fill="url(#gob-fire-outer)" filter="url(#gob-soft)">${flame}</g>` +
-    `<g class="gob-flame is-mid" fill="url(#gob-fire-mid)"><g transform="translate(50 66) scale(.62 .68) translate(-50 -66)">${flame}</g></g>` +
-    `<g class="gob-flame is-core" fill="url(#gob-fire-core)"><g transform="translate(50 66) scale(.32 .4) translate(-50 -66)">${flame}</g></g></g>` +
-    `<g class="gob-sparks">${sparks}</g></svg>` +
+    // From above: the fire is laid over the painting's bowl opening.
+    '<span class="gob-view gob-top"><span class="gob-top-box">' +
+    '<img class="gob-art" src="goblet-top.webp" alt="" draggable="false" decoding="async">' +
+    '<span class="gob-bowl"><canvas class="gob-fire-canvas" data-mode="top"></canvas><span class="gob-ripple"></span></span>' +
+    `${gems("top")}</span></span>` +
+    // Standing: the fire is behind the painting, rising out of the bowl.
+    '<span class="gob-view gob-side"><canvas class="gob-fire-canvas" data-mode="side"></canvas>' +
     '<span class="gob-cup"><img class="gob-art" src="goblet.webp" alt="" draggable="false" decoding="async">' +
-    `<span class="gob-mouth"></span>${gems}</span></span>`;
+    `<span class="gob-mouth"></span>${gems("side")}</span></span></span>`;
 })();
+
+// Fire colours per state, hot core to cool edge, as "r,g,b".
+const GOBLET_FIRE_PALETTES = {
+  ember: { core: "255,214,150", mid: "255,128,40", outer: "190,50,15" },
+  ready: { core: "255,236,190", mid: "255,150,45", outer: "210,62,18" },
+  pass: { core: "255,252,235", mid: "255,205,90", outer: "255,140,30" },
+  fail: { core: "255,170,130", mid: "240,50,25", outer: "120,10,8" },
+};
+
+// A particle fire on a canvas: soft, additive embers that age from a white
+// core through orange to red and fade. "side" rises from the canvas's
+// bottom edge into a flame; "top" is the same fire seen from above, burning
+// outward in a slow swirl from the bowl's floor. Runs only while it's on
+// screen (IntersectionObserver) and the fire's lit; under reduced motion it
+// draws one still frame per change instead.
+function createGobletFire(canvas) {
+  const mode = canvas.dataset.mode;
+  const ctx = canvas.getContext("2d");
+  let w = 0, h = 0, dpr = 1;
+  let flame = 0, target = 0, palette = GOBLET_FIRE_PALETTES.ember, sprites = null;
+  let sparks = false, smoke = false, burst = 0, spawnDebt = 0;
+  let raf = 0, last = 0, onScreen = false, time = 0;
+  const parts = [];
+
+  function sprite(rgb) {
+    const c = document.createElement("canvas");
+    c.width = c.height = 64;
+    const g = c.getContext("2d");
+    const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+    grad.addColorStop(0, `rgba(${rgb},1)`);
+    grad.addColorStop(0.35, `rgba(${rgb},0.55)`);
+    grad.addColorStop(1, `rgba(${rgb},0)`);
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 64, 64);
+    return c;
+  }
+  function buildSprites() {
+    sprites = { core: sprite(palette.core), mid: sprite(palette.mid), outer: sprite(palette.outer), smoke: sprite("58,50,46") };
+  }
+  function measure() {
+    const r = canvas.getBoundingClientRect();
+    if (!r.width) return false;
+    dpr = Math.min(2, window.devicePixelRatio || 1);
+    w = r.width;
+    h = r.height;
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    return true;
+  }
+
+  function spawn(kind) {
+    const rnd = Math.random;
+    if (mode === "side") {
+      const spread = w * 0.3 * (0.55 + 0.45 * Math.min(1, flame));
+      if (kind === "spark") {
+        parts.push({ kind, x: w / 2 + (rnd() - 0.5) * spread, y: h * 0.9, vx: (rnd() - 0.5) * 30, vy: -h * (1.1 + rnd() * 0.8), life: 0, max: 0.7 + rnd() * 0.6, size: 1.6 + rnd() * 1.4 });
+      } else if (kind === "smoke") {
+        parts.push({ kind, x: w / 2 + (rnd() - 0.5) * spread, y: h * 0.8, vx: (rnd() - 0.5) * 10, vy: -h * (0.35 + rnd() * 0.2), life: 0, max: 1.6 + rnd() * 0.8, size: w * 0.18 });
+      } else {
+        parts.push({ kind, x: w / 2 + (rnd() - 0.5) * spread, y: h * (0.92 + rnd() * 0.06), vx: (rnd() - 0.5) * 14, vy: -h * (0.62 + rnd() * 0.45) * (0.45 + 0.55 * flame), life: 0, max: 0.45 + rnd() * 0.4, size: w * (0.11 + rnd() * 0.08) * (0.65 + 0.35 * Math.min(1.3, flame)), seed: rnd() * 6.28 });
+      }
+    } else {
+      // From above: born on the bowl's floor, swelling toward the viewer.
+      const R = w / 2;
+      const r = R * 0.62 * Math.sqrt(rnd()) * (0.5 + 0.5 * Math.min(1, flame));
+      const a = rnd() * Math.PI * 2;
+      if (kind === "spark") {
+        parts.push({ kind, a, r, vr: R * (0.9 + rnd()), life: 0, max: 0.45 + rnd() * 0.4, size: 1.5 + rnd() * 1.5 });
+      } else if (kind === "smoke") {
+        parts.push({ kind, a, r: r * 0.6, vr: R * 0.25, life: 0, max: 1.5 + rnd() * 0.8, size: R * 0.5 });
+      } else {
+        parts.push({ kind, a, r, vr: R * (0.25 + rnd() * 0.35), life: 0, max: 0.4 + rnd() * 0.45, size: R * (0.1 + rnd() * 0.1) * (0.65 + 0.35 * Math.min(1.3, flame)), seed: rnd() * 6.28 });
+      }
+    }
+  }
+
+  function step(dt) {
+    time += dt;
+    flame += (target - flame) * Math.min(1, dt * 2.5);
+    burst = Math.max(0, burst - dt);
+    const rate = (mode === "side" ? 230 : 200) * flame + burst * 300;
+    spawnDebt += rate * dt;
+    while (spawnDebt >= 1 && parts.length < 420) { spawn("fire"); spawnDebt -= 1; }
+    if (sparks && Math.random() < dt * 9) spawn("spark");
+    if (burst > 0 && Math.random() < dt * 30) spawn("spark");
+    if (smoke && Math.random() < dt * 6) spawn("smoke");
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const p = parts[i];
+      p.life += dt;
+      if (p.life >= p.max) { parts.splice(i, 1); continue; }
+      if (mode === "side") {
+        if (p.kind === "fire") {
+          // Drawn to the centre line as it climbs: a flame's taper.
+          // Licks: the sway grows with height, like a flame's tongues.
+          const up = 1 - p.y / h;
+          p.vx += ((w / 2 - p.x) * 3.4 + Math.sin(time * 13 + p.seed + p.y * 0.09) * (30 + up * 140)) * dt;
+          p.vy -= h * 0.45 * dt;
+        }
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+      } else {
+        p.r += p.vr * dt;
+        // The swirl is quicker near the centre, like a draught pulling it round.
+        p.a += (p.kind === "smoke" ? 0.3 : 0.6 + 1.2 * (1 - Math.min(1, p.r / (w / 2)))) * dt;
+      }
+    }
+  }
+
+  function draw() {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    if (!sprites) buildSprites();
+    if (mode === "top" && flame > 0.01) {
+      // The bowl's floor glowing under the fire.
+      const flick = 0.85 + 0.15 * Math.sin(time * 13) * Math.sin(time * 7.3);
+      const g = ctx.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, w / 2);
+      // White-hot at the heart, cooling to red at the walls.
+      g.addColorStop(0, `rgba(${palette.core},${(0.75 * Math.min(1, flame) * flick).toFixed(3)})`);
+      g.addColorStop(0.28, `rgba(${palette.mid},${(0.5 * Math.min(1, flame) * flick).toFixed(3)})`);
+      g.addColorStop(0.7, `rgba(${palette.outer},${(0.22 * Math.min(1, flame)).toFixed(3)})`);
+      g.addColorStop(1, `rgba(${palette.outer},0)`);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, w, h);
+    }
+    ctx.globalCompositeOperation = "source-over";
+    for (const p of parts) {
+      if (p.kind !== "smoke") continue;
+      const t = p.life / p.max;
+      const s = p.size * (1 + t * 1.6);
+      ctx.globalAlpha = 0.28 * Math.sin(Math.PI * t);
+      const [x, y] = mode === "side" ? [p.x, p.y] : [w / 2 + Math.cos(p.a) * p.r, h / 2 + Math.sin(p.a) * p.r];
+      ctx.drawImage(sprites.smoke, x - s, y - s, s * 2, s * 2);
+    }
+    ctx.globalCompositeOperation = "lighter";
+    for (const p of parts) {
+      if (p.kind === "smoke") continue;
+      const t = p.life / p.max;
+      let img, alpha, s;
+      if (p.kind === "spark") {
+        img = sprites.core;
+        alpha = 0.9 * (1 - t);
+        s = p.size;
+      } else {
+        img = t < 0.25 ? sprites.core : t < 0.58 ? sprites.mid : sprites.outer;
+        // Fades in fast, out slow; from above the tongues overlap less, so
+        // each burns brighter.
+        alpha = Math.min(1, t * 8) * (1 - t) * (mode === "side" ? 0.32 : 0.5);
+        s = mode === "side" ? p.size * (1 - t * 0.7) : p.size * (0.5 + t * 0.8);
+      }
+      const [x, y] = mode === "side" ? [p.x, p.y] : [w / 2 + Math.cos(p.a) * p.r, h / 2 + Math.sin(p.a) * p.r];
+      ctx.globalAlpha = alpha;
+      if (p.kind === "fire") {
+        // Each ember is a tongue, drawn out along the way it's travelling:
+        // up the flame from the side, out and round the swirl from above.
+        const dir = mode === "side" ? Math.atan2(p.vy, p.vx) : p.a + 1.1;
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(dir);
+        ctx.scale(1.9, 0.75);
+        ctx.drawImage(img, -s, -s, s * 2, s * 2);
+        ctx.restore();
+        continue;
+      }
+      ctx.drawImage(img, x - s, y - s, s * 2, s * 2);
+    }
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+  }
+
+  function frame(ts) {
+    raf = 0;
+    const dt = last ? Math.min(0.05, (ts - last) / 1000) : 1 / 60;
+    last = ts;
+    step(dt);
+    draw();
+    if (onScreen && (target > 0 || parts.length)) raf = requestAnimationFrame(frame);
+    else last = 0;
+  }
+  function run() {
+    if (!w && !measure()) return;
+    if (REDUCED_MOTION.matches) {
+      // One still frame: run the fire to its settled shape, then draw it.
+      parts.length = 0;
+      flame = target;
+      for (let i = 0; i < 90; i++) step(1 / 30);
+      draw();
+      return;
+    }
+    if (!raf && onScreen) raf = requestAnimationFrame(frame);
+  }
+
+  new IntersectionObserver(entries => {
+    onScreen = entries[entries.length - 1].isIntersecting;
+    if (onScreen) { if (!w) measure(); run(); }
+  }).observe(canvas);
+
+  return {
+    set({ flame: f, palette: name, sparks: sp = false, smoke: sm = false }) {
+      const next = GOBLET_FIRE_PALETTES[name];
+      if (next !== palette) { palette = next; sprites = null; }
+      target = f;
+      sparks = sp;
+      smoke = sm;
+      run();
+    },
+    // An orb landing: a short surge of fire and sparks.
+    surge() {
+      burst = 0.45;
+      run();
+    },
+  };
+}
+
+// An orb from a seat's zone into the goblet, in that player's sleeve
+// colour (never the deck's colours: the deck is still sealed), arcing over
+// the mat with a short trail. On landing the bowl ripples and the fire
+// surges. Skipped under reduced motion and when the mat isn't showing.
+function launchPodOrb(playerId) {
+  if (!podUi || REDUCED_MOTION.matches || podUi.mat.hidden) return;
+  const entry = podSeatEls.get(playerId);
+  if (!entry) return;
+  const x0 = parseFloat(entry.zone.style.getPropertyValue("--x"));
+  const y0 = parseFloat(entry.zone.style.getPropertyValue("--y"));
+  const x1 = podUi.mat.clientWidth / 2;
+  const y1 = podUi.mat.clientHeight / 2;
+  if (!isFinite(x0) || !isFinite(y0)) return;
+  // Bow the path sideways, so orbs from opposite seats don't collide.
+  const dx = x1 - x0, dy = y1 - y0;
+  const cx = (x0 + x1) / 2 - dy * 0.35, cy = (y0 + y1) / 2 + dx * 0.35 - 30;
+  const at = (t) => [(1 - t) * (1 - t) * x0 + 2 * (1 - t) * t * cx + t * t * x1, (1 - t) * (1 - t) * y0 + 2 * (1 - t) * t * cy + t * t * y1];
+  const frames = Array.from({ length: 13 }, (_, k) => {
+    const t = k / 12;
+    const [x, y] = at(t);
+    return { transform: `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) scale(${(1.15 - t * 0.75).toFixed(2)})`, opacity: t > 0.9 ? (1 - t) * 10 : 1 };
+  });
+  const color = podSleeveOf(playerId);
+  const duration = 1200;
+  const made = [];
+  [0, 1, 2, 3].forEach(k => {
+    const orb = document.createElement("span");
+    orb.className = k ? "pod-orb is-trail" : "pod-orb";
+    orb.style.setProperty("--orb", color);
+    orb.style.setProperty("--k", k);
+    podUi.mat.appendChild(orb);
+    made.push(orb);
+    orb.animate(frames, { duration, delay: k * 45, easing: "cubic-bezier(0.45, 0, 0.75, 0.55)", fill: "both" });
+  });
+  let landed = false;
+  const land = () => {
+    if (landed) return;
+    landed = true;
+    made.forEach(o => o.remove());
+    const emblem = podUi.emblem;
+    emblem.classList.remove("is-absorbing");
+    void emblem.offsetWidth;
+    emblem.classList.add("is-absorbing");
+    setTimeout(() => emblem.classList.remove("is-absorbing"), 800);
+    podUi.fires.top.surge();
+  };
+  // A timer, not finish events: those never fire in a hidden tab.
+  setTimeout(land, duration + 3 * 45);
+}
 
 function podMatFlatSaved() {
   try { return localStorage.getItem("podMatFlat") === "1"; } catch { return false; }
@@ -3804,7 +4053,12 @@ function buildPodTable(container) {
   ui.tracks = mat.querySelector(".mat-tracks");
   ui.zones = mat.querySelector(".mat-zones");
   ui.emblem = mat.querySelector(".mat-emblem");
-  ui.gems = [...mat.querySelectorAll(".gob-gem")];
+  ui.gems = [...mat.querySelectorAll(".gob-top .gob-gem")];
+  ui.sideGems = [...mat.querySelectorAll(".gob-side .gob-gem")];
+  ui.fires = {
+    top: createGobletFire(mat.querySelector('.gob-fire-canvas[data-mode="top"]')),
+    side: createGobletFire(mat.querySelector('.gob-fire-canvas[data-mode="side"]')),
+  };
   ui.hubLabel = mat.querySelector(".mat-hub-label");
   ui.empty = mat.querySelector(".mat-empty");
   // Beside the card's heading rather than on the mat, where a seven- or
@@ -4346,8 +4600,13 @@ function layoutPodMat() {
   });
 }
 
+// Each seat's state as last drawn, so a seat that has just sealed can send
+// its orb into the goblet (launchPodOrb).
+const podSeatLastState = new Map();
+
 function renderPodZones() {
   const n = podSelections.length;
+  const sealedNow = [];
   const seated = new Set(podSelections.map(s => s.playerId));
   for (const [id, entry] of podSeatEls) {
     if (!seated.has(id)) removePodZone(id, entry);
@@ -4367,10 +4626,17 @@ function renderPodZones() {
       }
     }
     updatePodZone(entry, slot, i);
+    const state = podSeatState(slot);
+    const before = podSeatLastState.get(slot.playerId);
+    if (before && (before === "waiting" || before === "flagged") && state === "sealed") sealedNow.push(slot.playerId);
+    podSeatLastState.set(slot.playerId, state);
   });
+  for (const id of podSeatLastState.keys()) if (!seated.has(id)) podSeatLastState.delete(id);
   podSeatsEntering.clear();
   podUi.mat.classList.toggle("has-focus", editingSeatIndex !== null);
   layoutPodMat();
+  // After layout, so each orb starts from its zone's new place.
+  sealedNow.forEach(launchPodOrb);
   podUi.empty.hidden = n > 0 || !liveTableLoaded;
 }
 
@@ -4434,6 +4700,14 @@ function renderPodHub() {
   emblem.setAttribute("aria-label", aria);
   emblem.style.setProperty("--flame", flame.toFixed(2));
   podUi.gems.forEach((g, i) => g.classList.toggle("is-lit", i < lit));
+  podUi.sideGems.forEach((g, i) => g.classList.toggle("is-lit", i < lit));
+  // From above until the check has a result; then it stands on the mat.
+  const top = !passed && !failed;
+  emblem.classList.toggle("is-top", top);
+  // Only the view on show burns; the other dies down.
+  const fire = { flame, palette: passed ? "pass" : failed ? "fail" : ready || podPendingCheck ? "ready" : "ember", sparks: passed || podPendingCheck, smoke: failed };
+  podUi.fires.top.set(top ? fire : { ...fire, flame: 0 });
+  podUi.fires.side.set(top ? { ...fire, flame: 0 } : fire);
   emblem.classList.toggle("is-cold", flame === 0);
   emblem.classList.toggle("is-ready", ready);
   emblem.classList.toggle("is-passed", passed);
@@ -4454,6 +4728,7 @@ function renderPodHub() {
       void emblem.offsetWidth;
       emblem.classList.add("is-flaring");
       setTimeout(() => emblem.classList.remove("is-flaring"), 1200);
+      podUi.fires.side.surge();
     }
   } else if (!resultKey) podUi.litFor = null;
 }
