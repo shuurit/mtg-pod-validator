@@ -4018,7 +4018,7 @@ input.gtu-in-prefilled {
 /* ---------- Game night: the game in play ----------
    Replaces the pod card on Tonight once the pod passes (buildTonightLive):
    a running clock, who's at the table with what (a stripe in each
-   player's sleeve colour, as on the mat), who goes first, and the way to
+   player's sleeve colour, as on the mat), and the way to
    the game's debrief. */
 .tonight-live {
   display: flex;
@@ -4079,7 +4079,6 @@ input.gtu-in-prefilled {
   background: var(--card-bg);
   box-shadow: inset 5px 0 0 var(--sleeve, var(--border));
 }
-.tonight-live-seat.is-first { border-color: var(--accent); }
 .tonight-live-name {
   font-family: var(--font-display);
   font-size: 1.05rem;
@@ -4088,7 +4087,6 @@ input.gtu-in-prefilled {
   letter-spacing: 0.02em;
   text-transform: uppercase;
 }
-.tonight-live-seat.is-first .tonight-live-name { color: var(--accent); }
 .tonight-live-deck {
   font-size: 0.78rem;
   color: var(--muted);
@@ -4165,7 +4163,7 @@ input.gtu-in-prefilled {
 /* ---------- Set Up Pod: the command zone mat ---------- */
 /* The pod as a printed playmat (see buildPodTable / renderPodZones in
    app.js): a command zone per seat round an ellipse, a range track from
-   each zone to the d20 in the middle. Your own zone is always the bottom
+   each zone to the mana emblem in the middle. Your own zone is always the bottom
    one. Zones and tracks are placed by layoutPodMat, which only writes
    custom properties (--x, --y, --r on a zone; --a, --len on a track) --
    every move is a transform, so a seat joining or leaving glides on the
@@ -4215,7 +4213,7 @@ input.gtu-in-prefilled {
 }
 
 /* ---- ley lines ----
-   One per seat, from the d20's edge (translateX past POD_HUB_R) toward its
+   One per seat, from the emblem's edge (translateX past POD_HUB_R) toward its
    zone (--a), running under it. Faint until a check, then gold for a deck
    in range and red for one over it -- the zone's own gauge says by how
    much. */
@@ -4275,8 +4273,6 @@ input.gtu-in-prefilled {
 /* Someone else's self-picked seat (podSeatLocked): still a settled seat,
    not a greyed-out broken one -- tapPodSeat explains the lock. */
 .mat-zone[aria-disabled="true"] { cursor: default; }
-/* Whoever the d20 picked (podFirstPlayer). */
-.mat-zone.is-first { border-color: var(--foil); box-shadow: 0 0 0 1px var(--foil), 0 0 18px rgba(201, 161, 63, 0.45); }
 
 .mat-zone-name {
   max-width: 100%;
@@ -4291,7 +4287,6 @@ input.gtu-in-prefilled {
   text-overflow: ellipsis;
 }
 .mat.is-dense .mat-zone-name { font-size: 0.88rem; }
-.mat-zone.is-first .mat-zone-name { color: #f3dc9b; }
 
 /* The deck box: in the player's sleeve colour (--sleeve, set per player by
    buildPodZone), never the deck's, so a sealed box gives nothing away. */
@@ -4368,7 +4363,7 @@ input.gtu-in-prefilled {
   .mat-zone.entering, .mat-zone.leaving { animation: none; }
 }
 
-/* ---- the d20 hub ---- */
+/* ---- the mana emblem hub ---- */
 .mat-hub {
   position: absolute;
   left: 50%;
@@ -4380,55 +4375,77 @@ input.gtu-in-prefilled {
   transform: translate(-50%, -38px);
   pointer-events: none;
 }
-.mat-die {
+.mat-emblem {
   position: relative;
   width: 76px;
   height: 76px;
   padding: 0;
   border: none;
+  border-radius: 50%;
   background: transparent;
   box-shadow: none;
   pointer-events: auto;
   cursor: default;
   filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.5));
+  --emblem-ink: #5d6662;
+  transition: filter 0.3s ease;
 }
-.mat-die-svg { width: 100%; height: 100%; display: block; }
-.mat-die { --die-fill: #5d6662; }
-.mat-die-body { fill: var(--die-fill); transition: fill 0.2s ease; }
-.mat-die-facets { fill: none; stroke: rgba(11, 17, 15, 0.55); stroke-width: 0.8; }
-.mat-die-face {
+.mat-emblem-svg { width: 100%; height: 100%; display: block; overflow: visible; }
+.mat-emblem-body { fill: #121915; stroke: var(--emblem-ink); stroke-width: 1.4; transition: stroke 0.3s ease; }
+.mat-emblem-ring { fill: none; stroke: var(--emblem-ink); stroke-width: 0.7; opacity: 0.6; transition: stroke 0.3s ease; }
+.mat-emblem-core { fill: var(--emblem-ink); transition: fill 0.3s ease; }
+/* Unlit pips keep a hint of their colour, so the five read as mana before
+   the check; renderPodHub's is-passed lights them fully. */
+.mat-emblem-pip {
+  fill: var(--pip);
+  /* A light rim, or the black pip vanishes into the emblem's dark body. */
+  stroke: rgba(239, 230, 210, 0.55);
+  stroke-width: 0.6;
+  opacity: 0.28;
+  filter: saturate(0.4);
+  transition: opacity 0.35s ease, filter 0.35s ease;
+}
+.mat-emblem-face {
   position: absolute;
   inset: 0;
   display: grid;
   place-items: center;
-  padding-top: 3px;
   font-family: var(--font-display);
-  font-size: 1.05rem;
+  font-size: 0.92rem;
   font-weight: 700;
+  line-height: 1;
   color: #0b110f;
   font-variant-numeric: tabular-nums;
-  /* A halo in the die's own colour keeps the count readable over the
-     facet lines it sits on. */
-  text-shadow: 0 0 3px var(--die-fill), 0 0 6px var(--die-fill);
 }
-.mat-die.is-ready, .mat-die.is-rolled { cursor: pointer; }
-.mat-die.is-ready { --die-fill: var(--mat-ink); }
-.mat-die.is-rolled { --die-fill: var(--foil); }
-.mat-die:focus-visible { outline: 2px solid var(--foil); outline-offset: 4px; border-radius: 50%; }
+.mat-emblem.is-ready { cursor: pointer; --emblem-ink: var(--mat-ink); }
+.mat-emblem.is-ready .mat-emblem-pip { opacity: 0.55; filter: saturate(0.8); }
+.mat-emblem.is-passed {
+  --emblem-ink: var(--foil);
+  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.5)) drop-shadow(0 0 14px rgba(201, 161, 63, 0.7));
+}
+.mat-emblem.is-passed .mat-emblem-pip { opacity: 1; filter: drop-shadow(0 0 2.5px var(--pip)); }
+.mat-emblem.is-failed {
+  --emblem-ink: #e2553f;
+  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.5)) drop-shadow(0 0 14px rgba(226, 85, 63, 0.65));
+}
+.mat-emblem.is-failed .mat-emblem-pip { opacity: 0.18; filter: grayscale(1); }
+.mat-emblem:focus-visible { outline: 2px solid var(--foil); outline-offset: 4px; }
 /* Ready to check: one call to action, so one attention loop (web-animation
    rule 6), and it stops the moment the check starts. */
-.mat-die.is-ready { animation: mat-die-ready 1.4s ease-in-out infinite; }
-@keyframes mat-die-ready {
+.mat-emblem.is-ready { animation: mat-emblem-ready 1.4s ease-in-out infinite; }
+@keyframes mat-emblem-ready {
   50% { filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.5)) drop-shadow(0 0 12px rgba(239, 230, 210, 0.55)); }
 }
-.mat-die.is-checking .mat-die-svg { animation: global-refresh-spin 0.8s linear infinite; }
-.mat-die.is-rolling .mat-die-svg { animation: mat-die-roll 0.85s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
-@keyframes mat-die-roll {
-  from { transform: rotate(-540deg) scale(0.55); }
+.mat-emblem.is-checking .mat-emblem-svg { animation: global-refresh-spin 0.8s linear infinite; }
+/* One flare when a result lands (renderPodHub's litFor), pass or fail. */
+.mat-emblem.is-flaring .mat-emblem-svg { animation: mat-emblem-flare 0.85s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+@keyframes mat-emblem-flare {
+  from { transform: rotate(-144deg) scale(0.7); }
+  45% { transform: rotate(0deg) scale(1.12); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .mat-die.is-ready, .mat-die.is-checking .mat-die-svg, .mat-die.is-rolling .mat-die-svg { animation: none; }
-  .mat-die-body { transition: none; }
+  .mat-emblem.is-ready, .mat-emblem.is-checking .mat-emblem-svg, .mat-emblem.is-flaring .mat-emblem-svg { animation: none; }
+  .mat-emblem, .mat-emblem-body, .mat-emblem-ring, .mat-emblem-core, .mat-emblem-pip { transition: none; }
 }
 .mat-hub-label {
   max-width: 150px;
@@ -4441,7 +4458,8 @@ input.gtu-in-prefilled {
   text-transform: uppercase;
   color: var(--mat-muted);
 }
-.mat-die.is-rolled + .mat-hub-label { color: #f3dc9b; }
+.mat-emblem.is-passed + .mat-hub-label { color: #f3dc9b; }
+.mat-emblem.is-failed + .mat-hub-label { color: #ffb3a6; }
 
 /* The card's heading row: "Set Up Pod" and the mat's "Lay flat" toggle,
    which turns every zone to face its own edge (layoutPodMat sets --r) for
@@ -6593,6 +6611,32 @@ button.vault-box {
   line-height: 1.02;
   text-transform: uppercase;
   overflow-wrap: anywhere;
+}
+/* Commander portraits (buildVaultArt): a dark coin until pumpVaultArt's
+   art_crop arrives, then the art fades in. Partners overlap. */
+.vault-box-art { display: flex; min-height: 30px; }
+.vault-art-coin {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  overflow: hidden;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.28);
+  box-shadow: 0 0 0 1.5px rgba(201, 161, 63, 0.7), 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+.vault-art-coin + .vault-art-coin { margin-left: -9px; }
+.vault-art-coin img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 0.25s ease-out;
+}
+.vault-art-coin.is-loaded img { opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  .vault-art-coin img { transition: none; }
 }
 .vault-box-tags { display: flex; flex-wrap: wrap; gap: 3px; }
 .vault-box-tag {

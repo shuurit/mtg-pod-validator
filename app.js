@@ -222,6 +222,13 @@ const POD_SLEEVES = ["#7a2e2e", "#24486e", "#2f5e40", "#5c3d6e", "#7a5a22", "#2d
 // (web-animation rule 7).
 let playerBlockToggle = null; // { id, opening }
 let rosterDiffData = null; // raw playgroup.gg roster/decks from loadRosterDiff, used for the Playgroup Power comparison column too
+// Vault box commander portraits: loaded as boxes scroll near view, one
+// Scryfall lookup at a time (see pumpVaultArt). Up here because
+// renderPlayersTable first runs while this file loads.
+let vaultArtObserver = null;
+const vaultArtQueue = [];
+let vaultArtBusy = false;
+const VAULT_ART_KEY = "vaultCommanderArt";
 let bracketEditingDeckIds = new Set(); // deck ids currently showing the inline "set new bracket" form instead of their power chip
 
 // player.id -> { column, direction }. Deliberately per-player rather than
@@ -506,7 +513,6 @@ function buildTonightLive() {
   }
   live.appendChild(head);
 
-  const first = podFirstPlayer();
   const seats = document.createElement("ul");
   seats.className = "tonight-live-seats";
   for (const slot of podSelections) {
@@ -514,11 +520,9 @@ function buildTonightLive() {
     const li = document.createElement("li");
     li.className = "tonight-live-seat";
     li.style.setProperty("--sleeve", podSleeveOf(slot.playerId));
-    const isFirst = !!first && first.playerId === slot.playerId;
-    li.classList.toggle("is-first", isFirst);
     const name = document.createElement("span");
     name.className = "tonight-live-name";
-    name.textContent = isFirst ? `${podNameOf(slot)} · 1st` : podNameOf(slot);
+    name.textContent = podNameOf(slot);
     const what = document.createElement("span");
     what.className = "tonight-live-deck";
     what.textContent = deck ? podShortDeckName(deck.name) : "";
@@ -2911,7 +2915,7 @@ function buildVaultBox(player, deck) {
   const name = document.createElement("span");
   name.className = "vault-box-name";
   name.textContent = podShortDeckName(deck.name);
-  box.appendChild(name);
+  box.append(buildVaultArt(deck), name);
   const tags = [];
   if (deck.newDeck) tags.push(["New", "is-new"]);
   if (deck.comboFlagged) tags.push(["Combo watch", "is-combo"]);
@@ -2944,6 +2948,77 @@ function buildVaultBox(player, deck) {
     renderPlayersTable();
   });
   return box;
+}
+
+// One round portrait per commander (two for partners), filled in by
+// pumpVaultArt. Decorative: the box's name and aria-label already say whose
+// deck it is.
+function buildVaultArt(deck) {
+  const wrap = document.createElement("span");
+  wrap.className = "vault-box-art";
+  wrap.setAttribute("aria-hidden", "true");
+  for (const card of splitCommanderNames(deck.name).slice(0, 2)) {
+    const coin = document.createElement("span");
+    coin.className = "vault-art-coin";
+    coin.dataset.card = card;
+    wrap.appendChild(coin);
+    observeVaultArt(coin);
+  }
+  return wrap;
+}
+
+function observeVaultArt(coin) {
+  if (!("IntersectionObserver" in window)) { queueVaultArt(coin); return; }
+  vaultArtObserver ||= new IntersectionObserver(entries => {
+    for (const e of entries) {
+      if (!e.isIntersecting) continue;
+      vaultArtObserver.unobserve(e.target);
+      queueVaultArt(e.target);
+    }
+  }, { rootMargin: "200px" });
+  vaultArtObserver.observe(coin);
+}
+
+function loadVaultArtUrls() {
+  try { return JSON.parse(localStorage.getItem(VAULT_ART_KEY)) || {}; } catch { return {}; }
+}
+
+function queueVaultArt(coin) {
+  vaultArtQueue.push(coin);
+  pumpVaultArt();
+}
+
+// Art URLs are remembered on this phone, so only a commander it has never
+// shown costs a Scryfall lookup -- spaced 100ms apart, as Scryfall asks.
+// A lookup that fails just leaves the plain coin.
+async function pumpVaultArt() {
+  if (vaultArtBusy) return;
+  vaultArtBusy = true;
+  const saved = loadVaultArtUrls();
+  while (vaultArtQueue.length) {
+    const coin = vaultArtQueue.shift();
+    if (!coin.isConnected) continue;
+    const card = coin.dataset.card;
+    let url = saved[card];
+    if (!url) {
+      const art = await fetchCommanderArt(card);
+      url = art ? art.imageUrl : null;
+      if (url) {
+        saved[card] = url;
+        try { localStorage.setItem(VAULT_ART_KEY, JSON.stringify(saved)); } catch { /* storage blocked -- refetched next visit */ }
+      }
+      await new Promise(r => setTimeout(r, 100));
+    }
+    if (!url) continue;
+    const img = document.createElement("img");
+    img.alt = "";
+    img.decoding = "async";
+    img.src = url;
+    // Shown only once it's in, so a slow image never flashes half-drawn.
+    img.addEventListener("load", () => coin.classList.add("is-loaded"), { once: true });
+    coin.appendChild(img);
+  }
+  vaultArtBusy = false;
 }
 
 // Sealed boxes for what playgroup.gg has that the app doesn't yet: one per
@@ -3500,7 +3575,7 @@ function decksAvailableForSlot(slot) {
 
 // ---------- Set Up Pod: the command zone mat ----------
 // The pod as a printed playmat: one command zone per seat round the edge,
-// a d20 in the middle. Your own seat is always the zone nearest you (the
+// the mana emblem in the middle. Your own seat is always the zone nearest you (the
 // bottom); everyone else follows clockwise. A seat's zone carries its whole
 // state (see podSeatState):
 //   waiting  -- seated, no deck yet: an empty dashed zone
@@ -3511,7 +3586,7 @@ function decksAvailableForSlot(slot) {
 // Each zone carries that seat's range gauge. It stays hidden until a
 // check, then a marker lands on it: the gold half is in range, the red half
 // is over. Same relative numbers the gauge under the mat draws -- never a
-// deck's own power. A line runs from the d20 to every zone, lit gold or
+// deck's own power. A line runs from the emblem to every zone, lit gold or
 // red by the same check.
 //
 // "Lay flat" turns every zone to face its own edge, for a phone or tablet
@@ -3527,7 +3602,7 @@ const POD_MAX_SEATS = 8;
 // neighbours round the curve don't overlap.
 const POD_ZONE = { w: 108, h: 80 };
 const POD_ZONE_DENSE = { w: 84, h: 74 };
-// The d20's radius, px: where every range track starts.
+// The emblem's radius, px: where every range track starts.
 const POD_HUB_R = 48;
 
 // playerId -> { zone, name, box, boxText, range, marker, track } per seat.
@@ -3579,38 +3654,20 @@ function podCheckEntry(playerId) {
   return liveTableCheck.entries.find(e => String(e.playerId) === playerId) || null;
 }
 
-// One seeded d20 per seat, from the passing check's id, so every phone at
-// the table rolls the same numbers without the relay storing a roll.
-// FNV-1a over "checkId:playerId:round".
-function podD20(checkId, playerId, round) {
-  let h = 2166136261;
-  for (const ch of `${checkId}:${playerId}:${round}`) {
-    h ^= ch.charCodeAt(0);
-    h = Math.imul(h, 16777619);
-  }
-  return ((h >>> 0) % 20) + 1;
-}
-
-// Who goes first once the pod passes: highest d20, ties re-roll among the
-// tied. null until the pod is revealed.
-function podFirstPlayer() {
-  if (!podRevealed || !liveTableCheck || podSelections.length === 0) return null;
-  let contenders = podSelections.map(s => s.playerId);
-  let winnerRoll = null;
-  for (let round = 0; round < 8; round++) {
-    const rolls = contenders.map(id => [id, podD20(liveTableCheck.id, id, round)]);
-    const top = Math.max(...rolls.map(r => r[1]));
-    if (round === 0) winnerRoll = top;
-    contenders = rolls.filter(r => r[1] === top).map(r => r[0]);
-    if (contenders.length === 1) break;
-  }
-  return { playerId: contenders[0], roll: winnerRoll };
-}
-
-const POD_D20_SVG =
-  '<svg class="mat-die-svg" viewBox="0 0 40 40" aria-hidden="true">' +
-  '<path class="mat-die-body" d="M20 2 L36 11 L36 29 L20 38 L4 29 L4 11 Z"/>' +
-  '<path class="mat-die-facets" d="M20 2 L28 16 L12 16 Z M12 16 L20 30 L28 16 M4 11 L12 16 L4 29 M36 11 L28 16 L36 29 M20 38 L20 30"/></svg>';
+// The five mana pips round a ring, WUBRG clockwise from the top. Dim while
+// decks go in; every pip lights in its own colour when the pod's power
+// spread passes, and the ring goes red when it doesn't (renderPodHub).
+const POD_EMBLEM_SVG = (() => {
+  const pips = ["w", "u", "b", "r", "g"].map((c, k) => {
+    const a = ((-90 + k * 72) * Math.PI) / 180;
+    return `<circle class="mat-emblem-pip" style="--pip: var(--pip-${c})" cx="${(20 + 12.5 * Math.cos(a)).toFixed(2)}" cy="${(20 + 12.5 * Math.sin(a)).toFixed(2)}" r="4.3"/>`;
+  }).join("");
+  return '<svg class="mat-emblem-svg" viewBox="0 0 40 40" aria-hidden="true">' +
+    '<circle class="mat-emblem-body" cx="20" cy="20" r="18.6"/>' +
+    '<circle class="mat-emblem-ring" cx="20" cy="20" r="12.5"/>' +
+    pips +
+    '<circle class="mat-emblem-core" cx="20" cy="20" r="7.6"/></svg>';
+})();
 
 function podMatFlatSaved() {
   try { return localStorage.getItem("podMatFlat") === "1"; } catch { return false; }
@@ -3627,7 +3684,7 @@ function buildPodTable(container) {
     <div class="mat-tracks" aria-hidden="true"></div>
     <div class="mat-zones"></div>
     <div class="mat-hub">
-      <button type="button" class="mat-die">${POD_D20_SVG}<span class="mat-die-face"></span></button>
+      <button type="button" class="mat-emblem">${POD_EMBLEM_SVG}<span class="mat-emblem-face"></span></button>
       <span class="mat-hub-label"></span>
     </div>
     <p class="mat-empty">Tap a member below to pull up a seat.</p>`;
@@ -3658,8 +3715,8 @@ function buildPodTable(container) {
   ui.mat = mat;
   ui.tracks = mat.querySelector(".mat-tracks");
   ui.zones = mat.querySelector(".mat-zones");
-  ui.die = mat.querySelector(".mat-die");
-  ui.dieFace = mat.querySelector(".mat-die-face");
+  ui.emblem = mat.querySelector(".mat-emblem");
+  ui.emblemFace = mat.querySelector(".mat-emblem-face");
   ui.hubLabel = mat.querySelector(".mat-hub-label");
   ui.empty = mat.querySelector(".mat-empty");
   // Beside the card's heading rather than on the mat, where a seven- or
@@ -3678,7 +3735,7 @@ function buildPodTable(container) {
     try { localStorage.setItem("podMatFlat", flat ? "1" : "0"); } catch { /* storage blocked -- flat just won't be remembered */ }
     layoutPodMat();
   });
-  ui.die.addEventListener("click", () => { if (ui.dieAction) ui.dieAction(); });
+  ui.emblem.addEventListener("click", () => { if (ui.emblemAction) ui.emblemAction(); });
 
   // role=status, one atomic message: what the table means right now.
   ui.status = document.createElement("p");
@@ -4072,14 +4129,11 @@ function updatePodZone(entry, slot, i) {
   const deck = podDeckOf(slot);
   const locked = podSeatLocked(slot);
   const check = podCheckEntry(slot.playerId);
-  const first = podFirstPlayer();
-  const isFirst = !!first && first.playerId === slot.playerId;
 
   zone.classList.remove("is-waiting", "is-sealed", "is-flagged", "is-revealed");
   zone.classList.add(`is-${state}`);
   zone.classList.toggle("is-focus", editingSeatIndex === i);
   zone.classList.toggle("is-locked", locked);
-  zone.classList.toggle("is-first", isFirst);
   // Not `disabled`: a disabled button swallows the tap silently, which read
   // as being locked out with no reason given. aria-disabled keeps it
   // focusable and announced, and tapPodSeat explains the lock.
@@ -4087,7 +4141,7 @@ function updatePodZone(entry, slot, i) {
   else zone.removeAttribute("aria-disabled");
 
   const name = player ? player.name : "…";
-  entry.name.textContent = isFirst ? `${name} · 1st` : name;
+  entry.name.textContent = name;
   zone.removeAttribute("title");
   box.querySelector(".id-coin, .ui-icon")?.remove();
   let spoken;
@@ -4113,7 +4167,6 @@ function updatePodZone(entry, slot, i) {
     if (deck) zone.title = deck.name;
     spoken = deck ? deck.name : "deck revealed";
   }
-  if (isFirst) spoken += `, goes first (rolled ${first.roll})`;
   zone.setAttribute("aria-label", `${name}'s command zone, ${spoken}${locked ? `. Only ${name} can change this seat.` : ""}`);
 
   // The marker lands only on a check that still describes this pod. New
@@ -4195,7 +4248,7 @@ function layoutPodMat() {
     entry.zone.style.setProperty("--r", flat ? `${spot.edge * 90}deg` : "0deg");
     const dist = Math.hypot(spot.x, spot.y);
     const a = (Math.atan2(spot.y, spot.x) * 180) / Math.PI;
-    // From the d20's edge to the zone's: the line runs under the zone, so
+    // From the emblem's edge to the zone's: the line runs under the zone, so
     // stopping at its edge just keeps it from showing through the border.
     const end = dist - podZoneEntry(spot.x / dist, spot.y / dist, size);
     entry.track.style.setProperty("--a", `${a.toFixed(1)}deg`);
@@ -4244,57 +4297,63 @@ function removePodZone(id, entry) {
   setTimeout(finish, REDUCED_MOTION.matches ? 0 : 220);
 }
 
-// The d20 in the middle: a count while decks go in, the check itself once
-// every deck is sealed (same action as the button under the mat), and who
-// goes first once the pod passes.
+// The emblem in the middle: a count while decks go in, the check itself
+// once every deck is sealed (same action as the button under the mat), then
+// lit -- every pip in its colour -- when the spread passes, or red when it
+// doesn't.
 function renderPodHub() {
   const n = podSelections.length;
-  const die = podUi.die;
+  const emblem = podUi.emblem;
   const sealed = podSelections.filter(s => s.sealed && podSeatState(s) !== "flagged").length;
-  const first = podFirstPlayer();
+  const passed = podRevealed && !!liveTableCheck;
   const ready = n > 0 && !podRevealed && sealed === n && !podPendingCheck && (!liveTableCheck || liveTableStale || !liveTableCheck.passed);
+  const failed = !passed && !ready && !podPendingCheck && !!liveTableCheck && !liveTableStale && !liveTableCheck.passed;
   let face, label, action = null, aria;
-  if (first) {
-    const who = podSelections.find(s => s.playerId === first.playerId);
-    face = String(first.roll);
-    label = `${who ? podNameOf(who) : "Someone"} goes first`;
-    aria = `d20: ${label}, rolled ${first.roll}`;
+  if (passed) {
+    face = "✓";
+    label = "Power spread passes";
+    aria = `Emblem lit: ${label.toLowerCase()}`;
   } else if (podPendingCheck) {
     face = "…";
     label = "Checking the spread";
     aria = label;
   } else if (ready) {
-    face = "20";
+    face = "Go";
     label = "Tap to shuffle up";
     action = runPodCheck;
     aria = "Shuffle up: check the deck power spread";
+  } else if (failed) {
+    face = "✕";
+    label = "Spread too wide";
+    aria = "Power spread fails: a deck is over this pod's range";
   } else {
-    face = n ? `${sealed}/${n}` : "20";
+    face = n ? `${sealed}/${n}` : "";
     label = n ? "Decks sealed" : "No seats yet";
     aria = n ? `${sealed} of ${n} decks sealed` : label;
   }
-  podUi.dieFace.textContent = face;
+  podUi.emblemFace.textContent = face;
   podUi.hubLabel.textContent = label;
-  podUi.dieAction = action;
-  die.setAttribute("aria-label", aria);
-  die.classList.toggle("is-ready", ready);
-  die.classList.toggle("is-rolled", !!first);
-  die.setAttribute("aria-disabled", action ? "false" : "true");
-  die.classList.toggle("is-checking", podPendingCheck);
+  podUi.emblemAction = action;
+  emblem.setAttribute("aria-label", aria);
+  emblem.classList.toggle("is-ready", ready);
+  emblem.classList.toggle("is-passed", passed);
+  emblem.classList.toggle("is-failed", failed);
+  emblem.setAttribute("aria-disabled", action ? "false" : "true");
+  emblem.classList.toggle("is-checking", podPendingCheck);
 
-  // The roll plays once per passing check, when it lands on this phone --
-  // not when the app opens onto a table that already passed.
-  const rollKey = first ? liveTableCheck.id : null;
-  if (podUi.rolledFor === undefined) podUi.rolledFor = rollKey;
-  else if (rollKey && podUi.rolledFor !== rollKey) {
-    podUi.rolledFor = rollKey;
+  // The flare plays once per check result, when it lands on this phone --
+  // not when the app opens onto a table that already passed or failed.
+  const resultKey = passed || failed ? `${liveTableCheck.id}:${passed}` : null;
+  if (podUi.litFor === undefined) podUi.litFor = resultKey;
+  else if (resultKey && podUi.litFor !== resultKey) {
+    podUi.litFor = resultKey;
     if (!REDUCED_MOTION.matches) {
-      die.classList.remove("is-rolling");
-      void die.offsetWidth;
-      die.classList.add("is-rolling");
-      setTimeout(() => die.classList.remove("is-rolling"), 900);
+      emblem.classList.remove("is-flaring");
+      void emblem.offsetWidth;
+      emblem.classList.add("is-flaring");
+      setTimeout(() => emblem.classList.remove("is-flaring"), 900);
     }
-  } else if (!rollKey) podUi.rolledFor = null;
+  } else if (!resultKey) podUi.litFor = null;
 }
 
 function renderPodRoster() {
@@ -5590,11 +5649,11 @@ function renderPodCheckResults() {
 }
 
 // A pass on any phone plays the reveal on every phone: the deck boxes open
-// and the d20 rolls first, then "To the Game!" opens over it. A timer, not
+// and the emblem lights first, then "To the Game!" opens over it. A timer, not
 // an animation event, so it opens even if the animation is skipped; dropped
 // if the pod changes before it fires.
 function schedulePodReveal(checkId) {
-  // Long enough for the d20 to start rolling, not to finish: a longer
+  // Long enough for the emblem to start lighting, not to finish: a longer
   // wait read as the check itself being slow.
   const delay = REDUCED_MOTION.matches ? 0 : Math.min(800, 300 + podSelections.length * 60);
   setTimeout(() => {
