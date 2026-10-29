@@ -3703,55 +3703,18 @@ function podCheckEntry(playerId) {
   return liveTableCheck.entries.find(e => String(e.playerId) === playerId) || null;
 }
 
-// The mana symbols, drawn small for the mat's sigil and the goblet's band:
-// sun, drop, skull, flame, tree. Paths on a 20x20 box centred on 10,10.
-const MANA_GLYPHS = {
-  w: '<circle cx="10" cy="10" r="3.6"/><path d="M10 2.2v3M10 14.8v3M2.2 10h3M14.8 10h3M4.5 4.5l2.1 2.1M13.4 13.4l2.1 2.1M4.5 15.5l2.1-2.1M13.4 6.6l2.1-2.1"/>',
-  u: '<path d="M10 2.5C12.8 7 15 9.6 15 12.4a5 5 0 0 1-10 0C5 9.6 7.2 7 10 2.5z"/>',
-  b: '<path d="M10 3a6 6 0 0 0-6 6c0 2.3 1.2 3.6 2.4 4.4V16h7.2v-2.6C14.8 12.6 16 11.3 16 9a6 6 0 0 0-6-6z"/><circle cx="7.6" cy="9.4" r="1.3"/><circle cx="12.4" cy="9.4" r="1.3"/><path d="M8.6 16v-1.6M11.4 16v-1.6"/>',
-  r: '<path d="M10 2.5c.6 3-2.6 4.6-2.6 8a2.6 2.6 0 0 0 1.4 2.3c-.2-1.5.6-2.6 1.6-3.4.2 1.6 1.8 2.2 1.8 3.8 0 .6-.2 1-.5 1.4A4.6 4.6 0 0 0 15 10c0-3.5-3-4.4-5-7.5z"/><path d="M6 16.2c1.2 1 2.6 1.3 4 1.3s2.8-.3 4-1.3"/>',
-  g: '<circle cx="10" cy="7" r="3.2"/><circle cx="6.6" cy="10.2" r="2.6"/><circle cx="13.4" cy="10.2" r="2.6"/><path d="M10 10v7.5M7.6 17.5h4.8"/>',
-};
-const MANA_ORDER = ["w", "u", "b", "r", "g"];
-
-// The playmat's printed art: a gold-foil summoning circle under the goblet,
-// with a rune ring and the five mana symbols on medallions round it. It
-// lights in colour when the pod passes and goes red when it fails
-// (.mat.is-passed / .is-failed, set by renderPodHub).
-const POD_SIGIL_SVG = (() => {
-  let ticks = "";
-  for (let k = 0; k < 72; k++) {
-    const a = (k / 72) * Math.PI * 2;
-    const r1 = k % 6 === 0 ? 85.5 : 87.5;
-    ticks += `M${(100 + Math.cos(a) * r1).toFixed(1)} ${(100 + Math.sin(a) * r1).toFixed(1)}L${(100 + Math.cos(a) * 91).toFixed(1)} ${(100 + Math.sin(a) * 91).toFixed(1)}`;
-  }
-  // Medallions sit off the top and bottom, where the goblet's flame and
-  // label are.
-  const spots = MANA_ORDER.map((c, k) => {
-    const a = ((-54 + k * 72) * Math.PI) / 180;
-    return { c, x: 100 + Math.cos(a) * 70, y: 100 + Math.sin(a) * 70 };
-  });
-  // A five-petal bloom: a leaf from the goblet's ring out to each
-  // medallion. (Straight lines between the medallions drew a pentagram.)
-  const petals = spots.map(({ x, y }) => {
-    const ux = (x - 100) / 70, uy = (y - 100) / 70;
-    const sx = 100 + ux * 46, sy = 100 + uy * 46;
-    const ex = 100 + ux * 59, ey = 100 + uy * 59;
-    const mx = (sx + ex) / 2, my = (sy + ey) / 2;
-    const f = (n) => n.toFixed(1);
-    return `M${f(sx)} ${f(sy)}Q${f(mx - uy * 9)} ${f(my + ux * 9)} ${f(ex)} ${f(ey)}Q${f(mx + uy * 9)} ${f(my - ux * 9)} ${f(sx)} ${f(sy)}Z`;
-  }).join("");
-  const medals = spots.map(({ c, x, y }) =>
-    `<g class="sigil-medal" style="--c:var(--pip-${c})" transform="translate(${(x - 10).toFixed(1)} ${(y - 10).toFixed(1)})">` +
-    `<circle cx="10" cy="10" r="10.5"/><g class="sigil-glyph">${MANA_GLYPHS[c]}</g></g>`).join("");
-  return '<svg class="mat-sigil" viewBox="0 0 200 200" aria-hidden="true">' +
-    '<circle class="sigil-line" cx="100" cy="100" r="95"/><circle class="sigil-line is-faint" cx="100" cy="100" r="91"/>' +
-    `<path class="sigil-line" d="${ticks}"/>` +
-    '<circle class="sigil-line" cx="100" cy="100" r="82"/>' +
-    `<path class="sigil-line is-faint" d="${petals}"/>` +
-    '<circle class="sigil-line is-dashed" cx="100" cy="100" r="44"/>' +
-    `${medals}</svg>`;
-})();
+// The playmat's art (mat-art.webp, painted for this mat): tooled leather
+// with a gold summoning circle and the five mana medallions round it. It's
+// laid out at the art's own 2:3 shape, fitted to the mat's width and
+// centred, so these medallion spots (% of the art) land on the painting
+// whatever the mat's height. Each takes its mana colour when the pod
+// passes (.mat.is-passed, set by renderPodHub); a fail reddens the circle.
+const POD_MAT_MEDALS = [
+  ["w", 50, 21.5], ["u", 85, 36.5], ["b", 77.2, 65.8], ["r", 22.7, 65.8], ["g", 14.6, 36.5],
+];
+const POD_MAT_ART_HTML = '<div class="mat-art" aria-hidden="true">' +
+  POD_MAT_MEDALS.map(([c, x, y]) => `<span class="mat-medal" style="--c:var(--pip-${c});left:${x}%;top:${y}%"></span>`).join("") +
+  "</div>";
 
 // The goblet in the middle of the mat: a painted, jewelled chalice
 // (goblet.webp, cut out from an illustration made for this mat) holding a
@@ -3805,7 +3768,7 @@ function buildPodTable(container) {
   mat.className = "mat";
   mat.classList.toggle("is-flat", podMatFlatSaved());
   mat.innerHTML = `
-    ${POD_SIGIL_SVG}
+    ${POD_MAT_ART_HTML}
     <div class="mat-tracks" aria-hidden="true"></div>
     <div class="mat-zones"></div>
     <div class="mat-hub">
