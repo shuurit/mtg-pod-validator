@@ -3731,7 +3731,16 @@ const POD_SIGIL_SVG = (() => {
     const a = ((-54 + k * 72) * Math.PI) / 180;
     return { c, x: 100 + Math.cos(a) * 70, y: 100 + Math.sin(a) * 70 };
   });
-  const star = spots.map((p, k) => { const q = spots[(k + 2) % 5]; return `M${p.x.toFixed(1)} ${p.y.toFixed(1)}L${q.x.toFixed(1)} ${q.y.toFixed(1)}`; }).join("");
+  // A five-petal bloom: a leaf from the goblet's ring out to each
+  // medallion. (Straight lines between the medallions drew a pentagram.)
+  const petals = spots.map(({ x, y }) => {
+    const ux = (x - 100) / 70, uy = (y - 100) / 70;
+    const sx = 100 + ux * 46, sy = 100 + uy * 46;
+    const ex = 100 + ux * 59, ey = 100 + uy * 59;
+    const mx = (sx + ex) / 2, my = (sy + ey) / 2;
+    const f = (n) => n.toFixed(1);
+    return `M${f(sx)} ${f(sy)}Q${f(mx - uy * 9)} ${f(my + ux * 9)} ${f(ex)} ${f(ey)}Q${f(mx + uy * 9)} ${f(my - ux * 9)} ${f(sx)} ${f(sy)}Z`;
+  }).join("");
   const medals = spots.map(({ c, x, y }) =>
     `<g class="sigil-medal" style="--c:var(--pip-${c})" transform="translate(${(x - 10).toFixed(1)} ${(y - 10).toFixed(1)})">` +
     `<circle cx="10" cy="10" r="10.5"/><g class="sigil-glyph">${MANA_GLYPHS[c]}</g></g>`).join("");
@@ -3739,7 +3748,7 @@ const POD_SIGIL_SVG = (() => {
     '<circle class="sigil-line" cx="100" cy="100" r="95"/><circle class="sigil-line is-faint" cx="100" cy="100" r="91"/>' +
     `<path class="sigil-line" d="${ticks}"/>` +
     '<circle class="sigil-line" cx="100" cy="100" r="82"/>' +
-    `<path class="sigil-line is-faint" d="${star}"/>` +
+    `<path class="sigil-line is-faint" d="${petals}"/>` +
     '<circle class="sigil-line is-dashed" cx="100" cy="100" r="44"/>' +
     `${medals}</svg>`;
 })();
