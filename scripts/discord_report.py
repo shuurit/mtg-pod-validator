@@ -87,7 +87,8 @@ def to_pawr_rows(season_games):
     within one season, all compute_rank_trend needs to tell games apart."""
     return [
         {"game": g["gameNum"], "player": g["player"], "result": g["result"],
-         "J": g["adjustedPodSizeScore"], "K": g["knockoutScore"], "M": g["winProbability"]}
+         "J": g["adjustedPodSizeScore"], "K": g["knockoutScore"], "M": g["winProbability"],
+         "landDenial": g.get("landDenial", False)}
         for g in season_games
     ]
 
@@ -222,6 +223,13 @@ TREND_DOWN_COLOR = "#d1242f"
 TREND_STEADY_COLOR = "#6e7771"
 
 
+# How much a game won by a bracket 4 deck's land denial counts toward
+# everyone's PAWR, relative to a normal game. Same constant as
+# LAND_DENIAL_WEIGHT in app.js and cloudflare-worker/relay.js -- change all
+# three together.
+LAND_DENIAL_WEIGHT = 0.5
+
+
 def compute_pawr_from_rows(player_rows):
     """Player Adjusted Win Rate computed directly from a list of that
     player's Game Log rows ({result, J, K, M}) -- a Python port of the
@@ -230,18 +238,25 @@ def compute_pawr_from_rows(player_rows):
     given every row for a player (not just a subset). Now the only
     place this project computes it in Python -- discord_report.py used
     to read it back pre-computed from the sheet; there's no D1 table
-    that stores it, only the per-game inputs it's derived from."""
+    that stores it, only the per-game inputs it's derived from.
+
+    Each game counts by its weight (1, or LAND_DENIAL_WEIGHT for a land
+    denial game) -- with every weight 1 this is exactly the sheet's
+    formula."""
+    def w(r):
+        return LAND_DENIAL_WEIGHT if r.get("landDenial") else 1
+
     wins = [r for r in player_rows if r["result"] == 1]
     losses = [r for r in player_rows if r["result"] == 0]
-    C, D = len(wins), len(losses)
-    F = sum(r["J"] for r in wins)
-    avg_j_losses = sum(r["J"] for r in losses) / len(losses) if losses else None
+    C, D = sum(w(r) for r in wins), sum(w(r) for r in losses)
+    F = sum(w(r) * r["J"] for r in wins)
+    avg_j_losses = sum(w(r) * r["J"] for r in losses) / D if losses else None
     G = (1 - (avg_j_losses * -1)) * D if avg_j_losses is not None else 0
     H = F / (F + G) if (F + G) != 0 else 0
-    I = (sum(r["K"] for r in player_rows) / len(player_rows)) if C != 0 and player_rows else 0
-    avg_m_wins = sum(r["M"] for r in wins) / len(wins) if wins else None
+    I = (sum(w(r) * r["K"] for r in player_rows) / (C + D)) if C != 0 and player_rows else 0
+    avg_m_wins = sum(w(r) * r["M"] for r in wins) / C if wins else None
     Jv = (1 - (avg_m_wins - 0.5)) * C if avg_m_wins is not None else 0
-    avg_m_losses = sum(r["M"] for r in losses) / len(losses) if losses else None
+    avg_m_losses = sum(w(r) * r["M"] for r in losses) / D if losses else None
     Kv = (1 + (avg_m_losses - 0.5)) * D if avg_m_losses is not None else 0
     L = Jv / (Jv + Kv) if (Jv + Kv) != 0 else 0
     return (H * 0.3) + (I * 0.2) + (L * 0.5)

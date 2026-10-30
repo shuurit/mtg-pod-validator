@@ -3478,6 +3478,9 @@ input.gtu-in-prefilled {
   cursor: pointer;
   transition: border-color 0.15s ease, background-color 0.15s ease;
 }
+/* display:flex above would otherwise beat [hidden] -- the land denial box
+   hides itself while its card's Bracket isn't 4. */
+.gtu-check-field[hidden] { display: none; }
 .gtu-check-field:has(input:checked) {
   border-color: var(--accent);
   background: var(--accent-soft);

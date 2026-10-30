@@ -391,9 +391,21 @@ function isValidGamePayload(payload) {
     "player", "commander", "strength", "result", "place", "knockouts",
     "tov", "popOff", "disruptions", "recoveries", "gamesClearlyBehind", "bracket",
   ];
+  if (payload.landDenial !== undefined && typeof payload.landDenial !== "boolean") return false;
   return payload.participants.every(p =>
     p && typeof p === "object" && requiredFields.every(f => f in p)
   );
+}
+
+// How much a game won by a bracket 4 deck's land denial counts, for
+// everyone in it, relative to a normal game: half as much ranking (PAWR)
+// gained or lost, and every deck's strength only moves halfway toward that
+// game's result. Same constant as LAND_DENIAL_WEIGHT in app.js and
+// scripts/discord_report.py -- change all three together.
+const LAND_DENIAL_WEIGHT = 0.5;
+
+function gameWeight(landDenial) {
+  return landDenial ? LAND_DENIAL_WEIGHT : 1;
 }
 
 function isValidRosterUpdatePayload(payload) {
@@ -723,6 +735,16 @@ async function handleGamesWrite(request, env, ctx, session) {
   if (!isValidGamePayload(payload)) {
     return jsonResponse({ error: "Payload missing required fields" }, 400);
   }
+  // Land denial is only ever a bracket 4 winner's thing (see
+  // LAND_DENIAL_WEIGHT) -- checked here too, not just by which cards
+  // app.js shows the checkbox on, since this flag changes everyone's rating.
+  const landDenial = payload.landDenial === true;
+  if (landDenial) {
+    const winner = payload.participants.find(p => p.result === "win");
+    if (!winner || winner.bracket !== 4) {
+      return jsonResponse({ error: "Only a game won by a bracket 4 deck can be marked as won via land denial." }, 400);
+    }
+  }
 
   let seasonId;
   try {
@@ -784,8 +806,8 @@ async function handleGamesWrite(request, env, ctx, session) {
   for (let attempt = 1; ; attempt++) {
     try {
       const insertResult = await env.DB.prepare(
-        "INSERT INTO games (season_id, game_num, played_at, pod_size, playgroup_game_id, submitted_by_player_id) VALUES (?, ?, ?, ?, ?, ?)"
-      ).bind(seasonId, gameNum, payload.date, payload.podSize, payload.playgroupGameId ?? null, session.playerId).run();
+        "INSERT INTO games (season_id, game_num, played_at, pod_size, playgroup_game_id, submitted_by_player_id, land_denial) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      ).bind(seasonId, gameNum, payload.date, payload.podSize, payload.playgroupGameId ?? null, session.playerId, landDenial ? 1 : 0).run();
       gameId = insertResult.meta.last_row_id;
       break;
     } catch (err) {
@@ -840,7 +862,16 @@ async function handleGamesWrite(request, env, ctx, session) {
     // be clamped to the bare bracket number here too, discarding a real
     // win/loss's performance -- see the fix for Manny's Kruphix deck after
     // game 17, where a win still read as flat 3.0.)
-    const X = f.X;
+    // A land denial game only moves the deck part of the way from its
+    // strength going in (p.strength) toward this game's result, kept inside
+    // this game's bracket (f.X is always bracket + a 0-1 performance score)
+    // so a deck that just moved up a bracket can't land below its floor.
+    // Stored already blended, so everything reading a deck's latest
+    // strength (computePlayersData and friends) needs no idea this game
+    // was special.
+    const X = landDenial
+      ? Math.min(p.bracket + 1, Math.max(p.bracket, p.strength + LAND_DENIAL_WEIGHT * (f.X - p.strength)))
+      : f.X;
     responseResults.push({ player: p.player, commander: p.commander, result: p.result, gameCalculatedDeckStrength: X });
     // Only ever meaningful (and only ever shown as a checkbox in Games to
     // Update) for a deck flagged decks.potential_bracket_4 -- 0/false for
@@ -1961,7 +1992,7 @@ async function handlePlayers(env, session) {
 async function computeGamesData(env) {
   const { results } = await env.DB.prepare(`
     SELECT g.id AS game_id, g.season_id, s.label AS season_label, g.game_num,
-           g.played_at, g.pod_size, g.playgroup_game_id,
+           g.played_at, g.pod_size, g.playgroup_game_id, g.land_denial,
            p.name AS player, gr.deck_id, d.name AS commander,
            gr.commander_strength, gr.result, gr.place, gr.knockouts, gr.tov,
            gr.pop_off, gr.disruptions, gr.recoveries, gr.games_clearly_behind,
@@ -1986,6 +2017,7 @@ async function computeGamesData(env) {
     date: r.played_at,
     podSize: r.pod_size,
     playgroupGameId: r.playgroup_game_id,
+    landDenial: r.land_denial === 1,
     player: r.player,
     // The deck's own id alongside its name -- app.js's deck tally matches
     // games to a deck by this (see isDeckGameRow in deck-tally.js), since
@@ -2041,22 +2073,29 @@ async function handleGames(env) {
 // earlier this session. j/k/m here are adjusted_pod_size_score/
 // knockout_score/win_probability, kept short to stay visually close to
 // the formula it mirrors.
+//
+// Each game counts by its weight (w: 1, or LAND_DENIAL_WEIGHT for a land
+// denial game) -- every count and average below is weighted, which with
+// all weights 1 is exactly the sheet's formula. wins/losses stay plain
+// game counts: a land denial win is still one win on the record.
 function computePlayerAdjustedWinRate(rows) {
+  const w = g => gameWeight(g.land_denial);
+  const sum = (list, f) => list.reduce((s, g) => s + w(g) * f(g), 0);
   const wins = rows.filter(g => g.result === 1);
   const losses = rows.filter(g => g.result === 0);
-  const C = wins.length, D = losses.length;
-  const F = wins.reduce((s, g) => s + g.j, 0);
-  const avgJLosses = D ? losses.reduce((s, g) => s + g.j, 0) / D : 0;
+  const C = sum(wins, () => 1), D = sum(losses, () => 1);
+  const F = sum(wins, g => g.j);
+  const avgJLosses = D ? sum(losses, g => g.j) / D : 0;
   const G = (1 - (avgJLosses * -1)) * D;
   const H = (F + G) ? F / (F + G) : 0;
-  const I = C ? rows.reduce((s, g) => s + g.k, 0) / rows.length : 0;
-  const avgMWins = C ? wins.reduce((s, g) => s + g.m, 0) / C : 0;
+  const I = C ? sum(rows, g => g.k) / (C + D) : 0;
+  const avgMWins = C ? sum(wins, g => g.m) / C : 0;
   const Jagg = (1 - (avgMWins - 0.5)) * C;
-  const avgMLosses = D ? losses.reduce((s, g) => s + g.m, 0) / D : 0;
+  const avgMLosses = D ? sum(losses, g => g.m) / D : 0;
   const Kagg = (1 + (avgMLosses - 0.5)) * D;
   const L = (Jagg + Kagg) ? Jagg / (Jagg + Kagg) : 0;
   const B = H * 0.3 + I * 0.2 + L * 0.5;
-  return { rate: B, wins: C, losses: D };
+  return { rate: B, wins: wins.length, losses: losses.length };
 }
 
 // seasonId is required -- made season-selectable (rather than always
@@ -2070,7 +2109,7 @@ async function computeRankingsData(env, seasonId) {
     "SELECT id, name FROM players WHERE playgroup_user_id IS NOT NULL AND active = 1 ORDER BY id"
   ).all();
   const { results: gameRows } = await env.DB.prepare(`
-    SELECT p.name AS player, gr.result,
+    SELECT p.name AS player, gr.result, g.land_denial,
            gr.adjusted_pod_size_score AS j, gr.knockout_score AS k, gr.win_probability AS m
     FROM game_results gr
     JOIN players p ON p.id = gr.player_id
