@@ -1035,6 +1035,9 @@ function gameRowFromD1(g) {
     seasonLabel: g.seasonLabel,
     commander: g.commander,
     playgroupGameId: g.playgroupGameId,
+    // false from a relay that predates land denial -- every game then
+    // counts in full, same as before.
+    landDenial: g.landDenial === true,
     commanderStrength: g.commanderStrength,
     result: g.result,
     podSize: g.podSize,
@@ -8355,29 +8358,44 @@ function computeGameRowFormulas({ commanderStrength, otherStrengths, result, pod
   return { J, K, L, M, N, O, Q, U, X };
 }
 
+// How much a game won by a bracket 4 deck's land denial counts, for
+// everyone in it, relative to a normal game -- half the PAWR gained or
+// lost, and deck strength only moves halfway toward that game's result
+// (that part is applied by the relay when the game is saved). Same
+// constant as LAND_DENIAL_WEIGHT in relay.js and scripts/discord_report.py
+// -- change all three together.
+const LAND_DENIAL_WEIGHT = 0.5;
+
 // Replicates the Player Adjusted Ranks tab's aggregate formulas exactly
 // (verified against the sheet's own values earlier). newRow is optional —
 // omit it to just report the player's current rate.
+//
+// Each game counts by its weight (1, or LAND_DENIAL_WEIGHT for a land
+// denial game) -- every count and average below is weighted, which with
+// all weights 1 is exactly the sheet's formula. wins/losses stay plain
+// game counts: a land denial win is still one win on the record.
 function computePlayerAdjustedWinRate(existingRows, newRow) {
   const all = newRow ? [...existingRows, newRow] : existingRows;
+  const w = g => g.landDenial ? LAND_DENIAL_WEIGHT : 1;
+  const sum = (list, f) => list.reduce((s, g) => s + w(g) * f(g), 0);
   const wins = all.filter(g => g.result === 1);
   const losses = all.filter(g => g.result === 0);
-  const C = wins.length, D = losses.length;
-  const F = wins.reduce((s, g) => s + g.J, 0);
-  const avgJLosses = D ? losses.reduce((s, g) => s + g.J, 0) / D : 0;
+  const C = sum(wins, () => 1), D = sum(losses, () => 1);
+  const F = sum(wins, g => g.J);
+  const avgJLosses = D ? sum(losses, g => g.J) / D : 0;
   const G = (1 - (avgJLosses * -1)) * D;
   const H = (F + G) ? F / (F + G) : 0;
   // Guarded on win count (C), not on whether any games exist at all --
   // matches the sheet's =IF(C8<>0, AVERAGEIF(...), 0) exactly. A player
   // with zero wins gets I=0 regardless of their actual knockout average.
-  const I = C ? all.reduce((s, g) => s + g.K, 0) / all.length : 0;
-  const avgMWins = C ? wins.reduce((s, g) => s + g.M, 0) / C : 0;
+  const I = C ? sum(all, g => g.K) / (C + D) : 0;
+  const avgMWins = C ? sum(wins, g => g.M) / C : 0;
   const Jagg = (1 - (avgMWins - 0.5)) * C;
-  const avgMLosses = D ? losses.reduce((s, g) => s + g.M, 0) / D : 0;
+  const avgMLosses = D ? sum(losses, g => g.M) / D : 0;
   const Kagg = (1 + (avgMLosses - 0.5)) * D;
   const L = (Jagg + Kagg) ? Jagg / (Jagg + Kagg) : 0;
   const B = H * 0.3 + I * 0.2 + L * 0.5;
-  return { B, wins: C, losses: D };
+  return { B, wins: wins.length, losses: losses.length };
 }
 
 // Derives Place/KOs/TOV for every participant from playgroup.gg's raw
@@ -8698,6 +8716,22 @@ function buildGtuParticipantCard(p, i, pgGame) {
   if (comboEligible) {
     checks.appendChild(checkField("Early combo?", makeGtuInput("checkbox", "gtu-combo", i)));
   }
+  // Only the winner's card, and only while its Bracket reads 4 -- see
+  // LAND_DENIAL_WEIGHT. Unchecked when hidden, so changing the bracket away
+  // from 4 can't leave the flag quietly set. syncGtuLandDenial reruns it
+  // after a saved draft restores the bracket (which fires no input event).
+  if (p.result === "win") {
+    const landInput = makeGtuInput("checkbox", "gtu-landdenial", i);
+    const landField = checkField("Won via land denial?", landInput);
+    checks.appendChild(landField);
+    card._syncLandDenial = () => {
+      const bracket4 = parseInt(bracketInput.value, 10) === 4;
+      landField.hidden = !bracket4;
+      if (!bracket4) landInput.checked = false;
+    };
+    bracketInput.addEventListener("input", card._syncLandDenial);
+    card._syncLandDenial();
+  }
   card.appendChild(checks);
 
   return card;
@@ -8819,6 +8853,7 @@ function openGameForm(pgGame) {
     restoredHint.className = "hint";
     restoredHint.textContent = "Restored what you'd already entered for this game.";
     box.insertBefore(restoredHint, cardList);
+    cardList.querySelectorAll(".gtu-card").forEach(card => card._syncLandDenial?.());
   }
 
   // Fills in Place/KOs/TOV from playgroup.gg's raw per-game event log --
@@ -8995,6 +9030,13 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
     // a real "no"). See findDeckPotentialBracket4 in openGameForm.
     earlyTwoCardCombo: box.querySelector(`.gtu-combo[data-i="${i}"]`)?.checked ? 1 : 0,
   });
+  // Game-level, from the winner's card -- the only card that has the box.
+  // Re-checked against the bracket rather than trusting the box alone, the
+  // same rule the relay enforces.
+  const landDenial = pgGame.participants.some((p, i) =>
+    box.querySelector(`.gtu-landdenial[data-i="${i}"]`)?.checked &&
+    parseInt(box.querySelector(`.gtu-bracket[data-i="${i}"]`).value, 10) === 4
+  );
 
   // stripAccents here (not just in normalizeCommanderName) matters: this
   // is the text that actually gets written to the Game Log, and it needs
@@ -9038,7 +9080,7 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
   const tableRows = rows.map(row => {
     const existing = gameLogSeason3Rows.filter(r => r.player === row.player && typeof r.J === "number");
     const before = computePlayerAdjustedWinRate(existing);
-    const after = computePlayerAdjustedWinRate(existing, { result: row.result === "win" ? 1 : 0, J: row.J, K: row.K, M: row.M });
+    const after = computePlayerAdjustedWinRate(existing, { result: row.result === "win" ? 1 : 0, J: row.J, K: row.K, M: row.M, landDenial });
     const delta = after.B - before.B;
     const deltaStr = `${delta >= 0 ? "+" : ""}${(delta * 100).toFixed(2)}pt`;
 
@@ -9057,6 +9099,12 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
     tableRows
   );
   resultsEl.appendChild(table);
+  if (landDenial) {
+    const note = document.createElement("p");
+    note.className = "hint";
+    note.textContent = `Won via land denial — this game counts ${LAND_DENIAL_WEIGHT * 100}% toward everyone's PAWR and deck strength.`;
+    resultsEl.appendChild(note);
+  }
 
   const submitBtn = document.createElement("button");
   submitBtn.className = "primary gtu-submit-btn";
@@ -9076,6 +9124,7 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
         date: pgGame.date,
         podSize,
         playgroupGameId: pgGame.playgroup_game_id,
+        landDenial,
         participants: rows.map(row => ({
           player: row.player,
           commander: row.commander,

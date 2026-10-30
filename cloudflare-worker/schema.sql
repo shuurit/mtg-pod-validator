@@ -156,6 +156,12 @@ CREATE TABLE games (
   -- by one -- see deriveGameFieldsFromRawGame in app.js).
   duration_seconds INTEGER,
   total_rounds INTEGER,
+  -- 1 when a bracket 4 winner won via land denial (the checkbox on the
+  -- winner's card in Games to Update). The whole game then counts at
+  -- LAND_DENIAL_WEIGHT (relay.js) for everyone in it: PAWR is weighted on
+  -- read, and game_results.game_calculated_deck_strength is stored already
+  -- blended toward the deck's previous strength.
+  land_denial INTEGER NOT NULL DEFAULT 0,
   UNIQUE(season_id, game_num)
 );
 
