@@ -3594,9 +3594,20 @@ function maskTable(state, version, viewerId) {
   };
 }
 
+// A deck's power as the range check judges it: rounded to one decimal, the
+// same way the app displays it (formatPower in app.js is toFixed(1)). The
+// stored strengths carry the formula's full precision, so judging those
+// directly flagged decks that read exactly 1.0 above the floor as
+// "Over by 0.0" (e.g. 7.34 vs a 6.30 floor). Rounding through toFixed, not
+// Math.round(x * 10) / 10, so half-way values land the same way the
+// display rounds them. Must match rangePower in app.js.
+function rangePower(power) {
+  return typeof power === "number" ? Number(power.toFixed(1)) : power;
+}
+
 // The decks a table check or pick needs, with power worked out exactly the
-// way /players does (effectiveDeckPower) so the server's verdict always
-// matches what the app would have computed. `where` is a fixed fragment,
+// way /players does (effectiveDeckPower), then rounded by rangePower, so the
+// server's verdict always matches the numbers the app shows. `where` is a fixed fragment,
 // never user input; only the bound values vary.
 async function fetchTableDecks(env, where, binds) {
   const { results } = await env.DB.prepare(`
@@ -3617,7 +3628,7 @@ async function fetchTableDecks(env, where, binds) {
     playerId: d.player_id,
     archived: !!d.archived,
     newDeck: !!d.new_deck,
-    power: effectiveDeckPower(d),
+    power: rangePower(effectiveDeckPower(d)),
   }));
 }
 

@@ -2348,6 +2348,14 @@ function formatPower(power) {
   return power.toFixed(1);
 }
 
+// A deck's power as the range check judges it: rounded to the one decimal
+// formatPower shows, so a deck that reads exactly 1.0 above the floor is in
+// range rather than "Over by 0.0". Must match rangePower in relay.js, which
+// runs the live table check.
+function rangePower(power) {
+  return typeof power === "number" ? Number(power.toFixed(1)) : power;
+}
+
 // Same WUBRG order relay.js's toCanonicalColorString already collapsed a
 // deck's colors into -- kept here too so a coin's wedges always read
 // left-to-right in the same fixed sequence regardless of which deck.
@@ -3620,7 +3628,7 @@ function decksAvailableForSlot(slot) {
   if (!player) return [];
   const activeDecks = player.decks.filter(d => !d.archived);
   const restricted = slot.outOfRange && lastCeiling !== null
-    ? activeDecks.filter(d => d.power <= lastCeiling)
+    ? activeDecks.filter(d => rangePower(d.power) <= lastCeiling)
     : null;
   return restricted && restricted.length > 0 ? restricted : activeDecks;
 }
@@ -5846,6 +5854,7 @@ function evaluatePod(entries) {
   // the floor/ceiling math and can't drag an otherwise-fine pod out of
   // range (or hide a real mismatch among everyone else behind its own
   // pass). Exempt entries are always compatible, regardless of power.
+  entries = entries.map(e => ({ ...e, power: rangePower(e.power) }));
   const judged = entries.filter(e => !e.newDeck);
 
   // Nobody here has a confirmed power yet -- nothing to compare, so
