@@ -7004,6 +7004,23 @@ button.uta-bracket-btn[aria-pressed="true"] {
   font-size: 1rem;
 }
 .db-theme-hint { margin: 0; }
+/* The free-text request (deckBuilderRequest in app.js): full width, 16px
+   so iOS doesn't zoom, grows with what's typed but never sideways. */
+#db-request {
+  width: 100%;
+  min-height: 44px;
+  font-size: 1rem;
+  font-family: var(--font-body);
+  resize: vertical;
+}
+.db-optional {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+}
+.db-request-read { margin: 0; }
+.db-request-read:empty { display: none; }
+.db-request-ignored { color: var(--warn); }
 /* The chosen theme in the result header (renderDeckBuild), in ink so it
    reads as part of what was built, not as the muted metadata around it. */
 .db-sub-theme { color: var(--ink); font-weight: 600; }

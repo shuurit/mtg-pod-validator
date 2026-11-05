@@ -47,6 +47,168 @@ function combinedIdentity(commanders) {
   return "WUBRG".split("").filter(c => all.includes(c)).join("");
 }
 
+// ---- "What are you looking for?" ----
+// A player's free-text request, read by plain rules into settings the
+// builder already has: role minimums, scoring weights, a budget, an EDHREC
+// theme. Nothing is guessed: what isn't understood comes back in `ignored`
+// and the page shows it, so the player can rephrase.
+
+const REQUEST_ROLE_WORDS = {
+  ramp: ["mana rocks", "mana dorks", "land ramp", "ramp", "acceleration", "rocks", "dorks"],
+  draw: ["card advantage", "card draw", "draw spells", "draw"],
+  removal: ["spot removal", "kill spells", "interaction", "removal", "answers"],
+  wipe: ["board wipes", "board wipe", "board clears", "sweepers", "wipes", "wipe", "wraths"],
+  protection: ["protect my commander", "protection", "hexproof", "indestructible"],
+};
+// Checked in this order, so "no" beats "more" in "no more wipes" and "less"
+// beats "lots" in "less than lots".
+const REQUEST_INTENSITY = [
+  ["none", /\b(no|without|skip|zero)\b/],
+  ["less", /\b(less|fewer|lighter|light on|minimal|not much|not many|cut|reduce|lower|drop)\b/],
+  ["lots", /\b(lots of|lot of|tons of|loads of|a ton of|plenty of|heavy|heavily|max|maximum|very)\b/],
+  ["more", /\b(more|extra|focus|focused|prioriti[sz]e|emphasi[sz]e|lean|boost|increase|higher|add|want|good|strong)\b/],
+];
+const REQUEST_MAX_ROLE = 30;
+
+// The new minimum for one role: "more" adds ~30% (at least 2), "lots" ~60%
+// (at least 4), "less" takes ~30% off (at least 2), "no" is 0, and a number
+// is that number (capped at REQUEST_MAX_ROLE).
+function requestedMinimum(base, intensity, number) {
+  if (number != null) return Math.min(REQUEST_MAX_ROLE, number);
+  if (intensity === "none") return 0;
+  if (intensity === "less") return Math.max(0, base - Math.max(2, Math.ceil(base * 0.3)));
+  if (intensity === "lots") return Math.min(REQUEST_MAX_ROLE, base + Math.max(4, Math.ceil(base * 0.6)));
+  return Math.min(REQUEST_MAX_ROLE, base + Math.max(2, Math.ceil(base * 0.3)));
+}
+
+function requestIntensity(text) {
+  for (const [name, re] of REQUEST_INTENSITY) if (re.test(text)) return name;
+  return null;
+}
+
+const requestTokens = s => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean);
+
+// text: what the player typed. themes: the commander's EDHREC themes
+// ({ slug, name }), once a build has fetched them. base: the role minimums
+// to adjust (ROLE_MINIMUMS unless given).
+// Returns { roleMinimums, roleMaximums, weights, budget, theme, understood,
+// ignored }: the role and weight maps hold only what the text changed
+// ("more"/"lots"/a number raise a minimum, "less"/"no" set a maximum, which
+// buildDeck takes as opts.roleMinimums / opts.roleMaximums); understood is a
+// list of plain lines for the page to echo back; ignored is every clause
+// nothing was read from.
+function parseDeckRequest(text, themes = [], base = ROLE_MINIMUMS) {
+  const out = { roleMinimums: {}, roleMaximums: {}, weights: {}, budget: null, theme: null, understood: [], ignored: [] };
+  const raw = String(text || "").slice(0, 500);
+  const clauses = raw.split(/[,;.\n!?]+|\bbut\b|\bthough\b/i).map(c => c.trim()).filter(Boolean);
+
+  // A theme is matched as its whole name ("infect", "+1/+1 counters"); the
+  // first one mentioned wins.
+  const textTokens = ` ${requestTokens(raw).join(" ")} `;
+  let themeAt = Infinity;
+  let themeWords = [];
+  for (const t of themes || []) {
+    if (!t || !t.slug) continue;
+    for (const form of [t.name, t.slug.replace(/-/g, " ")]) {
+      const words = requestTokens(form);
+      if (!words.length) continue;
+      const at = textTokens.indexOf(` ${words.join(" ")} `);
+      if (at >= 0 && at < themeAt) { themeAt = at; out.theme = t.slug; themeWords = words; }
+    }
+  }
+  if (out.theme) out.understood.push(`Theme: ${(themes.find(t => t.slug === out.theme) || {}).name || out.theme}`);
+
+  for (const clause of clauses) {
+    const c = clause.toLowerCase();
+    let used = false;
+
+    // Roles: each mention takes the intensity (or number) written since the
+    // previous mention, else the one before it in the clause, else "more" --
+    // so "more removal and ramp" raises both, "more removal and less draw"
+    // raises one and lowers the other.
+    const mentions = [];
+    for (const [role, words] of Object.entries(REQUEST_ROLE_WORDS)) {
+      for (const w of words) {
+        const re = new RegExp(`\\b${w}\\b`, "g");
+        let m;
+        while ((m = re.exec(c))) {
+          const at = m.index;
+          if (!mentions.some(x => x.at <= at && at < x.end)) mentions.push({ role, at, end: at + w.length });
+        }
+      }
+    }
+    mentions.sort((a, b) => a.at - b.at);
+    let carry = null;
+    let from = 0;
+    mentions.forEach((m, i) => {
+      const before = c.slice(from, m.at);
+      const lead = /(\d{1,2})\s*$/.exec(before);
+      const next = mentions[i + 1];
+      const trail = /^\s*(\d{1,2})\b/.exec(c.slice(m.end, next ? next.at : undefined));
+      const number = lead ? Number(lead[1]) : trail ? Number(trail[1]) : null;
+      const intensity = requestIntensity(before) || carry || "more";
+      carry = intensity;
+      from = m.end;
+      if (out.roleMinimums[m.role] != null || out.roleMaximums[m.role] != null) return;
+      const was = base[m.role] || 0;
+      const now = requestedMinimum(was, intensity, number);
+      // "less" and "no" are caps: decks usually run more of a role than its
+      // minimum, so lowering the minimum alone would change nothing.
+      if (number == null && (intensity === "less" || intensity === "none")) {
+        out.roleMaximums[m.role] = now;
+        out.roleMinimums[m.role] = Math.min(was, now);
+        out.understood.push(now === 0 ? `${ROLE_LABELS[m.role]}: none` : `${ROLE_LABELS[m.role]}: at most ${now}`);
+      } else {
+        out.roleMinimums[m.role] = now;
+        out.understood.push(`${ROLE_LABELS[m.role]}: at least ${now} (usually ${was})`);
+      }
+      used = true;
+    });
+
+    if (/\b(don'?t care about owning|ignore my (collection|cards)|doesn'?t matter if i own)\b/.test(c)) {
+      Object.assign(out.weights, { ownedFree: 10, ownedInDeck: 5 });
+      out.understood.push("Owning a card matters less");
+      used = true;
+    } else if (/\b(cards i (already )?(own|have)|what i (own|have)|my collection|my binder|owned cards|stuff i (own|have)|use my cards)\b/.test(c)) {
+      const only = /\b(only|just|strictly)\b/.test(c);
+      Object.assign(out.weights, only ? { ownedFree: 150, ownedInDeck: 60 } : { ownedFree: 80, ownedInDeck: 30 });
+      out.understood.push(only ? "Cards you own, as far as they go" : "Prefer cards you own");
+      used = true;
+    }
+
+    const dollars = /\$\s?(\d{1,4})\b|\b(\d{1,4})\s?(dollars|bucks|usd)\b/.exec(c);
+    if (dollars) {
+      const asked = Number(dollars[1] || dollars[2]);
+      out.budget = Math.min(200, asked);
+      out.understood.push(`Budget: $${out.budget}${asked > 200 ? " (the most the slider goes)" : ""}`);
+      used = true;
+    } else if (/\b(cheap|cheaper|budget|inexpensive|affordable|low cost)\b/.test(c)) {
+      out.weights.pricePerDollar = 2.0;
+      out.understood.push("Cheaper cards when buying");
+      used = true;
+    } else if (/\b(price doesn'?t matter|money is no object|expensive is fine|no budget)\b/.test(c)) {
+      out.weights.pricePerDollar = 0.2;
+      out.understood.push("Price matters less");
+      used = true;
+    }
+
+    if (/\bsynerg/.test(c)) {
+      Object.assign(out.weights, { synergy: 0.8, inclusion: 0.2 });
+      out.understood.push("Lean on synergy with the commander");
+      used = true;
+    } else if (/\b(staples|popular|most played|good ?stuff|tried and true)\b/.test(c)) {
+      Object.assign(out.weights, { synergy: 0.25, inclusion: 0.75 });
+      out.understood.push("Lean on popular staples");
+      used = true;
+    }
+
+    // A clause that only named the theme was understood too.
+    const clauseText = ` ${requestTokens(clause).join(" ")} `;
+    if (!used && !(themeWords.length && clauseText.includes(` ${themeWords.join(" ")} `))) out.ignored.push(clause);
+  }
+  return out;
+}
+
 // ---- Themes ----
 // The relay answers with the commander's EDHREC themes ({ slug, name,
 // count }, most decks first) and, for a themed build, `theme`: { slug,
@@ -319,6 +481,9 @@ function candidatePool(data, opts = {}) {
 // data: the relay's /deck-builder/candidates response.
 // opts: { budget (dollars for cards to get, default 0), excludeDeckCards,
 //         weights, roleMinimums,
+//         roleMaximums (the most cards of a role the builder picks, e.g.
+//           from "less card draw" or "no board wipes"; a card the player
+//           pinned still counts but is never refused for it),
 //         pinned (oracle ids the player swapped in: taken first, kept by
 //           every later rebuild, and allowed past the budget -- the player
 //           chose them -- but never past the bracket's rules),
@@ -359,6 +524,7 @@ function buildDeck(data, opts = {}) {
   const tryTake = (card, allowOverBudget, isPin = false) => {
     if (taken.has(card.oracleId)) return false;
     if (bracketBlock(card)) return false;
+    if (!isPin && atRoleMax(card)) return false;
     if (card.status === "missing") {
       // An unknown price never fits a budget; it can still come in last.
       const cost = card.price;
@@ -383,8 +549,15 @@ function buildDeck(data, opts = {}) {
 
   // Spells first, so the budget goes where nothing can stand in for a
   // missing card -- a basic can always take a land slot for free.
+  const maximums = { ...(opts.roleMaximums || {}) };
+  // A maximum below the minimum wins: "less draw" means less.
   const minimums = { ...ROLE_MINIMUMS, ...(opts.roleMinimums || {}) };
+  for (const [role, max] of Object.entries(maximums)) if (minimums[role] > max) minimums[role] = max;
   const roleCount = role => picked.filter(c => hasRole(c, role)).length;
+  // Whether one more of this card's roles would go past its maximum.
+  function atRoleMax(card) {
+    return (card.roles || []).some(r => maximums[r] != null && roleCount(r) >= maximums[r]);
+  }
 
   // The player's swaps first, best score first. One the bracket can't take
   // (only possible if the pins themselves clash) is reported, not forced.
@@ -453,6 +626,8 @@ function buildDeck(data, opts = {}) {
         // Never swap out a card a role minimum is leaning on, unless the
         // upgrade fills that role too.
         if ((p.roles || []).some(role => !hasRole(card, role) && roleCount(role) <= (minimums[role] || 0))) continue;
+        // ...nor bring in a role that's already at its maximum.
+        if ((card.roles || []).some(role => !hasRole(p, role) && maximums[role] != null && roleCount(role) >= maximums[role])) continue;
         if (!weakest || quality(p) < quality(weakest)) weakest = p;
       }
       if (!weakest || quality(card) - quality(weakest) < UPGRADE_MARGIN) continue;
@@ -492,7 +667,7 @@ function buildDeck(data, opts = {}) {
   const roleShortfall = [];
   for (const role of Object.keys(ROLE_MINIMUMS)) {
     const min = minimums[role] || 0;
-    roles[role] = { label: ROLE_LABELS[role], count: counts[role], min, short: Math.max(0, min - counts[role]) };
+    roles[role] = { label: ROLE_LABELS[role], count: counts[role], min, max: maximums[role] ?? null, short: Math.max(0, min - counts[role]) };
     // Role cards the pool had but the deck left out (budget, Game Changer
     // cap, bracket rules): 0 means EDHREC's pool itself ran out.
     if (roles[role].short) roles[role].leftOut = nonlands.filter(c => hasRole(c, role) && !taken.has(c.oracleId)).length;
@@ -677,7 +852,7 @@ function typeOrder(type) {
 
 if (typeof module !== "undefined") {
   module.exports = {
-    DECK_BUILDER_DECK_SIZE, humanizeThemeSlug, themeName, themeOptions, deckBuilderSlug, deckCommanders, deckSize, combinedIdentity, pairingOf, secondCommanderKind, canPair, pairOrder,
+    DECK_BUILDER_DECK_SIZE, parseDeckRequest, requestedMinimum, humanizeThemeSlug, themeName, themeOptions, deckBuilderSlug, deckCommanders, deckSize, combinedIdentity, pairingOf, secondCommanderKind, canPair, pairOrder,
     BRACKET_RULES, DEFAULT_WEIGHTS, ROLE_MINIMUMS, ROLE_LABELS, roleCounts, cardStatus, scoreCard, deckTemplate, splitBasics,
     buildDeck, candidatePool, swapOptions, applySwap, SWAP_OPTION_COUNT, bracketChecks, combosCheck, comboManaCost, comboRequest, tagsChecked, deckToText, typeOrder,
   };

@@ -5,7 +5,7 @@ const {
   BRACKET_RULES, ROLE_MINIMUMS, roleCounts, cardStatus, scoreCard, deckTemplate, splitBasics, buildDeck, deckToText,
   bracketChecks, comboRequest, comboManaCost, swapOptions, applySwap,
   deckSize, combinedIdentity, pairingOf, secondCommanderKind, canPair, pairOrder,
-  humanizeThemeSlug, themeName, themeOptions,
+  humanizeThemeSlug, themeName, themeOptions, parseDeckRequest, requestedMinimum,
 } = require("../deck-builder.js");
 
 let n = 0;
@@ -733,4 +733,89 @@ test("a themed build carries its theme; an unthemed one carries none", () => {
   assert.deepEqual(themed.theme, { slug: "infect", name: "Infect", source: "all-brackets" });
   assert.equal(themed.size, 99);
   assert.equal(buildDeck(data(cands, owning(cands), 3, { themes: THEMES })).theme, null);
+});
+
+// ---- "What are you looking for?" (parseDeckRequest) ----
+const REQUEST_THEMES = [
+  { slug: "infect", name: "Infect", count: 331 },
+  { slug: "plus-1-plus-1-counters", name: "+1/+1 Counters", count: 275 },
+];
+
+test("'more' raises a role's minimum, 'lots' raises it further, a number sets it", () => {
+  assert.equal(requestedMinimum(8, "more"), 11);
+  assert.equal(requestedMinimum(10, "lots"), 16);
+  assert.equal(requestedMinimum(2, "more"), 4, "at least +2");
+  assert.equal(requestedMinimum(8, "more", 12), 12);
+  assert.equal(requestedMinimum(8, "more", 99), 30, "capped");
+  const r = parseDeckRequest("focus more on removal and ramp");
+  assert.deepEqual(r.roleMinimums, { removal: 11, ramp: 13 });
+  assert.deepEqual(r.roleMaximums, {});
+  assert.deepEqual(r.ignored, []);
+  assert.deepEqual(parseDeckRequest("12 removal").roleMinimums, { removal: 12 });
+  assert.deepEqual(parseDeckRequest("removal 12 and more protection").roleMinimums, { removal: 12, protection: 4 });
+});
+
+test("'less' and 'no' cap a role; each role takes the word next to it", () => {
+  const r = parseDeckRequest("more removal and less draw");
+  assert.deepEqual(r.roleMinimums, { removal: 11, draw: 7 });
+  assert.deepEqual(r.roleMaximums, { draw: 7 });
+  assert.deepEqual(parseDeckRequest("no board wipes").roleMaximums, { wipe: 0 });
+  assert.deepEqual(parseDeckRequest("no board wipes").understood, ["Board wipes: none"]);
+  const mixed = parseDeckRequest("lots of ramp, less card draw");
+  assert.deepEqual(mixed.roleMinimums, { ramp: 16, draw: 7 });
+  assert.deepEqual(mixed.roleMaximums, { draw: 7 });
+});
+
+test("ownership, price, budget and synergy phrases set weights and budget", () => {
+  assert.deepEqual(parseDeckRequest("mostly cards I own").weights, { ownedFree: 80, ownedInDeck: 30 });
+  assert.deepEqual(parseDeckRequest("only cards I own").weights, { ownedFree: 150, ownedInDeck: 60 });
+  assert.deepEqual(parseDeckRequest("ignore my collection").weights, { ownedFree: 10, ownedInDeck: 5 });
+  assert.equal(parseDeckRequest("keep it cheap").weights.pricePerDollar, 2);
+  assert.equal(parseDeckRequest("under $50").budget, 50);
+  assert.equal(parseDeckRequest("30 bucks").budget, 30);
+  assert.equal(parseDeckRequest("$900").budget, 200, "the slider's maximum");
+  assert.deepEqual(parseDeckRequest("lots of synergy").weights, { synergy: 0.8, inclusion: 0.2 });
+  assert.deepEqual(parseDeckRequest("popular staples").weights, { synergy: 0.25, inclusion: 0.75 });
+});
+
+test("themes are matched by their whole name, only from the commander's list", () => {
+  const r = parseDeckRequest("I want infect, mostly cards I own, under $50", REQUEST_THEMES);
+  assert.equal(r.theme, "infect");
+  assert.equal(r.budget, 50);
+  assert.deepEqual(r.ignored, []);
+  assert.equal(parseDeckRequest("+1/+1 counters with plenty of protection", REQUEST_THEMES).theme, "plus-1-plus-1-counters");
+  assert.equal(parseDeckRequest("infect", []).theme, null, "no list yet: no theme");
+  assert.equal(parseDeckRequest("counters", REQUEST_THEMES).theme, null, "a part of a name isn't the theme");
+});
+
+test("anything not understood is reported back, never guessed", () => {
+  const r = parseDeckRequest("make it spicy, more removal");
+  assert.deepEqual(r.ignored, ["make it spicy"]);
+  assert.deepEqual(r.roleMinimums, { removal: 11 });
+  assert.deepEqual(parseDeckRequest("").understood, []);
+});
+
+test("buildDeck honours a request's minimums, maximums and weights", () => {
+  // Plenty of draw and wipe cards that score well, so without a cap the
+  // builder takes many; removal cards that score badly.
+  const extra = [
+    ...Array.from({ length: 15 }, (_, i) => card(`draw ${i}`, { type: "enchantment", synergy: 80 - i, roles: ["draw"] })),
+    ...Array.from({ length: 8 }, (_, i) => card(`wipe ${i}`, { type: "sorcery", synergy: 80 - i, roles: ["wipe"] })),
+    ...Array.from({ length: 15 }, (_, i) => card(`removal ${i}`, { type: "instant", synergy: -60 - i, roles: ["removal"] })),
+  ];
+  const cands = [...pool({ each: 30 }), ...extra];
+  const d = data(cands, owning(cands));
+  const plain = buildDeck(d);
+  assert.ok(plain.roles.draw.count > 7 && plain.roles.wipe.count > 0, "uncapped, the builder runs plenty");
+  const req = parseDeckRequest("more removal, less draw, no board wipes");
+  const b = buildDeck(d, { roleMinimums: req.roleMinimums, roleMaximums: req.roleMaximums, weights: req.weights });
+  assert.equal(b.roles.removal.count, 11);
+  assert.equal(b.roles.draw.count, 7);
+  assert.equal(b.roles.draw.max, 7);
+  assert.equal(b.roles.wipe.count, 0);
+  assert.equal(b.size, 99);
+  // A card the player swapped in is kept even past a cap.
+  const pinnedWipe = extra.find(c => c.name === "wipe 0");
+  const kept = buildDeck(d, { roleMaximums: { wipe: 0 }, pinned: [pinnedWipe.oracleId] });
+  assert.ok(kept.cards.some(c => c.name === "wipe 0"));
 });
