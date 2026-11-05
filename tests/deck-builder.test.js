@@ -3,7 +3,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   BRACKET_RULES, ROLE_MINIMUMS, roleCounts, cardStatus, scoreCard, deckTemplate, splitBasics, buildDeck, deckToText,
-  bracketChecks, comboRequest, comboManaCost,
+  bracketChecks, comboRequest, comboManaCost, swapOptions, applySwap,
 } = require("../deck-builder.js");
 
 let n = 0;
@@ -439,4 +439,151 @@ test("budget upgrades never pull a role below its minimum", () => {
   const b = buildDeck(data([...stars, ...owned], owning(owned)), { budget: 100 });
   assert.ok(b.tally.missing > 0, "it did buy upgrades");
   assert.deepEqual(b.roleShortfall, []);
+});
+
+// ---- Swaps: pinned (swapped in) and excluded (swapped out) ----
+const names = b => b.cards.map(c => c.name);
+
+test("an excluded card is never picked, and its slot goes to the next best", () => {
+  const cands = pool({ each: 30 });
+  const all = owning(cands);
+  const before = buildDeck(data(cands, all));
+  const top = before.cards.find(c => c.type === "creature");
+  const after = buildDeck(data(cands, all), { excluded: [top.oracleId] });
+  assert.ok(!names(after).includes(top.name));
+  assert.equal(after.size, 99);
+  assert.equal(after.cards.filter(c => c.type === "creature").length, before.cards.filter(c => c.type === "creature").length);
+});
+
+test("a pinned card is always in the deck, marked as the player's pick", () => {
+  const cands = pool({ each: 30 });
+  const weak = cands.find(c => c.name === "creature 29"); // scores last of its type
+  const b = buildDeck(data(cands, owning(cands)), { pinned: [weak.oracleId] });
+  const kept = b.cards.find(c => c.oracleId === weak.oracleId);
+  assert.ok(kept, "pinned card is in");
+  assert.equal(kept.pinned, true);
+  assert.equal(b.size, 99);
+  assert.equal(b.cards.filter(c => c.type === "creature").length, 24, "still the template's count");
+});
+
+test("a swap survives budget and toggle changes", () => {
+  const cands = pool({ each: 30 });
+  const owned = cands.filter((c, i) => c.type === "land" || i % 30 >= 15);
+  const out = buildDeck(data(cands, owning(owned))).cards.find(c => c.type === "instant");
+  const into = cands.find(c => c.name === "instant 29");
+  const swaps = applySwap({}, out.oracleId, into.oracleId);
+  for (const opts of [{ budget: 0 }, { budget: 25 }, { budget: 200 }, { budget: 25, excludeDeckCards: true }]) {
+    const b = buildDeck(data(cands, owning(owned)), { ...opts, ...swaps });
+    assert.ok(names(b).includes("instant 29"), JSON.stringify(opts));
+    assert.ok(!names(b).includes(out.name), JSON.stringify(opts));
+    assert.equal(b.size, 99);
+  }
+});
+
+test("budget upgrades never replace a pinned card", () => {
+  const cands = pool({ each: 30 }).map(c => ({ ...c, synergy: c.synergy - 40 }));
+  const stars = Array.from({ length: 5 }, (_, i) => card(`Star ${i}`, { type: "creature", synergy: 80, inclusion: 70, price: 4 }));
+  const weak = cands.find(c => c.name === "creature 29");
+  const b = buildDeck(data([...stars, ...cands], owning(cands)), { budget: 100, pinned: [weak.oracleId] });
+  assert.ok(names(b).includes("creature 29"));
+  assert.ok(b.cards.filter(c => c.upgradeFor).every(c => c.upgradeFor !== "creature 29"));
+});
+
+test("a pinned card you'd have to buy spends the budget, and going over is flagged as the player's", () => {
+  const cands = pool({ each: 30 });
+  const owned = cands.filter(c => !c.name.startsWith("instant 2"));
+  const pricey = cands.find(c => c.name === "instant 25");
+  pricey.price = 30;
+  const b = buildDeck(data(cands, owning(owned)), { budget: 10, pinned: [pricey.oracleId] });
+  assert.ok(names(b).includes("instant 25"));
+  assert.equal(b.pinsOverBudget, true);
+  assert.equal(b.overBudget, false, "the builder itself didn't overspend");
+});
+
+test("pins never break the bracket: a clash is reported, not forced", () => {
+  const gcs = Array.from({ length: 2 }, (_, i) => card(`GC ${i}`, { type: "instant", synergy: -50, gameChanger: true }));
+  const cands = [...gcs, ...pool()];
+  const b = buildDeck(data(cands, owning(cands), 2), { pinned: gcs.map(c => c.oracleId) });
+  assert.equal(b.checks.gameChangers.count, 0);
+  assert.deepEqual(b.pinsDropped.map(p => [p.name, p.reason]), [["GC 0", "gameChangers"], ["GC 1", "gameChangers"]]);
+});
+
+test("applySwap: swapping out a pick unpins it, swapping a card back un-excludes it", () => {
+  let s = applySwap({}, "a", "b");
+  assert.deepEqual(s, { pinned: ["b"], excluded: ["a"] });
+  s = applySwap(s, "b", "c");
+  assert.deepEqual(s, { pinned: ["c"], excluded: ["a", "b"] });
+  s = applySwap(s, "c", "a");
+  assert.deepEqual(s, { pinned: ["a"], excluded: ["b", "c"] });
+});
+
+test("swap options: the 5 best unused cards of the same type", () => {
+  const cands = pool({ each: 30 });
+  const d = data(cands, owning(cands));
+  const b = buildDeck(d);
+  const target = b.cards.find(c => c.type === "sorcery");
+  const opts = swapOptions(d, b, target);
+  assert.equal(opts.length, 5);
+  assert.ok(opts.every(o => o.type === "sorcery"));
+  const inDeck = new Set(b.cards.map(c => c.oracleId));
+  assert.ok(opts.every(o => !inDeck.has(o.oracleId)));
+  for (let i = 1; i < opts.length; i++) assert.ok(opts[i - 1].score >= opts[i].score, "best first");
+  assert.ok(opts.every(o => o.status && "price" in o), "carries ownership and price");
+});
+
+test("swap options share a role with the card when it has one", () => {
+  const cands = [...pool({ each: 30 }), ...Array.from({ length: 12 }, (_, i) => card(`removal ${i}`, { type: "instant", synergy: -60 - i, roles: ["removal"] }))];
+  const d = data(cands, owning(cands));
+  const b = buildDeck(d);
+  const target = b.cards.find(c => (c.roles || []).includes("removal"));
+  const opts = swapOptions(d, b, target);
+  assert.ok(opts.length > 0);
+  assert.ok(opts.every(o => o.roles.includes("removal")));
+});
+
+test("swap options that would break the bracket are blocked with the reason", () => {
+  const gcs = Array.from({ length: 6 }, (_, i) => card(`GC ${i}`, { type: "instant", synergy: 90, gameChanger: true }));
+  const cands = [...gcs, ...pool({ each: 30 })];
+  const d = data(cands, owning(cands), 3);
+  const b = buildDeck(d);
+  assert.equal(b.checks.gameChangers.count, 3);
+  // Swapping a plain instant for a 4th Game Changer: blocked.
+  const plain = b.cards.find(c => c.type === "instant" && !c.gameChanger);
+  const blocked = swapOptions(d, b, plain).filter(o => o.gameChanger);
+  assert.ok(blocked.length > 0);
+  assert.ok(blocked.every(o => o.blocked === "Bracket 3 allows 3 Game Changers, and the deck has 3"));
+  // Swapping one Game Changer for another keeps the count: allowed.
+  const gc = b.cards.find(c => c.gameChanger);
+  assert.ok(swapOptions(d, b, gc).filter(o => o.gameChanger).every(o => o.blocked === null));
+  // Bracket 2: none at all.
+  const d2 = data(cands, owning(cands), 2);
+  const b2 = buildDeck(d2);
+  assert.ok(swapOptions(d2, b2, b2.cards.find(c => c.type === "instant")).filter(o => o.gameChanger)
+    .every(o => o.blocked === "Bracket 2 allows no Game Changers"));
+});
+
+test("swap options block mass land denial and a second extra turn in the brackets that ban them", () => {
+  const mld = card("Armageddon", { type: "sorcery", synergy: 99, massLandDenial: true });
+  const turns = [card("Time Warp", { type: "sorcery", synergy: 98, extraTurn: true }), card("Temporal Mastery", { type: "sorcery", synergy: 97, extraTurn: true })];
+  const cands = [mld, ...turns, ...pool({ each: 30 })];
+  const d = data(cands, owning(cands), 2, { tagsChecked: true });
+  const b = buildDeck(d);
+  assert.equal(b.checks.extraTurns.count, 1);
+  const plain = b.cards.find(c => c.type === "sorcery" && !c.extraTurn);
+  const byName = Object.fromEntries(swapOptions(d, b, plain).map(o => [o.name, o.blocked]));
+  assert.equal(byName["Armageddon"], "Bracket 2 allows no mass land denial");
+  assert.equal(byName["Temporal Mastery"], "Bracket 2 allows one extra-turn card (no chaining)");
+});
+
+test("a swap that drops a role below its minimum says so, without blocking it", () => {
+  const removal = Array.from({ length: 8 }, (_, i) => card(`removal ${i}`, { type: "instant", synergy: -60 - i, roles: ["removal", "draw"] }));
+  const drawOnly = card("draw only", { type: "instant", synergy: -55, roles: ["draw"] });
+  const cands = [...pool({ each: 30 }), ...removal, drawOnly];
+  const d = data(cands, owning(cands));
+  const b = buildDeck(d, { roleMinimums: { ramp: 0, draw: 0, wipe: 0, protection: 0 } });
+  assert.equal(b.roles.removal.count, 8);
+  const o = swapOptions(d, b, b.cards.find(c => c.name === "removal 0")).find(x => x.name === "draw only");
+  assert.ok(o, "shares the draw role, so it's offered");
+  assert.equal(o.blocked, null);
+  assert.equal(o.roleNote, "Removal would drop to 7 of 8");
 });

@@ -11178,6 +11178,12 @@ const deckBuilderUi = {
   combos: null,
   comboTimer: null,
   view: "role",     // "role" | "type": how the card list is grouped
+  // The player's swaps, as buildDeck's opts.pinned / opts.excluded (oracle
+  // ids). Kept across budget and toggle changes; cleared by a new build or
+  // "Reset swaps".
+  swaps: { pinned: [], excluded: [] },
+  openSwap: null,   // the row whose swap panel is open: "<section>|<oracleId>"
+  focusKey: null,   // the row button to focus after the next render
   autocompleteTimer: null,
   autocompleteSeq: 0,
 };
@@ -11299,6 +11305,8 @@ async function runDeckBuild() {
     deckBuilderUi.data = body;
     deckBuilderUi.builtFor = { commander, bracket };
     deckBuilderUi.combos = null;
+    deckBuilderUi.swaps = { pinned: [], excluded: [] };
+    deckBuilderUi.openSwap = null;
     setDeckBuilderStatus("");
     renderDeckBuild();
   } catch (err) {
@@ -11360,24 +11368,100 @@ function deckBuilderChip(card) {
   return makeEl("span", "db-chip db-chip-buy", card.price != null ? `Get · ${formatDollars(card.price)}` : "Get");
 }
 
-function deckBuilderRow(card) {
-  const row = makeEl("li", "db-row");
-  const main = makeEl("div", "db-row-main");
-  const name = makeEl("div", "db-row-name");
+// The line under a card's name: how often EDHREC decks run it, synergy,
+// and anything the builder did with it.
+function deckBuilderWhy(card) {
+  const why = [];
+  if (card.pinned) why.push("your pick");
+  if (card.inclusion != null) why.push(`${card.inclusion}% of decks`);
+  if (card.synergy != null) why.push(`synergy ${card.synergy > 0 ? "+" : ""}${card.synergy}`);
+  if (card.status === "missing" && card.decks.length) why.push(`in ${card.decks.join(", ")}`);
+  if (card.upgradeFor) why.push(`upgrade over ${card.upgradeFor}`);
+  return why.join(" · ");
+}
+
+function deckBuilderName(card) {
+  const name = makeEl("span", "db-row-name");
   if (card.gameChanger) {
     const gc = makeEl("span", "db-chip db-chip-gc", "GC");
     gc.title = "Game Changer";
     name.append(gc, " ");
   }
   name.append(card.name);
-  const why = [];
-  if (card.inclusion != null) why.push(`${card.inclusion}% of decks`);
-  if (card.synergy != null) why.push(`synergy ${card.synergy > 0 ? "+" : ""}${card.synergy}`);
-  if (card.status === "missing" && card.decks.length) why.push(`in ${card.decks.join(", ")}`);
-  if (card.upgradeFor) why.push(`upgrade over ${card.upgradeFor}`);
-  main.append(name, makeEl("div", "db-row-why", why.join(" · ")));
-  row.append(main, deckBuilderChip(card));
+  return name;
+}
+
+// One card in the built deck. The whole row is a button that opens its
+// swap panel (deckBuilderSwapPanel) right under it; `section` keeps the
+// panel under the copy that was tapped when "By role" lists a card twice.
+function deckBuilderRow(card, section, ctx) {
+  const key = `${section}|${card.oracleId}`;
+  const open = ctx && deckBuilderUi.openSwap === key;
+  const row = makeEl("li", `db-row db-row-swappable${open ? " is-open" : ""}`);
+  const btn = makeEl("button", "db-row-btn");
+  btn.type = "button";
+  btn.dataset.focusKey = key;
+  btn.setAttribute("aria-expanded", String(!!open));
+  const panelId = `db-swap-${section}-${card.oracleId}`.replace(/[^\w-]/g, "-");
+  btn.setAttribute("aria-controls", panelId);
+  const main = makeEl("span", "db-row-main");
+  main.append(deckBuilderName(card), makeEl("span", "db-row-why", deckBuilderWhy(card)));
+  btn.append(main, deckBuilderChip(card));
+  btn.addEventListener("click", () => {
+    deckBuilderUi.openSwap = open ? null : key;
+    deckBuilderUi.focusKey = key;
+    renderDeckBuild();
+  });
+  row.append(btn);
+  if (open) row.append(deckBuilderSwapPanel(card, panelId, key, ctx));
   return row;
+}
+
+// The next-best unused cards of the same type (and role) as `card`, each a
+// button that swaps it in. One the bracket won't allow stays listed but
+// disabled, with the reason under it.
+function deckBuilderSwapPanel(card, panelId, key, ctx) {
+  const panel = makeEl("div", "db-swap");
+  panel.id = panelId;
+  const typeLabel = (DECK_BUILDER_TYPE_LABELS[card.type] || card.type).toLowerCase();
+  const roles = (card.roles || []).map(r => (ctx.build.roles[r] && ctx.build.roles[r].label || r).toLowerCase());
+  panel.append(makeEl("p", "db-swap-title", `Swap ${card.name} for`));
+  panel.append(makeEl("p", "db-swap-sub", roles.length ? `Other ${typeLabel} that also count as ${roles.join(" or ")}, best first.` : `Other ${typeLabel}, best first.`));
+  const options = swapOptions(ctx.data, ctx.build, card, ctx.opts);
+  if (!options.length) {
+    panel.append(makeEl("p", "db-swap-empty", `EDHREC's list has no other ${typeLabel}${roles.length ? " in that role" : ""} to offer.`));
+    return panel;
+  }
+  const list = makeEl("ul", "db-swap-list");
+  options.forEach((opt, i) => {
+    const li = makeEl("li");
+    const btn = makeEl("button", "db-swap-btn");
+    btn.type = "button";
+    const main = makeEl("span", "db-row-main");
+    main.append(deckBuilderName(opt), makeEl("span", "db-row-why", deckBuilderWhy(opt)));
+    btn.append(main, deckBuilderChip(opt));
+    const noteText = opt.blocked || opt.roleNote;
+    if (noteText) {
+      const note = makeEl("span", `db-swap-note${opt.blocked ? " db-swap-blocked" : ""}`, opt.blocked ? `Not allowed: ${opt.blocked}.` : `${opt.roleNote}.`);
+      note.id = `${panelId}-note-${i}`;
+      btn.setAttribute("aria-describedby", note.id);
+      btn.append(note);
+    }
+    if (opt.blocked) btn.disabled = true;
+    else {
+      btn.addEventListener("click", () => {
+        deckBuilderUi.swaps = applySwap(deckBuilderUi.swaps, card.oracleId, opt.oracleId);
+        deckBuilderUi.openSwap = null;
+        deckBuilderUi.focusKey = `${opt.type === card.type ? key.split("|")[0] : opt.type}|${opt.oracleId}`;
+        setDeckBuilderStatus(`Swapped ${card.name} for ${opt.name}.`);
+        renderDeckBuild();
+      });
+    }
+    li.append(btn);
+    list.append(li);
+  });
+  panel.append(list);
+  return panel;
 }
 
 // Two-card combos for this exact list: Spellbook's answer if it's in, or
@@ -11445,7 +11529,7 @@ function deckBuilderRoleSummary(build) {
   return ul;
 }
 
-function deckBuilderTypeGroups(build) {
+function deckBuilderTypeGroups(build, ctx) {
   const groups = makeEl("div", "db-groups");
   const byType = new Map();
   for (const card of build.cards) {
@@ -11456,7 +11540,7 @@ function deckBuilderTypeGroups(build) {
   const types = [...byType.keys()].sort((a, b) => typeOrder(a) - typeOrder(b));
   for (const type of types) {
     const cards = byType.get(type).sort((a, b) => b.score - a.score);
-    const rows = cards.map(deckBuilderRow);
+    const rows = cards.map(c => deckBuilderRow(c, type, ctx));
     let count = cards.length;
     if (type === "land") {
       rows.push(...deckBuilderBasicRows(build));
@@ -11470,23 +11554,23 @@ function deckBuilderTypeGroups(build) {
 // One section per role, headed by its count against the minimum. A card
 // that fills two roles is listed under both (the hint says so); cards with
 // no role follow, then the lands.
-function deckBuilderRoleGroups(build) {
+function deckBuilderRoleGroups(build, ctx) {
   const groups = makeEl("div", "db-groups");
   const byScore = (a, b) => b.score - a.score;
   for (const [role, r] of Object.entries(build.roles)) {
     const cards = build.cards.filter(c => (c.roles || []).includes(role)).sort(byScore);
     const tally = makeEl("span", `db-group-min ${r.short ? "db-bad" : "db-ok"}`, ` ${r.count} of ${r.min} ${r.short ? "✗" : "✓"}`);
-    const rows = cards.map(deckBuilderRow);
+    const rows = cards.map(c => deckBuilderRow(c, role, ctx));
     if (!rows.length) rows.push(makeEl("li", "db-row db-row-empty", "None in EDHREC's list that fit."));
     groups.append(deckBuilderGroup(`${r.label} ·`, rows, tally));
   }
   const noRole = build.cards.filter(c => !(c.roles || []).length);
   const others = noRole.filter(c => c.type !== "land").sort(byScore);
-  if (others.length) groups.append(deckBuilderGroup(`Everything else · ${others.length}`, others.map(deckBuilderRow)));
+  if (others.length) groups.append(deckBuilderGroup(`Everything else · ${others.length}`, others.map(c => deckBuilderRow(c, "other", ctx))));
   const lands = noRole.filter(c => c.type === "land").sort(byScore);
   const basicCount = build.basics.reduce((s, b) => s + b.count, 0);
   if (lands.length || basicCount) {
-    groups.append(deckBuilderGroup(`Lands · ${lands.length + basicCount}`, [...lands.map(deckBuilderRow), ...deckBuilderBasicRows(build)]));
+    groups.append(deckBuilderGroup(`Lands · ${lands.length + basicCount}`, [...lands.map(c => deckBuilderRow(c, "land", ctx)), ...deckBuilderBasicRows(build)]));
   }
   const multi = build.cards.filter(c => (c.roles || []).length > 1).length;
   if (multi) groups.prepend(makeEl("p", "hint db-roles-hint", `${multi} card${multi === 1 ? " fills" : "s fill"} more than one role, so ${multi === 1 ? "it shows" : "they show"} under each.`));
@@ -11497,10 +11581,20 @@ function renderDeckBuild() {
   const data = deckBuilderUi.data;
   const result = document.getElementById("db-result");
   if (!data || !result) return;
-  const build = buildDeck(data, {
+  // Every render replaces the rows -- including the ones nobody asked for,
+  // like the combo check answering half a second later -- so whichever row
+  // has focus gets it back afterwards (unless a click already chose one).
+  const focused = document.activeElement;
+  if (!deckBuilderUi.focusKey && focused && result.contains(focused) && focused.dataset && focused.dataset.focusKey) {
+    deckBuilderUi.focusKey = focused.dataset.focusKey;
+  }
+  const buildOpts = {
     budget: Number(document.getElementById("db-budget").value) || 0,
     excludeDeckCards: document.getElementById("db-exclude-decks").checked,
-  });
+    pinned: deckBuilderUi.swaps.pinned,
+    excluded: deckBuilderUi.swaps.excluded,
+  };
+  const build = buildDeck(data, buildOpts);
 
   const head = makeEl("div", "db-head");
   const coin = buildIdentityCoin(data.commander.colorIdentity || "");
@@ -11546,6 +11640,12 @@ function renderDeckBuild() {
   }
   if (build.shortBy) {
     warnings.push(`EDHREC didn't have enough cards for this commander at this bracket, so ${build.shortBy} extra basic land${build.shortBy === 1 ? "" : "s"} fill the gap.`);
+  }
+  if (build.pinsOverBudget) {
+    warnings.push(`Your swaps go past the ${formatDollars(build.budget)} budget: ${formatDollars(t.missingCost)} of cards to get in all.`);
+  }
+  for (const p of build.pinsDropped) {
+    warnings.push(`${p.name} can't stay: ${p.reason === "gameChangers" ? "the Game Changer limit is full" : p.reason === "massLandDenial" ? "no mass land denial at this bracket" : "the extra-turn limit is full"}.`);
   }
   for (const r of build.roleShortfall) {
     const why = r.leftOut
@@ -11642,7 +11742,10 @@ function renderDeckBuild() {
   const roleSummary = deckBuilderRoleSummary(build);
   const viewToggle = document.getElementById("db-view-toggle");
   if (viewToggle) viewToggle.hidden = false;
-  const groups = deckBuilderUi.view === "type" ? deckBuilderTypeGroups(build) : deckBuilderRoleGroups(build);
+  // What a swap panel needs to list alternatives without a request.
+  const swapCtx = { data, build, opts: buildOpts };
+  const groups = deckBuilderUi.view === "type" ? deckBuilderTypeGroups(build, swapCtx) : deckBuilderRoleGroups(build, swapCtx);
+  groups.prepend(makeEl("p", "hint db-swap-hint", "Tap a card to swap it for one of the next-best. Swaps stay when you change the budget."));
 
   const actions = makeEl("div", "row db-actions");
   const copyBtn = makeEl("button", "primary", "Copy for Archidekt");
@@ -11671,6 +11774,18 @@ function renderDeckBuild() {
     copyNote.hidden = false;
   });
   actions.append(copyBtn);
+  const swapCount = deckBuilderUi.swaps.pinned.length;
+  if (swapCount || deckBuilderUi.swaps.excluded.length) {
+    const reset = makeEl("button", "db-reset-swaps", `Reset swaps${swapCount ? ` (${swapCount})` : ""}`);
+    reset.type = "button";
+    reset.addEventListener("click", () => {
+      deckBuilderUi.swaps = { pinned: [], excluded: [] };
+      deckBuilderUi.openSwap = null;
+      setDeckBuilderStatus("Swaps cleared: back to the builder's picks.");
+      renderDeckBuild();
+    });
+    actions.append(reset);
+  }
 
   result.replaceChildren(
     head,
@@ -11688,6 +11803,17 @@ function renderDeckBuild() {
     fallback,
   );
   result.hidden = false;
+  // Rendering replaces every row, so put focus back on the row the player
+  // just used (or the card they swapped in) instead of dropping it to <body>.
+  if (deckBuilderUi.focusKey) {
+    const key = deckBuilderUi.focusKey;
+    // A swapped-in card may sit in a different role section than the card
+    // it replaced; then any copy of it will do.
+    const target = result.querySelector(`[data-focus-key="${CSS.escape(key)}"]`)
+      || result.querySelector(`[data-focus-key$="|${CSS.escape(key.split("|").pop())}"]`);
+    deckBuilderUi.focusKey = null;
+    if (target) target.focus({ preventScroll: false });
+  }
 }
 
 // Runs before anything else in this section so there's no flash of the

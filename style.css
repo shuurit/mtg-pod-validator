@@ -7219,7 +7219,11 @@ button.uta-bracket-btn[aria-pressed="true"] {
   padding: 6px 0;
   border-bottom: 1px solid var(--border-soft);
 }
-.db-row-main { min-width: 0; }
+.db-row-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
 .db-row-name {
   font-size: 0.92rem;
   overflow-wrap: anywhere;
@@ -7229,6 +7233,103 @@ button.uta-bracket-btn[aria-pressed="true"] {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
+/* A card in the built deck is a button into its swap panel (renderDeckBuild
+   -> deckBuilderRow): none of a button's own chrome, just the ruled row it
+   was, like button.wr-card. 44px tall so it's a fair tap target. */
+.db-row-swappable {
+  display: block;
+  padding: 0;
+}
+button.db-row-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 4px;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  border-radius: 0;
+}
+@media (hover: hover) and (pointer: fine) {
+  button.db-row-btn:hover { color: inherit; background: var(--accent-soft); }
+}
+button.db-row-btn:focus-visible { border-radius: var(--radius-sm); }
+/* The open row reads as the head of its panel. */
+.db-row-swappable.is-open > button.db-row-btn { background: var(--accent-soft); }
+
+/* Swap panel: the next-best cards of the same type and role, under the row
+   that opened it (deckBuilderSwapPanel). An inset well, like inputs. */
+.db-swap {
+  margin: 2px 0 10px;
+  padding: 10px;
+  border-radius: var(--radius-md);
+  background: var(--bg-accent);
+  border: 1px solid var(--border-soft);
+}
+.db-swap-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.9rem;
+  line-height: 1.1;
+}
+.db-swap-sub, .db-swap-empty {
+  margin: 2px 0 8px;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.db-swap-empty { margin-bottom: 0; }
+.db-swap-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+/* Each alternative is a button; a note (why it's blocked, or which role it
+   leaves short) wraps onto its own line under the name. */
+button.db-swap-btn {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2px 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 7px 10px;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+}
+@media (hover: hover) and (pointer: fine) {
+  button.db-swap-btn:hover:not(:disabled) { color: inherit; border-color: var(--accent); }
+}
+.db-swap-btn .db-row-main { flex: 1 1 0; }
+/* Blocked by the bracket: dashed and muted, with the reason in words, so
+   it doesn't rest on colour alone. */
+button.db-swap-btn:disabled {
+  cursor: not-allowed;
+  color: var(--muted);
+  border-style: dashed;
+  transform: none;
+}
+.db-swap-note {
+  flex: 1 0 100%;
+  font-size: 0.74rem;
+  color: var(--warn);
+}
+.db-swap-blocked { color: var(--bad); }
+.db-swap-hint { margin: 0; }
+
 .db-chip {
   flex: 0 0 auto;
   max-width: 48%;

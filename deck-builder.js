@@ -153,28 +153,41 @@ function splitBasics(count, averageBasics, colorIdentity) {
   return out.filter(b => b.count > 0).map(({ name, count: n }) => ({ name, count: n })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
 }
 
+// The scored candidate pool, best first: one entry per card (EDHREC can
+// list two printings of one card), never the commander, never a card the
+// player swapped out (opts.excluded).
+function candidatePool(data, opts = {}) {
+  const weights = { ...DEFAULT_WEIGHTS, ...(opts.weights || {}) };
+  const excluded = new Set(opts.excluded || []);
+  const commanderOracle = data.commander && data.commander.oracleId;
+  const seen = new Set();
+  const pool = [];
+  for (const card of data.candidates || []) {
+    if (!card.oracleId || seen.has(card.oracleId) || card.oracleId === commanderOracle) continue;
+    seen.add(card.oracleId);
+    if (excluded.has(card.oracleId)) continue;
+    const status = cardStatus(card, data.collection, opts);
+    const owned = data.collection && data.collection.cards ? data.collection.cards[card.oracleId] : null;
+    pool.push({ ...card, status, score: scoreCard(card, status, weights), decks: owned ? owned.decks || [] : [] });
+  }
+  return pool.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+}
+
 // data: the relay's /deck-builder/candidates response.
 // opts: { budget (dollars for cards to get, default 0), excludeDeckCards,
-//         weights }
+//         weights, roleMinimums,
+//         pinned (oracle ids the player swapped in: taken first, kept by
+//           every later rebuild, and allowed past the budget -- the player
+//           chose them -- but never past the bracket's rules),
+//         excluded (oracle ids the player swapped out: never picked) }
 function buildDeck(data, opts = {}) {
   const bracket = Number(data.bracket);
   const rules = BRACKET_RULES[bracket] || BRACKET_RULES[3];
   const weights = { ...DEFAULT_WEIGHTS, ...(opts.weights || {}) };
   const budget = Math.max(0, Number(opts.budget) || 0);
   const shape = deckTemplate(data.template);
-  const commanderOracle = data.commander && data.commander.oracleId;
-
-  // One entry per card (EDHREC can list two printings of one card).
-  const seen = new Set();
-  const pool = [];
-  for (const card of data.candidates || []) {
-    if (!card.oracleId || seen.has(card.oracleId) || card.oracleId === commanderOracle) continue;
-    seen.add(card.oracleId);
-    const status = cardStatus(card, data.collection, opts);
-    const owned = data.collection && data.collection.cards ? data.collection.cards[card.oracleId] : null;
-    pool.push({ ...card, status, score: scoreCard(card, status, weights), decks: owned ? owned.decks || [] : [] });
-  }
-  pool.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+  const pinnedIds = new Set(opts.pinned || []);
+  const pool = candidatePool(data, opts);
 
   const picked = [];
   const taken = new Set();
@@ -185,19 +198,29 @@ function buildDeck(data, opts = {}) {
   // A card the bracket forbids outright, whatever's already in the deck.
   const forbidden = card => !!card.massLandDenial && !rules.massLandDenial;
   let overBudget = false;
+  let pinsOverBudget = false;
+
+  // Why the bracket won't take this card right now, or null if it will.
+  const bracketBlock = card => {
+    if (card.gameChanger && gameChangers >= rules.gameChangers) return "gameChangers";
+    if (forbidden(card)) return "massLandDenial";
+    if (card.extraTurn && extraTurns >= rules.extraTurns) return "extraTurns";
+    return null;
+  };
 
   // allowOverBudget: the last-resort pass, used only if the deck is short.
-  const tryTake = (card, allowOverBudget) => {
+  // isPin: the player's own pick -- it spends the budget like any other
+  // card, but going past it is the player's call, reported separately.
+  const tryTake = (card, allowOverBudget, isPin = false) => {
     if (taken.has(card.oracleId)) return false;
-    if (card.gameChanger && gameChangers >= rules.gameChangers) return false;
-    if (forbidden(card)) return false;
-    if (card.extraTurn && extraTurns >= rules.extraTurns) return false;
+    if (bracketBlock(card)) return false;
     if (card.status === "missing") {
       // An unknown price never fits a budget; it can still come in last.
       const cost = card.price;
       const fits = cost != null && spent + cost <= budget + 1e-9;
-      if (!fits && !allowOverBudget) return false;
-      if (!fits) overBudget = true;
+      if (!fits && !allowOverBudget && !isPin) return false;
+      if (!fits && isPin) pinsOverBudget = true;
+      else if (!fits) overBudget = true;
       spent += cost || 0;
     }
     taken.add(card.oracleId);
@@ -217,6 +240,16 @@ function buildDeck(data, opts = {}) {
   // missing card -- a basic can always take a land slot for free.
   const minimums = { ...ROLE_MINIMUMS, ...(opts.roleMinimums || {}) };
   const roleCount = role => picked.filter(c => hasRole(c, role)).length;
+
+  // The player's swaps first, best score first. One the bracket can't take
+  // (only possible if the pins themselves clash) is reported, not forced.
+  const pinsDropped = [];
+  for (const card of pool) {
+    if (!pinnedIds.has(card.oracleId)) continue;
+    const block = bracketBlock(card);
+    if (block) { pinsDropped.push({ name: card.name, oracleId: card.oracleId, reason: block }); continue; }
+    tryTake({ ...card, pinned: true }, true, true);
+  }
   for (const allowOverBudget of [false, true]) {
     // Role minimums, best score first: they come before the type targets,
     // so a deck short on creatures still gets its removal. Same rules as
@@ -268,7 +301,8 @@ function buildDeck(data, opts = {}) {
       if (spent + card.price > budget + 1e-9) continue;
       let weakest = null;
       for (const p of picked) {
-        if (p.type !== card.type || p.status === "missing") continue;
+        // The player's own picks are never upgraded away.
+        if (p.type !== card.type || p.status === "missing" || p.pinned) continue;
         if (card.gameChanger && !p.gameChanger && gameChangers >= rules.gameChangers) continue;
         if (card.extraTurn && !p.extraTurn && extraTurns >= rules.extraTurns) continue;
         // Never swap out a card a role minimum is leaning on, unless the
@@ -331,6 +365,8 @@ function buildDeck(data, opts = {}) {
     tally,
     budget,
     overBudget,
+    pinsOverBudget,
+    pinsDropped,
     shortBy,
     tagsChecked: tagsChecked(data),
     checks: bracketChecks(picked, bracket, { tagsChecked: tagsChecked(data), commander: data.commander }),
@@ -417,6 +453,63 @@ function comboRequest(build) {
   };
 }
 
+// ---- Swaps ----
+// The player can trade any card in a build for one of the next-best unused
+// candidates. A swap is two lists -- pinned (swapped in) and excluded
+// (swapped out) -- that every later buildDeck honors, so moving the budget
+// or a toggle never undoes it.
+
+const SWAP_OPTION_COUNT = 5;
+
+// The best unused candidates to replace `card` in `build`: same type, and
+// sharing a role with it when it has one. Each says whether the bracket
+// allows it in place of `card` (blocked: a reason, or null) and which role
+// minimum the trade would drop below (roleNote), which doesn't block it.
+function swapOptions(data, build, card, opts = {}) {
+  const rules = BRACKET_RULES[build.bracket] || BRACKET_RULES[3];
+  const inDeck = new Set(build.cards.map(c => c.oracleId));
+  const cardRoles = card.roles || [];
+  const options = candidatePool(data, opts)
+    .filter(c => c.type === card.type && !c.basic && !inDeck.has(c.oracleId) && c.oracleId !== card.oracleId)
+    .filter(c => !cardRoles.length || cardRoles.some(r => hasRole(c, r)))
+    .slice(0, SWAP_OPTION_COUNT);
+  const n = build.bracket;
+  const gc = build.cards.filter(c => c.gameChanger).length;
+  const turns = build.cards.filter(c => c.extraTurn).length;
+  return options.map(c => {
+    let blocked = null;
+    if (c.gameChanger && !card.gameChanger && gc >= rules.gameChangers) {
+      blocked = rules.gameChangers === 0
+        ? `Bracket ${n} allows no Game Changers`
+        : `Bracket ${n} allows ${rules.gameChangers} Game Changers, and the deck has ${gc}`;
+    } else if (c.massLandDenial && !rules.massLandDenial) {
+      blocked = `Bracket ${n} allows no mass land denial`;
+    } else if (c.extraTurn && !card.extraTurn && turns >= rules.extraTurns) {
+      blocked = rules.extraTurns === 0
+        ? `Bracket ${n} allows no extra turns`
+        : `Bracket ${n} allows one extra-turn card (no chaining)`;
+    }
+    const drops = cardRoles.filter(r => !hasRole(c, r) && build.roles && build.roles[r] && build.roles[r].count - 1 < build.roles[r].min);
+    const roleNote = drops.length
+      ? drops.map(r => `${build.roles[r].label} would drop to ${build.roles[r].count - 1} of ${build.roles[r].min}`).join("; ")
+      : null;
+    return { ...c, blocked, roleNote };
+  });
+}
+
+// One swap applied to the pinned/excluded lists (plain arrays of oracle
+// ids). Swapping out a card the player had pinned unpins it; swapping a
+// card back in un-excludes it.
+function applySwap(swaps, outId, inId) {
+  const pinned = new Set(swaps.pinned || []);
+  const excluded = new Set(swaps.excluded || []);
+  pinned.delete(outId);
+  excluded.add(outId);
+  excluded.delete(inId);
+  pinned.add(inId);
+  return { pinned: [...pinned], excluded: [...excluded] };
+}
+
 // Plain "1 Card Name" lines, commander first: the format Archidekt's (and
 // most deck sites') text import reads.
 function deckToText(build) {
@@ -437,6 +530,6 @@ function typeOrder(type) {
 if (typeof module !== "undefined") {
   module.exports = {
     BRACKET_RULES, DEFAULT_WEIGHTS, ROLE_MINIMUMS, ROLE_LABELS, roleCounts, cardStatus, scoreCard, deckTemplate, splitBasics,
-    buildDeck, bracketChecks, combosCheck, comboManaCost, comboRequest, tagsChecked, deckToText, typeOrder,
+    buildDeck, candidatePool, swapOptions, applySwap, SWAP_OPTION_COUNT, bracketChecks, combosCheck, comboManaCost, comboRequest, tagsChecked, deckToText, typeOrder,
   };
 }
