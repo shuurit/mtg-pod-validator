@@ -111,6 +111,8 @@
  *              wrangler secret put INTERNAL_API_KEY
  *              wrangler secret put SEASON_ANNOUNCE_API_KEY
  *              wrangler secret put POD_BRIDGE_KEY   (shared with archidekt-trading-app: GET /internal/player-decks)
+ *              wrangler secret put COLLECTION_BRIDGE_KEY   (shared with archidekt-trading-app: its
+ *                POST /api/internal/collection-match, called by GET /deck-builder/candidates)
  * Bindings:    KV namespace bound as DECK_CACHE
  *              D1 database bound as DB
  */
@@ -2269,6 +2271,215 @@ async function handleInternalPlayerDecks(request, env, url) {
   }, 200, { "Cache-Control": "no-store" });
 }
 
+// ---------- GET /deck-builder/candidates (Build a Deck) ----------
+// Everything app.js needs to build a deck for one commander at one bracket:
+// EDHREC's cards for that commander measured only among decks at that
+// bracket, the shape of that bracket's average deck, each card's Scryfall
+// facts (oracle id, type, Game Changer flag, price), and which of them the
+// signed-in player owns -- the last from archidekt-trading-app's collection
+// mirror (POST /api/internal/collection-match, COLLECTION_BRIDGE_KEY). The
+// build itself (scoring, slot filling, bracket check) runs in the browser,
+// in deck-builder.js, so changing the budget or a toggle costs no requests.
+//
+// The EDHREC + Scryfall part is the same for everyone, so it's cached in
+// DECK_CACHE per commander + bracket for a week -- KV rather than the Cache
+// API, which does nothing on this workers.dev deployment (see
+// isRateLimited). That's one KV write per commander + bracket per week,
+// nowhere near the daily write budget. A commander EDHREC doesn't know is
+// NOT cached, so a typo can't spend a write. Ownership is never cached:
+// it's read fresh on every build.
+const DECK_BUILDER_BRACKET_SLUGS = { 1: "exhibition", 2: "core", 3: "upgraded", 4: "optimized", 5: "cedh" };
+const DECK_BUILDER_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60;
+const DECK_BUILDER_USER_AGENT = "mtg-pod-validator-relay (+small playgroup app)";
+const EDHREC_JSON_BASE = "https://json.edhrec.com/pages";
+const SCRYFALL_API_BASE = "https://api.scryfall.com";
+const DECK_BUILDER_TEMPLATE_KEYS = ["creature", "instant", "sorcery", "artifact", "enchantment", "planeswalker", "battle", "land", "basic", "nonbasic"];
+
+// EDHREC's page slug for a commander: "Atraxa, Praetors' Voice" ->
+// "atraxa-praetors-voice". A double-faced commander uses its front face.
+// Same rule as archidekt-trading-app's edhrecSlug (no shared module across
+// the two repos -- keep them matching by hand).
+function edhrecSlug(name) {
+  return String(name || "")
+    .split(" // ")[0]
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/['’,.]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+async function edhrecJson(path) {
+  const res = await fetch(`${EDHREC_JSON_BASE}/${path}`, {
+    headers: { "User-Agent": DECK_BUILDER_USER_AGENT, Accept: "application/json" },
+  });
+  // EDHREC answers an unknown page with 403 (an S3 AccessDenied), not 404.
+  if (res.status === 404 || res.status === 403) return null;
+  if (!res.ok) throw new Error(`EDHREC didn't answer (HTTP ${res.status})`);
+  return res.json();
+}
+
+// Front face's type, so a modal double-faced "Instant // Land" counts as the
+// instant it's cast as -- the way EDHREC's own type counts treat it.
+function deckBuilderPrimaryType(typeLine) {
+  const t = String(typeLine || "").split(" // ")[0];
+  if (/\bLand\b/.test(t)) return "land";
+  if (/\bCreature\b/.test(t)) return "creature";
+  if (/\bPlaneswalker\b/.test(t)) return "planeswalker";
+  if (/\bBattle\b/.test(t)) return "battle";
+  if (/\bInstant\b/.test(t)) return "instant";
+  if (/\bSorcery\b/.test(t)) return "sorcery";
+  if (/\bArtifact\b/.test(t)) return "artifact";
+  if (/\bEnchantment\b/.test(t)) return "enchantment";
+  return "other";
+}
+
+async function scryfallCollection(uids) {
+  const byId = new Map();
+  for (let i = 0; i < uids.length; i += 75) {
+    // Scryfall asks for 50-100ms between requests.
+    if (i) await new Promise(r => setTimeout(r, 100));
+    const res = await fetch(`${SCRYFALL_API_BASE}/cards/collection`, {
+      method: "POST",
+      headers: { "User-Agent": DECK_BUILDER_USER_AGENT, Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ identifiers: uids.slice(i, i + 75).map(id => ({ id })) }),
+    });
+    if (!res.ok) throw new Error(`Scryfall didn't answer (HTTP ${res.status})`);
+    const data = await res.json();
+    for (const c of data.data || []) byId.set(c.id, c);
+  }
+  return byId;
+}
+
+async function buildDeckBuilderCandidates(slug, bracket) {
+  const bracketSlug = DECK_BUILDER_BRACKET_SLUGS[bracket];
+  const [page, average] = await Promise.all([
+    edhrecJson(`commanders/${slug}/${bracketSlug}.json`),
+    edhrecJson(`average-decks/${slug}/${bracketSlug}.json`).catch(() => null),
+  ]);
+  const dict = page?.container?.json_dict;
+  if (!dict || !Array.isArray(dict.cardlists)) return null;
+
+  // One entry per card, in the first list EDHREC files it under.
+  const picks = new Map();
+  for (const list of dict.cardlists) {
+    for (const c of list.cardviews || []) {
+      if (!c.id || picks.has(c.id)) continue;
+      picks.set(c.id, {
+        uid: c.id,
+        name: c.name,
+        list: list.header || "",
+        synergy: typeof c.synergy === "number" ? Math.round(c.synergy * 100) : null,
+        inclusion: c.potential_decks ? Math.round((c.num_decks / c.potential_decks) * 100) : null,
+      });
+    }
+  }
+
+  // The average deck: which cards it runs, and how many of each basic.
+  const averageUids = new Set();
+  const averageBasics = {};
+  for (const list of average?.container?.json_dict?.cardlists || []) {
+    for (const c of list.cardviews || []) {
+      averageUids.add(c.id);
+      const count = /^(\d+)\s/.exec(c.label || "");
+      if (list.header === "Basics" && count) averageBasics[c.name] = Number(count[1]);
+    }
+  }
+
+  const template = {};
+  for (const key of DECK_BUILDER_TEMPLATE_KEYS) {
+    template[key] = typeof page[key] === "number" ? page[key] : 0;
+  }
+
+  const commanderUid = dict.card?.id || null;
+  const scry = await scryfallCollection([...picks.keys(), ...(commanderUid ? [commanderUid] : [])]);
+  const num = v => (v != null && Number.isFinite(Number(v)) ? Number(v) : null);
+
+  const candidates = [];
+  for (const p of picks.values()) {
+    const c = scry.get(p.uid);
+    const oracleId = c && (c.oracle_id || c.card_faces?.[0]?.oracle_id);
+    if (!oracleId || p.uid === commanderUid) continue;
+    if (c.legalities && c.legalities.commander !== "legal") continue;
+    const typeLine = c.type_line || c.card_faces?.[0]?.type_line || "";
+    candidates.push({
+      ...p,
+      oracleId: oracleId.toLowerCase(),
+      type: deckBuilderPrimaryType(typeLine),
+      basic: /\bBasic\b/.test(typeLine) && /\bLand\b/.test(typeLine),
+      cmc: num(c.cmc),
+      gameChanger: !!c.game_changer,
+      price: num(c.prices?.usd) ?? num(c.prices?.usd_foil) ?? num(c.prices?.usd_etched),
+      inAverageDeck: averageUids.has(p.uid),
+    });
+  }
+
+  const cmd = commanderUid ? scry.get(commanderUid) : null;
+  return {
+    slug,
+    bracket,
+    commander: {
+      name: cmd?.name || dict.card?.name || null,
+      uid: commanderUid,
+      oracleId: cmd?.oracle_id ? cmd.oracle_id.toLowerCase() : null,
+      colorIdentity: (cmd?.color_identity || dict.card?.color_identity || []).join(""),
+      artUrl: cmd?.image_uris?.art_crop || cmd?.card_faces?.[0]?.image_uris?.art_crop || null,
+    },
+    edhrecUrl: `https://edhrec.com/commanders/${slug}/${bracketSlug}`,
+    template,
+    averageBasics,
+    candidates,
+    builtAt: new Date().toISOString(),
+  };
+}
+
+// Never throws: a missing secret, a player with no trading-app account, or
+// the trading app being down all come back as { connected: false, reason },
+// and the builder then treats every card as one to get.
+async function matchCollection(env, discordUserId, oracleIds) {
+  if (!env.COLLECTION_BRIDGE_KEY) return { connected: false, reason: "bridge-off" };
+  if (!discordUserId) return { connected: false, reason: "no-account" };
+  try {
+    const res = await fetch(`${ARCHIDEKT_TRADING_APP_BASE_URL}/api/internal/collection-match`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Collection-Bridge-Key": env.COLLECTION_BRIDGE_KEY },
+      body: JSON.stringify({ discordId: String(discordUserId), oracleIds }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.error(`collection bridge failed: ${err.message}`);
+    return { connected: false, reason: "unavailable" };
+  }
+}
+
+async function handleDeckBuilderCandidates(env, ctx, session, url) {
+  const bracket = Number(url.searchParams.get("bracket"));
+  if (!DECK_BUILDER_BRACKET_SLUGS[bracket]) return jsonResponse({ error: "Pick a bracket from 1 to 5." }, 400);
+  const commander = String(url.searchParams.get("commander") || "").trim().slice(0, 200);
+  const slug = edhrecSlug(commander);
+  if (!slug) return jsonResponse({ error: "Which commander?" }, 400);
+
+  const cacheKey = `deckbuilder:v1:${slug}:${bracket}`;
+  let data = await kvGetJson(env, cacheKey, null);
+  if (!data) {
+    try {
+      data = await buildDeckBuilderCandidates(slug, bracket);
+    } catch (err) {
+      return jsonResponse({ error: err.message }, 502);
+    }
+    if (!data) return jsonResponse({ slug, bracket, reason: "no-edhrec" }, 200, { "Cache-Control": "no-store" });
+    ctx.waitUntil(
+      env.DECK_CACHE.put(cacheKey, JSON.stringify(data), { expirationTtl: DECK_BUILDER_CACHE_TTL_SECONDS })
+        .catch(err => console.error(`deck builder cache write failed: ${err.message}`))
+    );
+  }
+
+  const collection = await matchCollection(env, session.discordUserId, data.candidates.map(c => c.oracleId));
+  return jsonResponse({ ...data, collection }, 200, { "Cache-Control": "no-store" });
+}
+
 async function handleDeckWinRates(env) {
   let data;
   try {
@@ -4247,6 +4458,10 @@ export default {
 
     if (isTableRoute && request.method === "POST") {
       return handleTableWrite(request, env, session);
+    }
+
+    if (request.method === "GET" && url.pathname === "/deck-builder/candidates") {
+      return handleDeckBuilderCandidates(env, ctx, session, url);
     }
 
     if (request.method === "GET" && url.pathname === "/playgroup-games") {

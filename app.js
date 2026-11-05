@@ -7165,7 +7165,7 @@ function crossfadeTabBackground(bgEl) {
 // another one (Tonight's to-dos, the avatar menu's Proposals) sit just
 // past their way in, so opening one reads as going forward and the back
 // link as coming back.
-const TAB_SEQUENCE = { tonight: 0, "games-to-update": 0.5, "update-app": 0.5, pod: 1, winrates: 2, achievements: 3, proposals: 4 };
+const TAB_SEQUENCE = { tonight: 0, "games-to-update": 0.5, "update-app": 0.5, pod: 1, winrates: 2, achievements: 3, proposals: 4, "deck-builder": 4 };
 
 function playTabEnter(panel, previous) {
   if (REDUCED_MOTION.matches) return;
@@ -10791,6 +10791,8 @@ function wireAuthControl() {
   if (proposalsBtn) proposalsBtn.addEventListener("click", () => { hideAuthMenu(); openProposalsTab("active"); });
   const houseRulesBtn = document.getElementById("auth-house-rules-btn");
   if (houseRulesBtn) houseRulesBtn.addEventListener("click", () => { hideAuthMenu(); openProposalsTab("adopted"); });
+  const deckBuilderBtn = document.getElementById("auth-deck-builder-btn");
+  if (deckBuilderBtn) deckBuilderBtn.addEventListener("click", () => { hideAuthMenu(); openDeckBuilderTab(); });
 
   const signoutBtn = document.getElementById("auth-signout-btn");
   if (signoutBtn) {
@@ -11147,6 +11149,375 @@ if (gtuIntroEl) {
 // before the app content behind it.
 initViewportHeight();
 
+// ---------- Build a Deck ----------
+// A commander + a bracket -> a 99 built from EDHREC's cards for that
+// bracket, owned cards first. The relay gathers everything in one call
+// (GET /deck-builder/candidates: EDHREC, Scryfall, and the player's
+// Archidekt collection through archidekt-trading-app); buildDeck in
+// deck-builder.js assembles it here, so moving the budget or the "leave
+// out deck cards" toggle rebuilds instantly with no request.
+
+const DECK_BUILDER_RELAY_URL = RELAY_BASE_URL + "/deck-builder/candidates";
+const SCRYFALL_AUTOCOMPLETE_URL = "https://api.scryfall.com/cards/autocomplete";
+const DECK_BUILDER_TYPE_LABELS = {
+  creature: "Creatures", planeswalker: "Planeswalkers", battle: "Battles", instant: "Instants",
+  sorcery: "Sorceries", artifact: "Artifacts", enchantment: "Enchantments", land: "Lands", other: "Other",
+};
+const deckBuilderUi = {
+  bracket: 3,
+  data: null,       // the last /deck-builder/candidates response
+  builtFor: null,   // { commander, bracket } that response is for
+  busy: false,
+  autocompleteTimer: null,
+  autocompleteSeq: 0,
+};
+
+function openDeckBuilderTab() {
+  activateTab("deck-builder");
+}
+
+function setDeckBuilderStatus(text, tone) {
+  const status = document.getElementById("db-status");
+  if (!status) return;
+  status.hidden = !text;
+  status.textContent = text || "";
+  status.classList.toggle("is-error", tone === "error");
+}
+
+function initDeckBuilder() {
+  const form = document.getElementById("db-form");
+  if (!form) return;
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    runDeckBuild();
+  });
+
+  document.querySelectorAll("#db-bracket-toggle [data-bracket]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      deckBuilderUi.bracket = Number(btn.dataset.bracket);
+      document.querySelectorAll("#db-bracket-toggle [data-bracket]").forEach(b => {
+        const on = b === btn;
+        b.classList.toggle("active", on);
+        b.setAttribute("aria-pressed", String(on));
+      });
+      // A different bracket means different EDHREC numbers and rules, so
+      // the shown deck no longer answers the question -- say so rather
+      // than quietly leaving the old bracket's list up.
+      if (deckBuilderUi.data && deckBuilderUi.builtFor.bracket !== deckBuilderUi.bracket) {
+        setDeckBuilderStatus(`Showing Bracket ${deckBuilderUi.builtFor.bracket}. Tap Build for Bracket ${deckBuilderUi.bracket}.`);
+      } else if (deckBuilderUi.data) {
+        setDeckBuilderStatus("");
+      }
+    });
+  });
+
+  const budget = document.getElementById("db-budget");
+  const budgetValue = document.getElementById("db-budget-value");
+  budget.addEventListener("input", () => {
+    budgetValue.textContent = `$${budget.value}`;
+    if (deckBuilderUi.data) renderDeckBuild();
+  });
+  document.getElementById("db-exclude-decks").addEventListener("change", () => {
+    if (deckBuilderUi.data) renderDeckBuild();
+  });
+
+  // Scryfall's own autocomplete into the field's datalist. It suggests
+  // any card, not just commanders -- a non-commander simply comes back
+  // as "EDHREC has no page" when built.
+  const input = document.getElementById("db-commander");
+  const options = document.getElementById("db-commander-options");
+  input.addEventListener("input", () => {
+    clearTimeout(deckBuilderUi.autocompleteTimer);
+    const q = input.value.trim();
+    if (q.length < 2) return;
+    deckBuilderUi.autocompleteTimer = setTimeout(async () => {
+      const seq = ++deckBuilderUi.autocompleteSeq;
+      try {
+        const res = await fetch(`${SCRYFALL_AUTOCOMPLETE_URL}?q=${encodeURIComponent(q)}`);
+        if (!res.ok || seq !== deckBuilderUi.autocompleteSeq) return;
+        const body = await res.json();
+        options.replaceChildren(...(body.data || []).slice(0, 12).map(name => {
+          const opt = document.createElement("option");
+          opt.value = name;
+          return opt;
+        }));
+      } catch {
+        // No suggestions this time; typing the full name still works.
+      }
+    }, 250);
+  });
+}
+
+async function runDeckBuild() {
+  if (deckBuilderUi.busy) return;
+  const input = document.getElementById("db-commander");
+  const commander = input.value.trim();
+  if (!commander) {
+    setDeckBuilderStatus("Type a commander's name first.", "error");
+    input.focus();
+    return;
+  }
+  const bracket = deckBuilderUi.bracket;
+  const btn = document.getElementById("db-build-btn");
+  deckBuilderUi.busy = true;
+  btn.disabled = true;
+  btn.textContent = "Building…";
+  setDeckBuilderStatus("Reading EDHREC and your collection…");
+  try {
+    const res = await fetch(`${DECK_BUILDER_RELAY_URL}?commander=${encodeURIComponent(commander)}&bracket=${bracket}`, {
+      cache: "no-store",
+      headers: authHeaders(),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+    if (body.reason === "no-edhrec") {
+      setDeckBuilderStatus(`EDHREC has no Bracket ${bracket} page for "${commander}". Check the spelling, or try another bracket.`, "error");
+      return;
+    }
+    deckBuilderUi.data = body;
+    deckBuilderUi.builtFor = { commander, bracket };
+    setDeckBuilderStatus("");
+    renderDeckBuild();
+  } catch (err) {
+    setDeckBuilderStatus(`Couldn't build the deck (${err.message}). Try again in a moment.`, "error");
+  } finally {
+    deckBuilderUi.busy = false;
+    btn.disabled = false;
+    btn.textContent = "Build";
+  }
+}
+
+function formatDollars(n) {
+  return `$${n.toFixed(2)}`;
+}
+
+// D1's datetime('now') text is UTC with no zone marker.
+function formatSyncedAgo(syncedAt) {
+  if (!syncedAt) return null;
+  const t = new Date(/Z$|[+-]\d\d:?\d\d$/.test(syncedAt) ? syncedAt : `${syncedAt.replace(" ", "T")}Z`);
+  if (Number.isNaN(t.getTime())) return null;
+  const mins = Math.max(0, Math.round((Date.now() - t.getTime()) / 60000));
+  if (mins < 2) return "just now";
+  if (mins < 60) return `${mins} minutes ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 36) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.round(hours / 24);
+  return `${days} days ago`;
+}
+
+function deckBuilderCollectionNote(collection) {
+  if (collection && collection.connected) {
+    const ago = formatSyncedAgo(collection.syncedAt);
+    const who = collection.archidektUsername ? ` (${collection.archidektUsername})` : "";
+    return { text: `Using your Archidekt collection${who}${ago ? `, last synced ${ago}` : ""}. Open the Trading App to refresh it.`, tone: "" };
+  }
+  const reason = collection && collection.reason;
+  const text = {
+    "no-account": "Your collection isn't linked: sign in to the Archidekt Trading App with this Discord account. Until then, every card shows as one to get.",
+    "no-archidekt": "Connect Archidekt in the Trading App to use your collection. Until then, every card shows as one to get.",
+  }[reason] || "Your collection couldn't be reached just now, so every card shows as one to get.";
+  return { text, tone: "warn" };
+}
+
+function makeEl(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined && text !== null) node.textContent = text;
+  return node;
+}
+
+function deckBuilderChip(card) {
+  if (card.status === "free") return makeEl("span", "db-chip db-chip-own", "Binder");
+  if (card.status === "deck") {
+    const extra = card.decks.length > 1 ? ` +${card.decks.length - 1}` : "";
+    const chip = makeEl("span", "db-chip db-chip-deck", `In ${card.decks[0]}${extra}`);
+    chip.title = `In: ${card.decks.join(", ")}`;
+    return chip;
+  }
+  return makeEl("span", "db-chip db-chip-buy", card.price != null ? `Get · ${formatDollars(card.price)}` : "Get");
+}
+
+function deckBuilderRow(card) {
+  const row = makeEl("li", "db-row");
+  const main = makeEl("div", "db-row-main");
+  const name = makeEl("div", "db-row-name");
+  if (card.gameChanger) {
+    const gc = makeEl("span", "db-chip db-chip-gc", "GC");
+    gc.title = "Game Changer";
+    name.append(gc, " ");
+  }
+  name.append(card.name);
+  const why = [];
+  if (card.inclusion != null) why.push(`${card.inclusion}% of decks`);
+  if (card.synergy != null) why.push(`synergy ${card.synergy > 0 ? "+" : ""}${card.synergy}`);
+  if (card.status === "missing" && card.decks.length) why.push(`in ${card.decks.join(", ")}`);
+  if (card.upgradeFor) why.push(`upgrade over ${card.upgradeFor}`);
+  main.append(name, makeEl("div", "db-row-why", why.join(" · ")));
+  row.append(main, deckBuilderChip(card));
+  return row;
+}
+
+function renderDeckBuild() {
+  const data = deckBuilderUi.data;
+  const result = document.getElementById("db-result");
+  if (!data || !result) return;
+  const build = buildDeck(data, {
+    budget: Number(document.getElementById("db-budget").value) || 0,
+    excludeDeckCards: document.getElementById("db-exclude-decks").checked,
+  });
+
+  const head = makeEl("div", "db-head");
+  const coin = buildIdentityCoin(data.commander.colorIdentity || "");
+  if (coin) head.append(coin);
+  const titles = makeEl("div", "db-head-titles");
+  titles.append(makeEl("h3", "db-commander", data.commander.name));
+  const sub = makeEl("p", "db-sub", `Bracket ${build.bracket} · ${build.bracketName} · `);
+  const link = makeEl("a", null, "EDHREC page");
+  link.href = data.edhrecUrl;
+  link.target = "_blank";
+  link.rel = "noopener";
+  sub.append(link);
+  titles.append(sub);
+  head.append(titles);
+
+  const note = deckBuilderCollectionNote(data.collection);
+  const noteEl = makeEl("p", `db-note${note.tone ? ` db-note-${note.tone}` : ""}`, note.text);
+
+  const t = build.tally;
+  const tally = makeEl("div", "db-tally");
+  const cell = (n, label) => {
+    const c = makeEl("div", "db-tally-cell");
+    c.append(makeEl("b", null, String(n)), makeEl("span", null, label));
+    return c;
+  };
+  const cost = t.missing ? ` · ${formatDollars(t.missingCost)}${t.unknownPrices ? "+" : ""}` : "";
+  tally.append(cell(t.free, "in your binder"), cell(t.deck, "in other decks"), cell(t.missing, `to get${cost}`));
+
+  // Same split as the tally, as a bar. The tally above carries the same
+  // numbers in text, so the bar itself is decorative.
+  const meter = makeEl("div", "db-meter");
+  meter.setAttribute("aria-hidden", "true");
+  for (const [n, cls] of [[t.free, "own"], [t.deck, "deck"], [t.missing, "buy"]]) {
+    if (!n) continue;
+    const seg = makeEl("span", `db-meter-${cls}`);
+    seg.style.flexGrow = String(n);
+    meter.append(seg);
+  }
+
+  const warnings = [];
+  if (build.overBudget) {
+    warnings.push(`Your collection and the ${formatDollars(build.budget)} budget couldn't fill the deck, so it goes over: ${formatDollars(t.missingCost)} of cards to get.`);
+  }
+  if (build.shortBy) {
+    warnings.push(`EDHREC didn't have enough cards for this commander at this bracket, so ${build.shortBy} extra basic land${build.shortBy === 1 ? "" : "s"} fill the gap.`);
+  }
+  if (t.unknownPrices) {
+    warnings.push(`${t.unknownPrices} card${t.unknownPrices === 1 ? " has" : "s have"} no price on Scryfall, so the total leaves ${t.unknownPrices === 1 ? "it" : "them"} out.`);
+  }
+
+  const gc = build.checks.gameChangers;
+  const checks = makeEl("ul", "db-checks");
+  checks.setAttribute("aria-label", "Bracket check");
+  const check = (label, value, tone, title) => {
+    const li = makeEl("li", "db-check");
+    const v = makeEl("span", `db-check-val db-${tone}`, value);
+    if (title) li.title = title;
+    li.append(makeEl("span", null, label), v);
+    return li;
+  };
+  const gcValue = gc.cap === Infinity ? `${gc.count} · no limit` : `${gc.count} of ${gc.cap} ${gc.ok ? "✓" : "✗"}`;
+  checks.append(
+    check("Game Changers", gcValue, gc.ok ? "ok" : "bad", gc.cards.join(", ") || null),
+    check("Mass land denial", "not checked yet", "unchecked"),
+    check("Extra turns", "not checked yet", "unchecked"),
+    check("Two-card combos", "not checked yet", "unchecked"),
+  );
+
+  const groups = makeEl("div", "db-groups");
+  const byType = new Map();
+  for (const card of build.cards) {
+    if (!byType.has(card.type)) byType.set(card.type, []);
+    byType.get(card.type).push(card);
+  }
+  const types = [...byType.keys()].sort((a, b) => typeOrder(a) - typeOrder(b));
+  for (const type of types) {
+    const cards = byType.get(type).sort((a, b) => b.score - a.score);
+    const basicsHere = type === "land" ? build.basics.reduce((s, b) => s + b.count, 0) : 0;
+    const group = makeEl("section", "db-group");
+    group.append(makeEl("h4", "db-group-title", `${DECK_BUILDER_TYPE_LABELS[type] || type} · ${cards.length + basicsHere}`));
+    const list = makeEl("ul", "db-list");
+    list.append(...cards.map(deckBuilderRow));
+    if (type === "land") {
+      for (const b of build.basics) {
+        const row = makeEl("li", "db-row");
+        const main = makeEl("div", "db-row-main");
+        main.append(makeEl("div", "db-row-name", `${b.count} ${b.name}`));
+        row.append(main, makeEl("span", "db-chip db-chip-own", "Basic"));
+        list.append(row);
+      }
+    }
+    group.append(list);
+    groups.append(group);
+  }
+  // A deck with no nonbasic lands still lists its basics.
+  if (!byType.has("land") && build.basics.length) {
+    const group = makeEl("section", "db-group");
+    group.append(makeEl("h4", "db-group-title", `Lands · ${build.basics.reduce((s, b) => s + b.count, 0)}`));
+    const list = makeEl("ul", "db-list");
+    for (const b of build.basics) {
+      const row = makeEl("li", "db-row");
+      const main = makeEl("div", "db-row-main");
+      main.append(makeEl("div", "db-row-name", `${b.count} ${b.name}`));
+      row.append(main, makeEl("span", "db-chip db-chip-own", "Basic"));
+      list.append(row);
+    }
+    group.append(list);
+    groups.append(group);
+  }
+
+  const actions = makeEl("div", "row db-actions");
+  const copyBtn = makeEl("button", "primary", "Copy for Archidekt");
+  copyBtn.type = "button";
+  const copyNote = makeEl("p", "hint db-copy-note");
+  copyNote.setAttribute("aria-live", "polite");
+  copyNote.hidden = true;
+  const fallback = makeEl("textarea", "db-copy-fallback");
+  fallback.readOnly = true;
+  fallback.rows = 8;
+  fallback.hidden = true;
+  fallback.setAttribute("aria-label", "Deck list");
+  copyBtn.addEventListener("click", async () => {
+    const text = deckToText(build);
+    try {
+      await navigator.clipboard.writeText(text);
+      copyNote.textContent = "Copied 100 cards. In Archidekt, use Import on a new deck and paste.";
+      fallback.hidden = true;
+    } catch {
+      fallback.value = text;
+      fallback.hidden = false;
+      fallback.focus();
+      fallback.select();
+      copyNote.textContent = "Couldn't copy automatically. The list is selected below; copy it from there.";
+    }
+    copyNote.hidden = false;
+  });
+  actions.append(copyBtn);
+
+  result.replaceChildren(
+    head,
+    noteEl,
+    tally,
+    meter,
+    ...warnings.map(w => makeEl("p", "db-note db-note-warn", w)),
+    checks,
+    groups,
+    actions,
+    copyNote,
+    fallback,
+  );
+  result.hidden = false;
+}
+
 // Runs before anything else in this section so there's no flash of the
 // wrong theme after a stored explicit choice -- see initTheme/applyTheme.
 initTheme();
@@ -11195,6 +11566,7 @@ checkAuthSession().then(() => {
     loadAchievements();
     initProposals();
     loadProposals();
+    initDeckBuilder();
   }
 });
 

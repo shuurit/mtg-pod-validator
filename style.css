@@ -337,6 +337,8 @@ body {
 /* No dedicated Proposals artwork yet -- house rules belong to the table,
    so it borrows the Pod tab's. */
 #bg-proposals { background-image: linear-gradient(var(--bg-scrim), var(--bg-scrim)), url('bg-validator.webp'); }
+/* Build a Deck borrows the Pod tab's artwork too, for the same reason. */
+#bg-deck-builder { background-image: linear-gradient(var(--bg-scrim), var(--bg-scrim)), url('bg-validator.webp'); }
 
 @media (prefers-reduced-motion: reduce) {
   .tab-bg.tab-bg-leaving {
@@ -6956,3 +6958,251 @@ button.uta-bracket-btn[aria-pressed="true"] {
   font-weight: 600;
   white-space: nowrap;
 }
+
+
+/* ---------- Build a Deck (initDeckBuilder / renderDeckBuild in app.js) ---------- */
+
+.db-form {
+  display: grid;
+  gap: 14px;
+}
+.db-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.db-label {
+  font-family: var(--font-display);
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.db-label output {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  margin-left: 4px;
+}
+/* Full width: the commander name is the one long thing typed here, and the
+   base input rule sizes text inputs to their content. 16px stops iOS
+   zooming the page when the field takes focus. */
+#db-commander {
+  width: 100%;
+  font-size: 1rem;
+  min-height: 44px;
+}
+#db-budget {
+  width: 100%;
+  accent-color: var(--accent);
+  min-height: 32px;
+}
+/* Bracket number over its name, both inside one segment of the shared
+   .view-toggle look. */
+.db-bracket-toggle .view-toggle-btn {
+  display: grid;
+  gap: 1px;
+  padding: 7px 2px;
+  min-height: 48px;
+}
+.db-bracket-toggle .view-toggle-btn b {
+  font-size: 1.15rem;
+  line-height: 1;
+}
+.db-bracket-toggle .view-toggle-btn span {
+  font-size: 0.66rem;
+  letter-spacing: 0.02em;
+}
+.db-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.92rem;
+  min-height: 44px;
+}
+.db-toggle input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--accent);
+  flex: 0 0 auto;
+}
+.db-status.is-error {
+  color: var(--bad);
+}
+
+.db-result {
+  display: grid;
+  gap: 12px;
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.db-result[hidden] { display: none; }
+.db-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.db-head .id-coin {
+  width: 26px;
+  height: 26px;
+}
+.db-head-titles {
+  min-width: 0;
+}
+.db-commander {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.45rem;
+  font-weight: 700;
+  line-height: 1.05;
+  text-wrap: balance;
+}
+.db-sub {
+  margin: 2px 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.db-sub a { color: var(--accent); }
+.db-note {
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+.db-note-warn {
+  color: var(--warn);
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+}
+
+.db-tally {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.db-tally-cell {
+  display: grid;
+  padding: 8px 10px;
+  border-left: 1px solid var(--border);
+  min-width: 0;
+}
+.db-tally-cell:first-child { border-left: none; }
+.db-tally-cell b {
+  font-family: var(--font-display);
+  font-size: 1.6rem;
+  font-weight: 700;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.db-tally-cell span {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.db-meter {
+  display: flex;
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--border-soft);
+}
+.db-meter span { flex-basis: 0; }
+.db-meter-own { background: var(--good); }
+.db-meter-deck { background: var(--warn); }
+.db-meter-buy { background: var(--bad); }
+
+.db-checks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  font-size: 0.88rem;
+}
+.db-checks .db-check {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-accent);
+  font-size: 0.88rem;
+}
+.db-check-val {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.db-ok { color: var(--good); }
+.db-bad { color: var(--bad); }
+/* "Not checked yet" reads as muted text, never green -- an unchecked rule
+   must not look like a passing one. */
+.db-unchecked { color: var(--muted); font-style: italic; font-weight: 500; }
+
+.db-groups {
+  display: grid;
+  gap: 10px;
+}
+.db-group-title {
+  margin: 4px 0 2px;
+  font-family: var(--font-display);
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.db-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.db-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+.db-row-main { min-width: 0; }
+.db-row-name {
+  font-size: 0.92rem;
+  overflow-wrap: anywhere;
+}
+.db-row-why {
+  font-size: 0.74rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.db-chip {
+  flex: 0 0 auto;
+  max-width: 48%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid;
+}
+.db-chip-own { color: var(--good); background: var(--good-bg); border-color: var(--good-border); }
+.db-chip-deck { color: var(--warn); background: var(--warn-bg); border-color: var(--warn-border); }
+.db-chip-buy { color: var(--bad); background: var(--bad-bg); border-color: var(--bad-border); }
+.db-chip-gc {
+  display: inline-block;
+  vertical-align: 1px;
+  padding: 0 6px;
+  font-size: 0.66rem;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.db-copy-note { margin: 0; }
+.db-copy-note[hidden], .db-copy-fallback[hidden] { display: none; }
