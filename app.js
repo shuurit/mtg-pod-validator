@@ -11183,7 +11183,11 @@ const deckBuilderUi = {
   // id. One search per request + commander + bracket: an AI call each.
   picks: null,
   picksAdded: new Map(),
-  view: "role",     // "role" | "type": how the card list is grouped
+  // Workers AI's reading of the request box (POST /deck-builder/read-request),
+  // once per request text + deck: { key, answer, pending } -- answer
+  // undefined while the request is out.
+  reading: null,
+  view: "role",    // "role" | "type": how the card list is grouped
   // The player's swaps, as buildDeck's opts.pinned / opts.excluded (oracle
   // ids). Kept across budget and toggle changes; cleared by a new build or
   // "Reset swaps".
@@ -11216,11 +11220,74 @@ function setDeckBuilderStatus(text, tone, action) {
 
 // ---- "What are you looking for?" ----
 // The request box, read by parseDeckRequest (deck-builder.js) against the
-// shown deck's themes when there is one.
+// shown deck's themes when there is one. Build also has Workers AI read the
+// whole request (readDeckRequest): the rules count a clause as read once any
+// part of it matches ("more draw and some recursion"), so only the AI
+// catches the rest. Its reading fills in whatever the rules didn't set.
+const DECK_BUILDER_READ_URL = RELAY_BASE_URL + "/deck-builder/read-request";
+
+function deckBuilderRequestThemes() {
+  return deckBuilderUi.data && deckBuilderUi.themesFor ? deckBuilderUi.data.themes || [] : [];
+}
+
+// One reading per request text + commander(s) + bracket + known themes.
+function deckBuilderReadingKey() {
+  const data = deckBuilderUi.data;
+  const text = ((document.getElementById("db-request") || {}).value || "").trim();
+  if (!data || !text) return null;
+  return JSON.stringify([text, deckCommanders(data).map(c => c.name), data.bracket, deckBuilderUi.themesFor || ""]);
+}
+
 function deckBuilderRequest() {
   const box = document.getElementById("db-request");
-  const themes = deckBuilderUi.data && deckBuilderUi.themesFor ? deckBuilderUi.data.themes || [] : [];
-  return parseDeckRequest(box ? box.value : "", themes);
+  const themes = deckBuilderRequestThemes();
+  const rules = parseDeckRequest(box ? box.value : "", themes);
+  const state = deckBuilderUi.reading;
+  const answer = state && state.key === deckBuilderReadingKey() ? state.answer : null;
+  return mergeDeckRequests(rules, answer && answer.read ? readingToRequest(answer.reading, themes) : null);
+}
+
+// Ask the AI to read the request, if it hasn't been read for this deck yet. Resolves once the reading is in
+// (or failed): Build waits for it, so the deck follows it.
+async function readDeckRequest() {
+  const data = deckBuilderUi.data;
+  const key = deckBuilderReadingKey();
+  if (!data || !key) return;
+  if (deckBuilderUi.reading && deckBuilderUi.reading.key === key) return deckBuilderUi.reading.pending;
+  const text = document.getElementById("db-request").value.trim();
+  const state = { key, answer: undefined, pending: null };
+  deckBuilderUi.reading = state;
+  updateDeckBuilderRequestReadback();
+  state.pending = (async () => {
+    let answer;
+    try {
+      const res = await fetch(DECK_BUILDER_READ_URL, {
+        method: "POST",
+        cache: "no-store",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          request: text,
+          commanders: deckCommanders(data).map(c => c.name),
+          bracket: data.bracket,
+          themes: deckBuilderRequestThemes().map(t => ({ slug: t.slug, name: t.name })),
+        }),
+      });
+      answer = res.ok ? await res.json() : { read: false, reason: `HTTP ${res.status}` };
+    } catch (err) {
+      answer = { read: false, reason: "unreachable" };
+    }
+    state.answer = answer;
+    if (deckBuilderUi.reading !== state) return;
+    // A budget the AI read moves the slider, as one the rules read does.
+    const req = deckBuilderRequest();
+    if (req.byAi && req.budget != null) {
+      const slider = document.getElementById("db-budget");
+      slider.value = String(req.budget);
+      document.getElementById("db-budget-value").textContent = `$${slider.value}`;
+    }
+    updateDeckBuilderRequestReadback();
+  })();
+  return state.pending;
 }
 
 // The line under the box: what was understood, and anything that wasn't.
@@ -11230,16 +11297,37 @@ function updateDeckBuilderRequestReadback() {
   const req = deckBuilderRequest();
   out.replaceChildren();
   if (req.understood.length) out.append(`Understood: ${req.understood.join(" · ")}.`);
+  const reading = deckBuilderUi.reading && deckBuilderUi.reading.key === deckBuilderReadingKey() ? deckBuilderUi.reading : null;
+  if (req.byAi) {
+    if (req.understood.length) out.append(" ");
+    const lines = req.aiUnderstood.length ? req.aiUnderstood : ["nothing more to change"];
+    out.append(makeEl("span", "db-request-ai", `Read by AI: ${lines.join(" · ")}.`));
+    if (req.searchTags.length) out.append(` Searching your collection for ${req.searchTags.join(", ")}.`);
+    return;
+  }
+  if (reading && reading.answer === undefined) {
+    if (req.understood.length) out.append(" ");
+    out.append(makeEl("span", "db-request-ai", "Reading it with AI…"));
+    return;
+  }
+  const failed = !!(reading && reading.answer && !reading.answer.read);
   if (req.ignored.length) {
     if (req.understood.length) out.append(" ");
     const quoted = req.ignored.map(x => `“${x}”`).join(", ");
-    // Before a build, the commander's EDHREC themes aren't known yet, so an
-    // unread word may still be one ("infect"): say so instead of "not
-    // understood", and check again once the build answers.
-    const themesKnown = !!(deckBuilderUi.data && deckBuilderUi.themesFor);
-    out.append(makeEl("span", "db-request-ignored", themesKnown
-      ? `Not understood: ${quoted}. Try words like “more removal”, “less draw”, “cards I own”, “under $50”, or one of the themes above.`
-      : `Not read yet: ${quoted}. If it's one of the commander's EDHREC themes, Build will pick it up.`));
+    out.append(makeEl("span", "db-request-ignored", failed
+      ? `Not understood: ${quoted}. The AI reader couldn't answer just now (its free daily allowance may be used up), so try words like “more removal”, “less draw”, “cards I own” or “under $50”.`
+      : deckBuilderUi.data ? `Not read yet: ${quoted}.` : `Not read yet: ${quoted}. Build will have AI read it.`));
+  }
+  // With a deck shown, an edited request is read on asking, not on every
+  // keystroke: each reading is an AI call. (Build reads it too.)
+  if (deckBuilderUi.data && deckBuilderReadingKey() && !reading) {
+    const btn = makeEl("button", "db-picks-search db-request-read-btn", "Read it with AI");
+    btn.type = "button";
+    btn.addEventListener("click", async () => {
+      await readDeckRequest();
+      renderDeckBuild();
+    });
+    out.append(" ", btn);
   }
 }
 
@@ -11267,6 +11355,8 @@ async function requestCollectionPicks() {
   if (deckBuilderUi.picks && deckBuilderUi.picks.key === key) return;
   deckBuilderUi.picks = { key, answer: undefined };
   renderDeckBuild();
+  await readDeckRequest();
+  if (!deckBuilderUi.picks || deckBuilderUi.picks.key !== key) return;
   const req = deckBuilderRequest();
   // Only roles the request asked MORE of are worth searching for.
   const roles = Object.keys(req.roleMinimums).filter(r => req.roleMinimums[r] > (ROLE_MINIMUMS[r] || 0));
@@ -11282,6 +11372,7 @@ async function requestCollectionPicks() {
         colorIdentity: combinedIdentity(deckCommanders(data)),
         bracket: data.bracket,
         roles,
+        tags: req.searchTags || [],
         deck: build.cards.map(c => ({ oracleId: c.oracleId, name: c.name, roles: c.roles || [] })),
         exclude: (data.candidates || []).map(c => c.oracleId).filter(Boolean).slice(0, 1000),
       }),
@@ -11682,10 +11773,18 @@ async function runDeckBuild(opts = {}) {
     setDeckBuilderStatus("");
     renderDeckBuild();
     updateDeckBuilderRequestReadback();
+    // Whatever the rules couldn't read, the AI reads now; the deck follows.
+    const readingKey = deckBuilderReadingKey();
+    if (readingKey && !(deckBuilderUi.reading && deckBuilderUi.reading.key === readingKey)) {
+      setDeckBuilderStatus("Reading your request…");
+      await readDeckRequest();
+      setDeckBuilderStatus("");
+      renderDeckBuild();
+    }
     // The request names a theme this commander only turned out to have now:
     // build toward it once (fromRequest stops it going round again).
     if (!opts.fromRequest && !theme) {
-      const asked = parseDeckRequest(document.getElementById("db-request").value, body.themes || []).theme;
+      const asked = deckBuilderRequest().theme;
       if (asked && [...themeSelect.options].some(o => o.value === asked)) {
         themeSelect.value = asked;
         deckBuilderUi.busy = false;

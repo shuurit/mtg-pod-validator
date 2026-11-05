@@ -866,3 +866,65 @@ test("a collection pick the bracket won't take says why", () => {
 test("applySwap with nothing to replace just adds the pick", () => {
   assert.deepEqual(applySwap({ pinned: ["a"], excluded: ["b"] }, null, "c"), { pinned: ["a", "c"], excluded: ["b"] });
 });
+
+// ---- The AI's reading of a request ----
+{
+  const db = require("../deck-builder.js");
+  const THEMES = [{ slug: "infect", name: "Infect" }];
+
+  test("an AI reading becomes the same settings the rules make", () => {
+    const r = db.readingToRequest({
+      roles: [{ role: "draw", change: "more" }, { role: "wipe", change: "none" }, { role: "ramp", change: "exactly", count: 12 }, { role: "nope", change: "more" }],
+      budget: 500, ownership: "prefer", price: "cheaper", style: "staples", theme: "infect",
+      searchTags: ["Discard", "hand disruption", "bad tag!"], notes: ["Cards that make opponents discard"],
+    }, THEMES);
+    assert.deepEqual(r.roleMinimums, { draw: 13, wipe: 0, ramp: 12 });
+    assert.deepEqual(r.roleMaximums, { wipe: 0 });
+    assert.equal(r.budget, 200, "capped at the slider's top");
+    assert.deepEqual(r.weights, { ownedFree: 80, ownedInDeck: 30, pricePerDollar: 2.0, synergy: 0.25, inclusion: 0.75 });
+    assert.equal(r.theme, "infect");
+    assert.deepEqual(r.searchTags, ["discard", "hand disruption"]);
+    assert.deepEqual(r.notes, ["Cards that make opponents discard"]);
+    assert.equal(r.understood.length, r.keys.length);
+    assert.ok(r.understood.includes("Card draw: at least 13 (usually 10)"));
+    assert.ok(r.understood.includes("Board wipes: none"));
+    assert.ok(r.understood.includes("Theme: Infect"));
+  });
+
+  test("a theme the commander doesn't have, or a junk reading, sets nothing", () => {
+    assert.equal(db.readingToRequest({ theme: "voltron" }, THEMES).theme, null);
+    for (const junk of [null, "text", 5, {}]) {
+      const r = db.readingToRequest(junk, THEMES);
+      assert.deepEqual([r.roleMinimums, r.weights, r.budget, r.theme, r.searchTags], [{}, {}, null, null, []]);
+    }
+  });
+
+  test("the rules' reading wins wherever it set something; the AI fills in the rest", () => {
+    const rules = db.parseDeckRequest("less draw, under $40, and things that make my opponents discard", THEMES);
+    assert.equal(rules.ignored.length, 1);
+    const ai = db.readingToRequest({
+      roles: [{ role: "draw", change: "lots" }, { role: "removal", change: "more" }],
+      budget: 100, price: "cheaper", searchTags: ["discard"], notes: ["Cards that make opponents discard"],
+    }, THEMES);
+    const m = db.mergeDeckRequests(rules, ai);
+    assert.equal(m.byAi, true);
+    assert.deepEqual(m.ignored, []);
+    assert.equal(m.roleMaximums.draw, rules.roleMaximums.draw, "draw stays as the rules read it");
+    assert.equal(m.roleMinimums.draw, rules.roleMinimums.draw);
+    assert.equal(m.roleMinimums.removal, 11, "removal comes from the AI");
+    assert.equal(m.budget, 40, "the rules' budget wins");
+    assert.equal(m.weights.pricePerDollar, 2.0);
+    assert.deepEqual(m.understood, rules.understood);
+    assert.deepEqual(m.aiUnderstood, ["Removal: at least 11 (usually 8)", "Cheaper cards when buying", "Cards that make opponents discard"]);
+    assert.deepEqual(m.searchTags, ["discard"]);
+  });
+
+  test("without an AI reading the rules' reading is used as it is", () => {
+    const rules = db.parseDeckRequest("more ramp and some weird stuff", THEMES);
+    const m = db.mergeDeckRequests(rules, null);
+    assert.equal(m.byAi, false);
+    assert.deepEqual(m.ignored, rules.ignored);
+    assert.deepEqual(m.roleMinimums, rules.roleMinimums);
+    assert.deepEqual(m.searchTags, []);
+  });
+}
