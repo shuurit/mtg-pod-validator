@@ -256,6 +256,29 @@ works without one.
 
   A cold build now makes at most ~14 Scryfall requests (~19 subrequests
   in all).
+- **Commander pairs:** `GET /deck-builder/candidates` also takes
+  `commander2` (Partner, Partner with, the `Partner—…` groups, a Background,
+  a Doctor and companion).
+  - **Which page:** it reads EDHREC's page for the pair, named
+    `<first>-<second>`. Checked on 14 real pairs (Nov 2026), EDHREC's order
+    is: the creature before its Background, the Doctor before the companion,
+    otherwise alphabetical by slug. The page sends the pair in that order
+    (`pairOrder` in `deck-builder.js`). The other order answers 200 with only
+    `{"redirect": "/commanders/<real order>/<bracket>"}`, and `edhrecJson`
+    follows one such redirect (same kind of page only) as a safety net.
+  - **What comes back:** both commanders are looked up by name in the same
+    Scryfall request as the candidates and left out of the candidates. The
+    answer carries `commanders` (both) as well as `commander` (the first).
+    The page builds 98 cards with basics from the pair's combined colours.
+  - **Cache key:** `deckbuilder:v4:<slugA>+<slugB>:<bracket>`, slugs sorted,
+    so either order hits it. Single-commander keys and shape are unchanged:
+    an older cached answer without `commanders` still builds.
+  - **No page for the pair:** the answer is `{reason: "no-edhrec-pair"}`,
+    and the page offers to build from the first commander's own page
+    (`pairFallback=1`). That's still a two-commander deck, with
+    `pairSource: "first-commander"` and its own cache key (`…~first`).
+  - **Unknown name:** a name Scryfall doesn't know gives
+    `{reason: "unknown-commander", missing}`.
 - `POST /deck-builder/combos` — Build a Deck's two-card combo check. Body
   `{commander, cards: [names]}` (at most 120 names). Asks Commander
   Spellbook's `POST https://backend.commanderspellbook.com/find-my-combos`

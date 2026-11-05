@@ -64,12 +64,12 @@ function sandbox(fetchImpl, kv = new Map()) {
     "DECK_BUILDER_TAGS_CACHE_KEY", "DECK_BUILDER_TAGS", "DECK_BUILDER_ROLE_TAGS", "DECK_BUILDER_ROLE_PAGES",
     "DECK_BUILDER_ROLES_CACHE_PREFIX", "DECK_BUILDER_NOT_DRAW", "SCRYFALL_THROTTLE",
     "SCRYFALL_BACKOFF_MS", "SCRYFALL_BACKOFF_KEY", "DECK_BUILDER_ROLE_PAGE_BUDGET",
-    "EDHREC_JSON_BASE", "DECK_BUILDER_TEMPLATE_KEYS", "DECK_BUILDER_BRACKET_SLUGS",
+    "EDHREC_JSON_BASE", "DECK_BUILDER_TEMPLATE_KEYS", "DECK_BUILDER_BRACKET_SLUGS", "EDHREC_REDIRECT_RE",
   ].map(constant).join("\n").replace(/^const /gm, "var "), ctx);
   vm.runInContext(block("DECK_BUILDER_ROLE_KEYWORDS"), ctx);
   vm.runInContext([
     "scryfallFetch", "scryfallBackingOff", "recordScryfallBackoff", "kvGetJson",
-    "edhrecJson", "deckBuilderPrimaryType", "scryfallCollection", "buildDeckBuilderCandidates", "scryfallSearchOracleIds", "deckBuilderTags", "parseSpellbookCombos",
+    "edhrecJson", "deckBuilderPrimaryType", "deckBuilderNameKey", "scryfallCollection", "buildDeckBuilderCandidates", "scryfallSearchOracleIds", "deckBuilderTags", "parseSpellbookCombos",
     "scryfallRoleSearch", "deckBuilderIdentityKey", "deckBuilderRoleTags", "deckBuilderKeywordRoles", "deckBuilderCardRoles",
   ].map(source).join("\n"), ctx);
   return ctx;
@@ -124,8 +124,12 @@ test("if Scryfall fails the tags are null and nothing is cached", async () => {
 
 test("the candidates cache key is v4 (roles), and unflagged candidates aren't cached", () => {
   assert.match(RELAY, /DECK_BUILDER_CACHE_VERSION = "v4"/);
-  assert.match(source("buildDeckBuilderCandidates"), /cmc: num\(cmd\?\.cmc\)/);
-  assert.match(RELAY, /deckbuilder:\$\{DECK_BUILDER_CACHE_VERSION\}:\$\{slug\}:\$\{bracket\}/);
+  assert.match(source("buildDeckBuilderCandidates"), /cmc: num\(c\?\.cmc\)/);
+  const handler0 = source("handleDeckBuilderCandidates");
+  assert.match(handler0, /deckbuilder:\$\{DECK_BUILDER_CACHE_VERSION\}:\$\{keySlug\}:\$\{bracket\}/);
+  // A pair's key holds both slugs, sorted, so either order finds it; the
+  // first-commander fallback has its own.
+  assert.match(handler0, /\[slug, slug2\]\.sort\(\)\.join\("\+"\) \+ \(pairFallback \? "~first" : ""\)/);
   const handler = source("handleDeckBuilderCandidates");
   assert.match(handler, /if \(data\.tagsChecked && data\.rolesFromTagger\) \{\s*ctx\.waitUntil/);
 });
@@ -411,4 +415,103 @@ test("every Scryfall call is spaced out and a 429 is retried once", async () => 
   assert.match(source("scryfallCollection"), /scryfallFetch\(/);
   assert.match(source("scryfallSearchOracleIds"), /scryfallFetch\(/);
   assert.match(source("scryfallRoleSearch"), /scryfallFetch\(/);
+});
+
+// ---- Commander pairs ----
+test("an EDHREC pair page in the other order is followed once to the real one", async () => {
+  const calls = [];
+  const s = sandbox(async (url) => {
+    calls.push(url);
+    if (url.endsWith("/commanders/tymna-the-weaver-thrasios-triton-hero/core.json")) return json(200, { redirect: "/commanders/thrasios-triton-hero-tymna-the-weaver/core" });
+    if (url.endsWith("/commanders/thrasios-triton-hero-tymna-the-weaver/core.json")) return json(200, { header: "Thrasios // Tymna" });
+    if (url.endsWith("/commanders/loop-a/core.json")) return json(200, { redirect: "/commanders/loop-b/core" });
+    if (url.endsWith("/commanders/loop-b/core.json")) return json(200, { redirect: "/commanders/loop-a/core" });
+    if (url.endsWith("/commanders/sneaky/core.json")) return json(200, { redirect: "/average-decks/x/core" });
+    return { status: 403, ok: false, json: async () => ({}) };
+  });
+  assert.equal((await s.edhrecJson("commanders/tymna-the-weaver-thrasios-triton-hero/core.json")).header, "Thrasios // Tymna");
+  assert.equal(calls.length, 2);
+  assert.equal(await s.edhrecJson("commanders/loop-a/core.json"), null, "one redirect, not a chain");
+  assert.equal(await s.edhrecJson("commanders/sneaky/core.json"), null, "only to the same kind of page");
+  assert.equal(await s.edhrecJson("commanders/atraxa-praetors-voice-tymna-the-weaver/core.json"), null, "no page: null");
+});
+
+function pairFetch(calls) {
+  const edhrec = {
+    container: { json_dict: { card: { name: "Thrasios, Triton Hero // Tymna the Weaver", color_identity: ["W", "U", "B", "G"] }, cardlists: [
+      { header: "Creatures", cardviews: [
+        { id: "uid-elves", name: "Llanowar Elves", synergy: 0.1, num_decks: 5, potential_decks: 10 },
+        // EDHREC can list a commander among the cards; it must be left out.
+        { id: "uid-tymna", name: "Tymna the Weaver", synergy: 0.5, num_decks: 9, potential_decks: 10 },
+      ] },
+    ] } },
+    creature: 30, land: 36,
+  };
+  return async (url, init) => {
+    calls.push({ url, body: init && init.body });
+    if (url.includes("edhrec")) return url.includes("average-decks") ? { status: 403, ok: false, json: async () => ({}) } : json(200, edhrec);
+    if (url.includes("/cards/collection")) {
+      const ids = JSON.parse(init.body).identifiers;
+      const cards = {
+        "uid-elves": { id: "uid-elves", oracle_id: "OID-ELVES", name: "Llanowar Elves", type_line: "Creature — Elf Druid", oracle_text: "{T}: Add {G}.", cmc: 1, legalities: { commander: "legal" }, prices: { usd: "0.25" } },
+        "uid-tymna": { id: "uid-tymna", oracle_id: "OID-TYMNA", name: "Tymna the Weaver", type_line: "Legendary Creature — Human Cleric", cmc: 3, color_identity: ["W", "B"], legalities: { commander: "legal" } },
+        "thrasios, triton hero": { id: "uid-thrasios", oracle_id: "OID-THRASIOS", name: "Thrasios, Triton Hero", type_line: "Legendary Creature — Merfolk Wizard", cmc: 2, color_identity: ["U", "G"] },
+        "tymna the weaver": { id: "uid-tymna", oracle_id: "OID-TYMNA", name: "Tymna the Weaver", type_line: "Legendary Creature — Human Cleric", cmc: 3, color_identity: ["W", "B"] },
+      };
+      return json(200, { data: ids.map(i => cards[i.id || i.name.toLowerCase()]).filter(Boolean) });
+    }
+    return json(200, { has_more: false, data: [] });
+  };
+}
+
+test("a pair build looks both commanders up in the same request, leaves both out, and answers with both", async () => {
+  const calls = [];
+  const s = sandbox(pairFetch(calls));
+  s.SCRYFALL_THROTTLE.backoffUntil = 0;
+  const identities = [];
+  const data = await s.buildDeckBuilderCandidates("thrasios-triton-hero-tymna-the-weaver", 3, null,
+    async id => { identities.push(id); return null; },
+    { commanderNames: ["Thrasios, Triton Hero", "Tymna the Weaver"], pairSource: "pair" });
+  const lookups = calls.filter(c => c.url.includes("/cards/collection"));
+  assert.equal(lookups.length, 1, "one Scryfall request for cards and commanders");
+  assert.deepEqual(JSON.parse(lookups[0].body).identifiers.filter(i => i.name).map(i => i.name), ["Thrasios, Triton Hero", "Tymna the Weaver"]);
+  assert.deepEqual(data.commanders.map(c => [c.name, c.oracleId, c.colorIdentity, c.cmc]), [
+    ["Thrasios, Triton Hero", "oid-thrasios", "UG", 2],
+    ["Tymna the Weaver", "oid-tymna", "WB", 3],
+  ]);
+  assert.equal(data.commander.name, "Thrasios, Triton Hero", "`commander` is still the first");
+  assert.equal(data.pairSource, "pair");
+  assert.deepEqual([...data.candidates.map(c => c.name)], ["Llanowar Elves"], "Tymna isn't a candidate");
+  assert.deepEqual(identities, ["WUBG"], "roles are searched in the pair's combined colors");
+});
+
+test("a commander name Scryfall doesn't know is reported, not guessed", async () => {
+  const s = sandbox(pairFetch([]));
+  s.SCRYFALL_THROTTLE.backoffUntil = 0;
+  const data = await s.buildDeckBuilderCandidates("x", 3, null, async () => null,
+    { commanderNames: ["Thrasios, Triton Hero", "Tymna the Wever"] });
+  assert.equal(data.reason, "unknown-commander");
+  assert.deepEqual([...data.missing], ["Tymna the Wever"]);
+});
+
+test("no page for the pair says so; the fallback reads the first commander's page", () => {
+  const handler = source("handleDeckBuilderCandidates");
+  assert.match(handler, /const reason = slug2 && !pairFallback \? "no-edhrec-pair" : "no-edhrec";/);
+  assert.match(handler, /const pageSlug = slug2 && !pairFallback \? `\$\{slug\}-\$\{slug2\}` : slug;/);
+  assert.match(handler, /pairSource: pairFallback \? "first-commander" : "pair"/);
+});
+
+test("the combo check sends both commanders to Spellbook", () => {
+  const h = source("handleDeckBuilderCombos");
+  assert.match(h, /Array\.isArray\(body && body\.commanders\) \? body\.commanders : \[body && body\.commander\]/);
+  assert.match(h, /commanders: commanders\.map\(card => \(\{ card, quantity: 1 \}\)\)/);
+});
+
+test("the browser's slug rule matches the relay's", () => {
+  const { deckBuilderSlug } = require("../deck-builder.js");
+  const s = sandbox(async () => json(200, {}));
+  vm.runInContext(source("edhrecSlug"), s);
+  for (const name of ["Atraxa, Praetors' Voice", "Lae'zel, Vlaakith's Champion", "Kraum, Ludevic's Opus", "Séance Board", "Bjorna, Nightfall Alchemist", "Esika, God of the Tree // The Prismatic Bridge", "Jötun Grunt", "The Tenth Doctor"]) {
+    assert.equal(deckBuilderSlug(name), s.edhrecSlug(name), name);
+  }
 });

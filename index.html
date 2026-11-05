@@ -17,7 +17,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="style.css?v=88">
+<link rel="stylesheet" href="style.css?v=89">
 
 <!-- Home-screen icon (iOS "Add to Home Screen" + Android/Chrome install).
      Generated from icon-source.png via scripts/generate_icons.py -- rerun
@@ -297,6 +297,15 @@
           <input type="text" id="db-commander" list="db-commander-options" autocomplete="off" autocapitalize="words" spellcheck="false" placeholder="Atraxa, Praetors' Voice" maxlength="200">
           <datalist id="db-commander-options"></datalist>
         </label>
+        <!-- Shown once the first commander can share the command zone
+             (Partner, Partner with, Partner groups, Background, Doctor);
+             see updateSecondCommanderField in app.js. -->
+        <label class="db-field" for="db-commander2" id="db-commander2-field" hidden>
+          <span class="db-label" id="db-commander2-label">Second commander</span>
+          <input type="text" id="db-commander2" list="db-commander2-options" autocomplete="off" autocapitalize="words" spellcheck="false" maxlength="200" aria-describedby="db-commander2-hint">
+          <datalist id="db-commander2-options"></datalist>
+          <span class="hint db-commander2-hint" id="db-commander2-hint"></span>
+        </label>
         <div class="db-field">
           <span class="db-label" id="db-bracket-label">Bracket</span>
           <div class="view-toggle db-bracket-toggle" role="group" aria-labelledby="db-bracket-label" id="db-bracket-toggle">
@@ -547,7 +556,7 @@
 </div>
 
 <script src="deck-tally.js?v=2"></script>
-<script src="deck-builder.js?v=5"></script>
-<script src="app.js?v=98"></script>
+<script src="deck-builder.js?v=6"></script>
+<script src="app.js?v=99"></script>
 </body>
 </html>

@@ -11184,20 +11184,75 @@ const deckBuilderUi = {
   swaps: { pinned: [], excluded: [] },
   openSwap: null,   // the row whose swap panel is open: "<section>|<oracleId>"
   focusKey: null,   // the row button to focus after the next render
-  autocompleteTimer: null,
-  autocompleteSeq: 0,
+  pairingSeq: 0,    // latest second-commander check (updateSecondCommanderField)
 };
 
 function openDeckBuilderTab() {
   activateTab("deck-builder");
 }
 
-function setDeckBuilderStatus(text, tone) {
+// action: { label, onClick } adds a button under the message (the
+// "build from the first commander's own page" offer).
+function setDeckBuilderStatus(text, tone, action) {
   const status = document.getElementById("db-status");
   if (!status) return;
   status.hidden = !text;
   status.textContent = text || "";
   status.classList.toggle("is-error", tone === "error");
+  if (text && action) {
+    const btn = makeEl("button", "db-status-action", action.label);
+    btn.type = "button";
+    btn.addEventListener("click", action.onClick);
+    status.append(btn);
+  }
+}
+
+// ---- A second commander ----
+// What Scryfall says about a card's pairing abilities (pairingOf in
+// deck-builder.js), by exact name. null if Scryfall doesn't know the name;
+// cached for the page's life.
+const deckBuilderPairingCache = new Map();
+async function deckBuilderPairing(name) {
+  const key = name.trim().toLowerCase();
+  if (!key) return null;
+  if (deckBuilderPairingCache.has(key)) return deckBuilderPairingCache.get(key);
+  let result = null;
+  try {
+    const res = await fetch(`${SCRYFALL_NAMED_URL}?exact=${encodeURIComponent(name.trim())}`);
+    if (res.ok) result = pairingOf(await res.json());
+    else if (res.status !== 404) return null; // a hiccup: don't cache it
+  } catch {
+    return null;
+  }
+  deckBuilderPairingCache.set(key, result);
+  return result;
+}
+
+// Show the second commander field when the first commander can have one,
+// labelled with what goes in it; hide it otherwise. A "Partner with" card
+// fills in its partner's name if the field is empty.
+async function updateSecondCommanderField() {
+  const field = document.getElementById("db-commander2-field");
+  const input = document.getElementById("db-commander2");
+  const name = document.getElementById("db-commander").value.trim();
+  const seq = ++deckBuilderUi.pairingSeq;
+  const pairing = name.length >= 2 ? await deckBuilderPairing(name) : null;
+  if (seq !== deckBuilderUi.pairingSeq) return;
+  const kind = secondCommanderKind(pairing);
+  field.hidden = !kind;
+  if (!kind) return;
+  document.getElementById("db-commander2-label").textContent = `Second commander · ${kind.label}`;
+  const hints = {
+    "partner": `${pairing.name} has Partner: add another commander with Partner, or leave this empty.`,
+    "partner-with": `${pairing.name} partners with ${kind.suggest}.`,
+    "partner-group": `${pairing.name} pairs with another “Partner—${pairing.partnerGroup}” commander.`,
+    "background": `${pairing.name} can choose a Background as a second commander.`,
+    "background-for": `${pairing.name} is a Background: add the creature that chooses it.`,
+    "companion": `${pairing.name} is a Doctor: add a Doctor's companion, or leave this empty.`,
+    "doctor": `${pairing.name} is a Doctor's companion: add the Doctor.`,
+  };
+  document.getElementById("db-commander2-hint").textContent = hints[kind.kind] || "";
+  if (kind.suggest && !input.value.trim()) input.value = kind.suggest;
 }
 
 function initDeckBuilder() {
@@ -11249,38 +11304,61 @@ function initDeckBuilder() {
     if (deckBuilderUi.data) renderDeckBuild();
   });
 
-  // Scryfall's own autocomplete into the field's datalist. It suggests
-  // any card, not just commanders -- a non-commander simply comes back
-  // as "EDHREC has no page" when built.
-  const input = document.getElementById("db-commander");
-  const options = document.getElementById("db-commander-options");
-  input.addEventListener("input", () => {
-    clearTimeout(deckBuilderUi.autocompleteTimer);
-    const q = input.value.trim();
-    if (q.length < 2) return;
-    deckBuilderUi.autocompleteTimer = setTimeout(async () => {
-      const seq = ++deckBuilderUi.autocompleteSeq;
-      try {
-        const res = await fetch(`${SCRYFALL_AUTOCOMPLETE_URL}?q=${encodeURIComponent(q)}`);
-        if (!res.ok || seq !== deckBuilderUi.autocompleteSeq) return;
-        const body = await res.json();
-        options.replaceChildren(...(body.data || []).slice(0, 12).map(name => {
-          const opt = document.createElement("option");
-          opt.value = name;
-          return opt;
-        }));
-      } catch {
-        // No suggestions this time; typing the full name still works.
-      }
-    }, 250);
+  // Scryfall's own autocomplete into each commander field's datalist. It
+  // suggests any card, not just commanders -- a non-commander simply comes
+  // back as "EDHREC has no page" when built.
+  for (const [inputId, listId] of [["db-commander", "db-commander-options"], ["db-commander2", "db-commander2-options"]]) {
+    const input = document.getElementById(inputId);
+    const options = document.getElementById(listId);
+    if (!input || !options) continue;
+    let timer = null;
+    let seq = 0;
+    input.addEventListener("input", () => {
+      clearTimeout(timer);
+      const q = input.value.trim();
+      if (q.length < 2) return;
+      timer = setTimeout(async () => {
+        const mine = ++seq;
+        try {
+          const res = await fetch(`${SCRYFALL_AUTOCOMPLETE_URL}?q=${encodeURIComponent(q)}`);
+          if (!res.ok || mine !== seq) return;
+          const body = await res.json();
+          options.replaceChildren(...(body.data || []).slice(0, 12).map(name => {
+            const opt = document.createElement("option");
+            opt.value = name;
+            return opt;
+          }));
+        } catch {
+          // No suggestions this time; typing the full name still works.
+        }
+      }, 250);
+    });
+  }
+
+  // Whether to offer a second commander: checked once typing settles on a
+  // name, and right away when a suggestion is picked (change).
+  const first = document.getElementById("db-commander");
+  let pairTimer = null;
+  first.addEventListener("input", () => {
+    clearTimeout(pairTimer);
+    pairTimer = setTimeout(updateSecondCommanderField, 500);
+  });
+  first.addEventListener("change", () => {
+    clearTimeout(pairTimer);
+    updateSecondCommanderField();
   });
 }
 
-async function runDeckBuild() {
+// opts.pairFallback: EDHREC has no page for the pair; build from the first
+// commander's own page, still as a two-commander deck.
+async function runDeckBuild(opts = {}) {
   if (deckBuilderUi.busy) return;
   const input = document.getElementById("db-commander");
-  const commander = input.value.trim();
-  if (!commander) {
+  const typed1 = input.value.trim();
+  const field2 = document.getElementById("db-commander2-field");
+  const input2 = document.getElementById("db-commander2");
+  const typed2 = field2 && !field2.hidden ? input2.value.trim() : "";
+  if (!typed1) {
     setDeckBuilderStatus("Type a commander's name first.", "error");
     input.focus();
     return;
@@ -11290,20 +11368,56 @@ async function runDeckBuild() {
   deckBuilderUi.busy = true;
   btn.disabled = true;
   btn.textContent = "Building…";
-  setDeckBuilderStatus("Reading EDHREC and your collection…");
   try {
-    const res = await fetch(`${DECK_BUILDER_RELAY_URL}?commander=${encodeURIComponent(commander)}&bracket=${bracket}`, {
+    // A pair: check it's legal, and put it in EDHREC's order (pairOrder),
+    // so the relay asks for the page by its own name. The fallback keeps
+    // the typed order: it reads the first commander's page.
+    let names = [typed1];
+    let firstName = typed1; // the commander the player typed first, as Scryfall spells it
+    if (typed2) {
+      setDeckBuilderStatus("Checking the pair…");
+      const [p1, p2] = await Promise.all([deckBuilderPairing(typed1), deckBuilderPairing(typed2)]);
+      const unknown = [[typed1, p1], [typed2, p2]].find(([, p]) => !p);
+      if (unknown) {
+        setDeckBuilderStatus(`Scryfall doesn't know a card called "${unknown[0]}". Check the spelling.`, "error");
+        return;
+      }
+      const verdict = canPair(p1, p2);
+      if (!verdict.ok) {
+        setDeckBuilderStatus(verdict.reason, "error");
+        return;
+      }
+      firstName = p1.name;
+      names = opts.pairFallback ? [p1.name, p2.name] : pairOrder(p1, p2).map(p => p.name);
+    }
+    setDeckBuilderStatus("Reading EDHREC and your collection…");
+    const params = new URLSearchParams({ commander: names[0], bracket: String(bracket) });
+    if (names[1]) params.set("commander2", names[1]);
+    if (names[1] && opts.pairFallback) params.set("pairFallback", "1");
+    const res = await fetch(`${DECK_BUILDER_RELAY_URL}?${params}`, {
       cache: "no-store",
       headers: authHeaders(),
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+    if (body.reason === "no-edhrec-pair") {
+      setDeckBuilderStatus(
+        `EDHREC has no Bracket ${bracket} page for ${names[0]} and ${names[1]} together. You can build from ${firstName}'s own page instead: the deck keeps both commanders, but EDHREC's picks won't account for the other one.`,
+        "error",
+        { label: `Build from ${firstName}'s page`, onClick: () => runDeckBuild({ pairFallback: true }) },
+      );
+      return;
+    }
+    if (body.reason === "unknown-commander") {
+      setDeckBuilderStatus(`Scryfall doesn't know ${(body.missing || []).join(" or ")}. Check the spelling.`, "error");
+      return;
+    }
     if (body.reason === "no-edhrec") {
-      setDeckBuilderStatus(`EDHREC has no Bracket ${bracket} page for "${commander}". Check the spelling, or try another bracket.`, "error");
+      setDeckBuilderStatus(`EDHREC has no Bracket ${bracket} page for "${names[0]}". Check the spelling, or try another bracket.`, "error");
       return;
     }
     deckBuilderUi.data = body;
-    deckBuilderUi.builtFor = { commander, bracket };
+    deckBuilderUi.builtFor = { commander: names.join(" / "), bracket };
     deckBuilderUi.combos = null;
     deckBuilderUi.swaps = { pinned: [], excluded: [] };
     deckBuilderUi.openSwap = null;
@@ -11597,10 +11711,13 @@ function renderDeckBuild() {
   const build = buildDeck(data, buildOpts);
 
   const head = makeEl("div", "db-head");
-  const coin = buildIdentityCoin(data.commander.colorIdentity || "");
+  const commanders = deckCommanders(data);
+  const coin = buildIdentityCoin(combinedIdentity(commanders) || "");
   if (coin) head.append(coin);
   const titles = makeEl("div", "db-head-titles");
-  titles.append(makeEl("h3", "db-commander", data.commander.name));
+  // "Name A / Name B" for a pair, the way the app writes partner decks
+  // elsewhere (splitCommanderNames).
+  titles.append(makeEl("h3", "db-commander", commanders.map(c => c.name).join(" / ")));
   const sub = makeEl("p", "db-sub", `Bracket ${build.bracket} · ${build.bracketName} · `);
   const link = makeEl("a", null, "EDHREC page");
   link.href = data.edhrecUrl;
@@ -11635,6 +11752,9 @@ function renderDeckBuild() {
   }
 
   const warnings = [];
+  if (data.pairSource === "first-commander" && commanders.length === 2) {
+    warnings.push(`EDHREC has no page for ${commanders[0].name} and ${commanders[1].name} together, so these picks come from ${commanders[0].name}'s own page and don't account for ${commanders[1].name}. Both are your commanders; the deck is 98 cards.`);
+  }
   if (build.overBudget) {
     warnings.push(`Your collection and the ${formatDollars(build.budget)} budget couldn't fill the deck, so it goes over: ${formatDollars(t.missingCost)} of cards to get.`);
   }
