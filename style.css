@@ -7164,6 +7164,35 @@ button.uta-bracket-btn[aria-pressed="true"] {
 .db-combos ul { margin: 0; padding-left: 18px; display: grid; gap: 2px; }
 .db-combos a { color: var(--accent); }
 
+/* Role counts against their minimums, one compact row (wraps on a phone). */
+.db-roles {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 0.82rem;
+}
+.db-role {
+  display: inline-flex;
+  gap: 6px;
+  align-items: baseline;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: var(--bg-accent);
+}
+.db-role b {
+  font-family: var(--font-display);
+  font-variant-numeric: tabular-nums;
+}
+.db-role-ok b { color: var(--good); }
+.db-role-short { background: var(--warn-bg); }
+.db-role-short b { color: var(--bad); }
+.db-group-min { font-variant-numeric: tabular-nums; }
+.db-row-empty { color: var(--muted); font-style: italic; }
+.db-roles-hint { margin: 0; }
+
 .db-groups {
   display: grid;
   gap: 10px;

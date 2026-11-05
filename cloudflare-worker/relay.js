@@ -2305,9 +2305,24 @@ const EDHREC_JSON_BASE = "https://json.edhrec.com/pages";
 const SCRYFALL_API_BASE = "https://api.scryfall.com";
 // v2: candidates carry massLandDenial/extraTurn. v3: commander carries cmc
 // (Build a Deck sums a combo's mana cost, and a combo can use the commander).
-const DECK_BUILDER_CACHE_VERSION = "v3";
+// v4: candidates carry roles (ramp/draw/removal/wipe/protection) and
+// edhrecRank.
+const DECK_BUILDER_CACHE_VERSION = "v4";
 const DECK_BUILDER_TAGS_CACHE_KEY = "deckbuilder:tags:v1";
 const DECK_BUILDER_TAGS = { massLandDenial: "mass-land-denial", extraTurn: "extra-turn" };
+// Build a Deck's roles, each from one Scryfall Tagger tag searched within
+// the commander's color identity. The full results are far too big to page
+// through in one invocation (otag:removal alone is ~6,200 cards in five
+// colors, 36 pages; all five roles ~85 pages against Workers' 50-subrequest
+// limit), so each search is ordered by EDHREC rank and only its first
+// DECK_BUILDER_ROLE_PAGES pages are read: that covers the popular cards
+// EDHREC suggests. A candidate ranked past the last card read can't be
+// answered from Tagger, so its role comes from keyword rules on its oracle
+// text instead (deckBuilderKeywordRoles). Cached per color identity in KV
+// for a week, so most builds spend no requests on roles at all.
+const DECK_BUILDER_ROLE_TAGS = { ramp: "ramp", draw: "draw", removal: "removal", wipe: "board-wipe", protection: "protection" };
+const DECK_BUILDER_ROLE_PAGES = 4;
+const DECK_BUILDER_ROLES_CACHE_PREFIX = "deckbuilder:roles:v1";
 const DECK_BUILDER_TEMPLATE_KEYS = ["creature", "instant", "sorcery", "artifact", "enchantment", "planeswalker", "battle", "land", "basic", "nonbasic"];
 
 // EDHREC's page slug for a commander: "Atraxa, Praetors' Voice" ->
@@ -2350,14 +2365,33 @@ function deckBuilderPrimaryType(typeLine) {
   return "other";
 }
 
+// Every Scryfall request goes through here. Scryfall asks for 50-100 ms
+// between requests and answers 429 to clients that don't leave it; a cold
+// Build a Deck makes ~25 in a row (role searches, tag searches, collection
+// lookups), so the spacing is kept across all of them, not just between
+// pages of one search. A 429 is retried once, after Retry-After (or 1 s).
+const SCRYFALL_THROTTLE = { last: 0, gapMs: 100 };
+
+async function scryfallFetch(url, init = {}) {
+  const headers = { "User-Agent": DECK_BUILDER_USER_AGENT, Accept: "application/json", ...(init.headers || {}) };
+  for (let attempt = 0; ; attempt++) {
+    const wait = SCRYFALL_THROTTLE.last + SCRYFALL_THROTTLE.gapMs - Date.now();
+    if (wait > 0) await new Promise(r => setTimeout(r, wait));
+    SCRYFALL_THROTTLE.last = Date.now();
+    const res = await fetch(url, { ...init, headers });
+    if (res.status !== 429 || attempt >= 1) return res;
+    const retryAfter = Number(res.headers && res.headers.get && res.headers.get("Retry-After"));
+    await new Promise(r => setTimeout(r, Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter, 5) * 1000 : 1000));
+  }
+}
+
 async function scryfallCollection(uids) {
   const byId = new Map();
   for (let i = 0; i < uids.length; i += 75) {
     // Scryfall asks for 50-100ms between requests.
-    if (i) await new Promise(r => setTimeout(r, 100));
-    const res = await fetch(`${SCRYFALL_API_BASE}/cards/collection`, {
+    const res = await scryfallFetch(`${SCRYFALL_API_BASE}/cards/collection`, {
       method: "POST",
-      headers: { "User-Agent": DECK_BUILDER_USER_AGENT, Accept: "application/json", "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ identifiers: uids.slice(i, i + 75).map(id => ({ id })) }),
     });
     if (!res.ok) throw new Error(`Scryfall didn't answer (HTTP ${res.status})`);
@@ -2374,8 +2408,7 @@ async function scryfallSearchOracleIds(query) {
   const ids = new Set();
   let url = `${SCRYFALL_API_BASE}/cards/search?q=${encodeURIComponent(query)}&unique=cards`;
   for (let page = 0; url && page < 10; page++) {
-    if (page) await new Promise(r => setTimeout(r, 100));
-    const res = await fetch(url, { headers: { "User-Agent": DECK_BUILDER_USER_AGENT, Accept: "application/json" } });
+    const res = await scryfallFetch(url);
     if (res.status === 404) break;
     if (!res.ok) throw new Error(`Scryfall search didn't answer (HTTP ${res.status})`);
     const data = await res.json();
@@ -2409,7 +2442,167 @@ async function deckBuilderTags(env, ctx) {
   }
 }
 
-async function buildDeckBuilderCandidates(slug, bracket, tags) {
+// One Tagger role within a color identity, best EDHREC rank first, at most
+// maxPages pages: { ids: oracle ids, throughRank, complete }. throughRank is
+// the EDHREC rank of the last card read -- every card ranked at or above it
+// has been seen, so "not in ids" really means "not tagged". complete means
+// the search ran out (every card seen, ranked or not).
+async function scryfallRoleSearch(query, maxPages) {
+  const ids = new Set();
+  let url = `${SCRYFALL_API_BASE}/cards/search?q=${encodeURIComponent(query)}&order=edhrec&unique=cards`;
+  let throughRank = 0;
+  let complete = false;
+  for (let page = 0; page < maxPages; page++) {
+    const res = await scryfallFetch(url);
+    if (res.status === 404) { complete = true; break; }
+    if (!res.ok) throw new Error(`Scryfall search didn't answer (HTTP ${res.status})`);
+    const data = await res.json();
+    for (const c of data.data || []) {
+      for (const id of [c.oracle_id, ...(c.card_faces || []).map(f => f.oracle_id)]) if (id) ids.add(id.toLowerCase());
+      // order=edhrec puts unranked cards last; reaching one means every
+      // ranked card has been seen.
+      throughRank = c.edhrec_rank == null ? Infinity : Math.max(throughRank, c.edhrec_rank);
+    }
+    if (!data.has_more) { complete = true; break; }
+    url = data.next_page;
+  }
+  return { ids, throughRank, complete };
+}
+
+// "WUBG" -> "wubg"; colorless -> "c". Scryfall's id<= wants the letters.
+function deckBuilderIdentityKey(colorIdentity) {
+  const letters = "WUBRG".split("").filter(c => String(colorIdentity || "").toUpperCase().includes(c)).join("");
+  return letters ? letters.toLowerCase() : "c";
+}
+
+// Every role's Tagger answer for one color identity, or null if Scryfall
+// couldn't be searched (the roles then all come from keyword rules, and the
+// candidates aren't cached, so the next build retries).
+async function deckBuilderRoleTags(env, ctx, colorIdentity) {
+  const id = deckBuilderIdentityKey(colorIdentity);
+  const key = `${DECK_BUILDER_ROLES_CACHE_PREFIX}:${id}`;
+  const cached = await kvGetJson(env, key, null);
+  const revive = obj => Object.fromEntries(Object.entries(obj).map(([role, t]) => [role, {
+    ids: new Set(t.ids), throughRank: t.throughRank == null ? Infinity : t.throughRank, complete: !!t.complete,
+  }]));
+  if (cached && cached.roles && Object.keys(DECK_BUILDER_ROLE_TAGS).every(r => cached.roles[r])) return revive(cached.roles);
+  try {
+    const out = {};
+    for (const [role, tag] of Object.entries(DECK_BUILDER_ROLE_TAGS)) {
+      out[role] = await scryfallRoleSearch(`otag:${tag} id<=${id} f:commander`, DECK_BUILDER_ROLE_PAGES);
+    }
+    // JSON has no Infinity: null stands for "every ranked card seen".
+    const stored = Object.fromEntries(Object.entries(out).map(([role, t]) => [role, {
+      ids: [...t.ids], throughRank: Number.isFinite(t.throughRank) ? t.throughRank : null, complete: t.complete,
+    }]));
+    ctx.waitUntil(
+      env.DECK_CACHE.put(key, JSON.stringify({ roles: stored, fetchedAt: new Date().toISOString() }), { expirationTtl: DECK_BUILDER_CACHE_TTL_SECONDS })
+        .catch(err => console.error(`deck builder roles cache write failed: ${err.message}`))
+    );
+    return out;
+  } catch (err) {
+    console.error(`deck builder roles failed: ${err.message}`);
+    return null;
+  }
+}
+
+// Keyword rules for when Tagger can't answer for a card (ranked past what
+// was read, or Scryfall unreachable). Deliberately plain: they match the
+// common wordings of each role in oracle text, lowercased, and follow
+// Tagger's own lines where it draws them -- a board wipe is also removal,
+// a counterspell isn't. Checked against Tagger on the 700 most-played cards
+// (Nov 2026); see the PR for the numbers. Ramp is only ever read from a
+// card's nonland faces: every land "adds" mana, including the back of a
+// modal double-faced spell.
+const DECK_BUILDER_ROLE_KEYWORDS = {
+  ramp: [
+    /\badd \{|\badd (one|two|three|x) mana|\badd an amount of/,
+    /search your library for [^.]*\b(land|forest|plains|island|swamp|mountain) cards?[^.]*onto the battlefield/,
+    /put (a|up to \w+) land cards? from your hand onto the battlefield/,
+    /you may play (an|two|\w+) additional lands?/,
+    // Treasure you make, not Treasure an opponent gets (An Offer You Can't Refuse).
+    /(^|\byou |— |\. )create (a|an|one|two|three|x|\w+) treasure tokens?/m,
+  ],
+  draw: [
+    /\bdraws? (a card|cards|(one|two|three|four|five|six|seven|x|that many) cards)/,
+  ],
+  removal: [
+    // ...but not "exile target creature you control" (Ephemerate's blink).
+    /\b(destroy|exile) (up to (one|two|three|\w+) )?(other )?target (\w+ )*?(creature|artifact|enchantment|planeswalker|permanent|battle)s?\b(?! you (control|own))/,
+    /\breturn (up to (one|two|\w+) )?(other )?target (\w+ )*?(creature|permanent|artifact|enchantment|planeswalker)s?[^.]* to (its|their) owner'?s'? hands?/,
+    /\bdeals? (\d+|x) damage to (any target|(up to (one|two|\w+) )?target (\w+ )*?(creature|planeswalker))/,
+    /\bdeals damage equal to [^.]* to (any target|target (\w+ )*?(creature|planeswalker))/,
+    /\btarget (\w+ )*?creature gets -(\d+|x)\/-(\d+|x)/,
+    /\bfights? (another )?(up to one )?target/,
+    /\btarget (player|opponent) sacrifices (a|an) (\w+ )?(creature|artifact|enchantment|planeswalker|permanent)/,
+    /\bput target (\w+ )*?(creature|permanent|artifact|enchantment)[^.]* on (the )?(top|bottom) of (its|their) owner'?s'? library/,
+  ],
+  wipe: [
+    /\b(destroy|exile) (all|each) (\w+ )*?(creatures|permanents|artifacts|enchantments|planeswalkers)\b/,
+    /\breturn (all|each) (\w+ )*?(creatures|permanents)[^.]* to (its|their) owner'?s'? hands?/,
+    /\bdamage[^.]* to each (other )?(creature|nonland permanent)/,
+    /\b(all|each) (other )?creatures? gets? -(\d+|x)\/-(\d+|x)/,
+    /\bcreatures (your opponents|target player|that player) controls? get -(\d+|x)\/-(\d+|x)/,
+    /\beach (player|opponent) sacrifices (all|\w+) (\w+ )?(creatures|permanents|nonland permanents)/,
+  ],
+  protection: [
+    /\b(creatures|permanents|artifacts|planeswalkers|other creatures|other permanents|commanders?) you control (gain|have|get)[^.]*\b(hexproof|indestructible|shroud|protection from)/,
+    /\btarget (\w+ )*?(creature|permanent|artifact|planeswalker)( or (\w+ )*?(creature|permanent|artifact|planeswalker))?( you control)? gains? [^.]*\b(hexproof|indestructible|shroud|protection from)/,
+    /\b(it|they|those creatures|those permanents|that creature|that permanent) gains? [^.]*\b(hexproof|indestructible|shroud|protection from)/,
+    /\b(equipped|enchanted) (creature|permanent)[^.]*\b(hexproof|indestructible|shroud|protection from)/,
+    /\byou (have|gain) (hexproof|shroud|protection)/,
+    /\bphases? out\b/,
+  ],
+};
+
+// Wording that mentions drawing without drawing anything: "whenever an
+// opponent draws a card" (Smothering Tithe), "if you would draw a card"
+// (Laboratory Maniac). Struck out before the draw rules run.
+const DECK_BUILDER_NOT_DRAW = /\b(whenever|each time|if|when) [^.,]*\bdraws? (a|an|their|your|one|two|\w+) [^.,]*cards?[^.,]*,|\bwould draw\b[^.,]*/g;
+
+// faces: [{ text, typeLine }] -- one per card face (one for a normal card).
+function deckBuilderKeywordRoles(faces) {
+  const roles = new Set();
+  for (const face of faces || []) {
+    const text = String(face.text || "").toLowerCase();
+    const isLand = /\bLand\b/.test(String(face.typeLine || ""));
+    const drawText = text.replace(DECK_BUILDER_NOT_DRAW, " ");
+    for (const [role, rules] of Object.entries(DECK_BUILDER_ROLE_KEYWORDS)) {
+      if (role === "ramp" && isLand) continue;
+      if (rules.some(re => re.test(role === "draw" ? drawText : text))) roles.add(role);
+    }
+    // Overload (Cyclonic Rift, Vandalblast) turns "target" into "each", so
+    // an overload card that removes is a wipe.
+    if (/\boverload\b/.test(text) && DECK_BUILDER_ROLE_KEYWORDS.removal.some(re => re.test(text))) roles.add("wipe");
+  }
+  // Tagger counts a board wipe as removal too.
+  if (roles.has("wipe")) roles.add("removal");
+  return [...roles];
+}
+
+// A candidate's roles: Tagger's answer wherever it covers the card,
+// keyword rules wherever it doesn't. Also says which decided each role, so
+// the response can report how much came from Tagger.
+function deckBuilderCardRoles(oracleId, edhrecRank, faces, roleTags) {
+  const roles = [];
+  let fromKeywords = 0;
+  let keywordRoles = null;
+  for (const role of Object.keys(DECK_BUILDER_ROLE_TAGS)) {
+    const t = roleTags ? roleTags[role] : null;
+    const covered = t && (t.complete || (edhrecRank != null && edhrecRank <= t.throughRank));
+    let has;
+    if (covered) has = t.ids.has(oracleId);
+    else {
+      keywordRoles = keywordRoles || deckBuilderKeywordRoles(faces);
+      has = keywordRoles.includes(role);
+      fromKeywords++;
+    }
+    if (has) roles.push(role);
+  }
+  return { roles, fromKeywords };
+}
+
+async function buildDeckBuilderCandidates(slug, bracket, tags, roleTagsFor = async () => null) {
   const bracketSlug = DECK_BUILDER_BRACKET_SLUGS[bracket];
   const [page, average] = await Promise.all([
     edhrecJson(`commanders/${slug}/${bracketSlug}.json`),
@@ -2450,6 +2643,8 @@ async function buildDeckBuilderCandidates(slug, bracket, tags) {
   }
 
   const commanderUid = dict.card?.id || null;
+  const roleTags = await roleTagsFor((dict.card?.color_identity || []).join(""));
+  const roleStats = { tagger: 0, keywords: 0 };
   const scry = await scryfallCollection([...picks.keys(), ...(commanderUid ? [commanderUid] : [])]);
   const num = v => (v != null && Number.isFinite(Number(v)) ? Number(v) : null);
 
@@ -2460,6 +2655,13 @@ async function buildDeckBuilderCandidates(slug, bracket, tags) {
     if (!oracleId || p.uid === commanderUid) continue;
     if (c.legalities && c.legalities.commander !== "legal") continue;
     const typeLine = c.type_line || c.card_faces?.[0]?.type_line || "";
+    const faces = c.card_faces && c.card_faces.length
+      ? c.card_faces.map(f => ({ text: f.oracle_text || "", typeLine: f.type_line || "" }))
+      : [{ text: c.oracle_text || "", typeLine }];
+    const edhrecRank = num(c.edhrec_rank);
+    const { roles, fromKeywords } = deckBuilderCardRoles(oracleId.toLowerCase(), edhrecRank, faces, roleTags);
+    roleStats.keywords += fromKeywords;
+    roleStats.tagger += Object.keys(DECK_BUILDER_ROLE_TAGS).length - fromKeywords;
     candidates.push({
       ...p,
       oracleId: oracleId.toLowerCase(),
@@ -2469,6 +2671,8 @@ async function buildDeckBuilderCandidates(slug, bracket, tags) {
       gameChanger: !!c.game_changer,
       massLandDenial: tags ? tags.massLandDenial.has(oracleId.toLowerCase()) : null,
       extraTurn: tags ? tags.extraTurn.has(oracleId.toLowerCase()) : null,
+      roles,
+      edhrecRank,
       price: num(c.prices?.usd) ?? num(c.prices?.usd_foil) ?? num(c.prices?.usd_etched),
       inAverageDeck: averageUids.has(p.uid),
     });
@@ -2490,6 +2694,11 @@ async function buildDeckBuilderCandidates(slug, bracket, tags) {
     template,
     averageBasics,
     tagsChecked: !!tags,
+    // rolesFromTagger: Tagger answered (where it covers a card); false means
+    // Scryfall couldn't be searched and every role came from keyword rules.
+    // roleStats counts card-role answers by source.
+    rolesFromTagger: !!roleTags,
+    roleStats,
     candidates,
     builtAt: new Date().toISOString(),
   };
@@ -2526,13 +2735,14 @@ async function handleDeckBuilderCandidates(env, ctx, session, url) {
   let data = await kvGetJson(env, cacheKey, null);
   if (!data) {
     try {
-      data = await buildDeckBuilderCandidates(slug, bracket, await deckBuilderTags(env, ctx));
+      data = await buildDeckBuilderCandidates(slug, bracket, await deckBuilderTags(env, ctx),
+        identity => deckBuilderRoleTags(env, ctx, identity));
     } catch (err) {
       return jsonResponse({ error: err.message }, 502);
     }
     if (!data) return jsonResponse({ slug, bracket, reason: "no-edhrec" }, 200, { "Cache-Control": "no-store" });
-    // Without the Tagger flags, don't cache: the next build retries them.
-    if (data.tagsChecked) {
+    // Without the Tagger flags or roles, don't cache: the next build retries.
+    if (data.tagsChecked && data.rolesFromTagger) {
       ctx.waitUntil(
         env.DECK_CACHE.put(cacheKey, JSON.stringify(data), { expirationTtl: DECK_BUILDER_CACHE_TTL_SECONDS })
           .catch(err => console.error(`deck builder cache write failed: ${err.message}`))

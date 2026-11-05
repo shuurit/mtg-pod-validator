@@ -1,0 +1,186 @@
+[
+ {
+  "name": "Cultivate",
+  "faces": [
+   {
+    "text": "Search your library for up to two basic land cards, reveal those cards, put one onto the battlefield tapped and the other into your hand, then shuffle.",
+    "typeLine": "Sorcery"
+   }
+  ]
+ },
+ {
+  "name": "Sol Ring",
+  "faces": [
+   {
+    "text": "{T}: Add {C}{C}.",
+    "typeLine": "Artifact"
+   }
+  ]
+ },
+ {
+  "name": "Llanowar Elves",
+  "faces": [
+   {
+    "text": "{T}: Add {G}.",
+    "typeLine": "Creature — Elf Druid"
+   }
+  ]
+ },
+ {
+  "name": "Rhystic Study",
+  "faces": [
+   {
+    "text": "Whenever an opponent casts a spell, you may draw a card unless that player pays {1}.",
+    "typeLine": "Enchantment"
+   }
+  ]
+ },
+ {
+  "name": "Harmonize",
+  "faces": [
+   {
+    "text": "Draw three cards.",
+    "typeLine": "Sorcery"
+   }
+  ]
+ },
+ {
+  "name": "Smothering Tithe",
+  "faces": [
+   {
+    "text": "Whenever an opponent draws a card, that player may pay {2}. If the player doesn't, you create a Treasure token. (It's an artifact with \"{T}, Sacrifice this token: Add one mana of any color.\")",
+    "typeLine": "Enchantment"
+   }
+  ]
+ },
+ {
+  "name": "Swords to Plowshares",
+  "faces": [
+   {
+    "text": "Exile target creature. Its controller gains life equal to its power.",
+    "typeLine": "Instant"
+   }
+  ]
+ },
+ {
+  "name": "Beast Within",
+  "faces": [
+   {
+    "text": "Destroy target permanent. Its controller creates a 3/3 green Beast creature token.",
+    "typeLine": "Instant"
+   }
+  ]
+ },
+ {
+  "name": "Ephemerate",
+  "faces": [
+   {
+    "text": "Exile target creature you control, then return it to the battlefield under its owner's control.\nRebound (If you cast this spell from your hand, exile it as it resolves. At the beginning of your next upkeep, you may cast this card from exile without paying its mana cost.)",
+    "typeLine": "Instant"
+   }
+  ]
+ },
+ {
+  "name": "Counterspell",
+  "faces": [
+   {
+    "text": "Counter target spell.",
+    "typeLine": "Instant"
+   }
+  ]
+ },
+ {
+  "name": "Wrath of God",
+  "faces": [
+   {
+    "text": "Destroy all creatures. They can't be regenerated.",
+    "typeLine": "Sorcery"
+   }
+  ]
+ },
+ {
+  "name": "Blasphemous Act",
+  "faces": [
+   {
+    "text": "This spell costs {1} less to cast for each creature on the battlefield.\nBlasphemous Act deals 13 damage to each creature.",
+    "typeLine": "Sorcery"
+   }
+  ]
+ },
+ {
+  "name": "Cyclonic Rift",
+  "faces": [
+   {
+    "text": "Return target nonland permanent you don't control to its owner's hand.\nOverload {6}{U} (You may cast this spell for its overload cost. If you do, change \"target\" in its text to \"each.\")",
+    "typeLine": "Instant"
+   }
+  ]
+ },
+ {
+  "name": "Heroic Intervention",
+  "faces": [
+   {
+    "text": "Permanents you control gain hexproof and indestructible until end of turn.",
+    "typeLine": "Instant"
+   }
+  ]
+ },
+ {
+  "name": "Swiftfoot Boots",
+  "faces": [
+   {
+    "text": "Equipped creature has hexproof and haste. (It can't be the target of spells or abilities your opponents control. It can attack and {T} no matter when it came under your control.)\nEquip {1} ({1}: Attach to target creature you control. Equip only as a sorcery.)",
+    "typeLine": "Artifact — Equipment"
+   }
+  ]
+ },
+ {
+  "name": "Lightning Greaves",
+  "faces": [
+   {
+    "text": "Equipped creature has haste and shroud. (It can't be the target of spells or abilities.)\nEquip {0}",
+    "typeLine": "Artifact — Equipment"
+   }
+  ]
+ },
+ {
+  "name": "Sink into Stupor // Soporific Springs",
+  "faces": [
+   {
+    "text": "Return target spell or nonland permanent an opponent controls to its owner's hand.",
+    "typeLine": "Instant"
+   },
+   {
+    "text": "As this land enters, you may pay 3 life. If you don't, it enters tapped.\n{T}: Add {U}.",
+    "typeLine": "Land"
+   }
+  ]
+ },
+ {
+  "name": "Command Tower",
+  "faces": [
+   {
+    "text": "{T}: Add one mana of any color in your commander's color identity.",
+    "typeLine": "Land"
+   }
+  ]
+ },
+ {
+  "name": "Laboratory Maniac",
+  "faces": [
+   {
+    "text": "If you would draw a card while your library has no cards in it, you win the game instead.",
+    "typeLine": "Creature — Human Wizard"
+   }
+  ]
+ },
+ {
+  "name": "Black Market Connections",
+  "faces": [
+   {
+    "text": "At the beginning of your first main phase, choose one or more —\n• Sell Contraband — Create a Treasure token. You lose 1 life.\n• Buy Information — Draw a card. You lose 2 life.\n• Hire a Mercenary — Create a 3/2 colorless Shapeshifter creature token with changeling. You lose 3 life. (It is every creature type.)",
+    "typeLine": "Enchantment"
+   }
+  ]
+ }
+]
