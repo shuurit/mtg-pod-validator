@@ -98,8 +98,9 @@ test("if Scryfall fails the tags are null and nothing is cached", async () => {
   assert.equal(kv.size, 0);
 });
 
-test("the candidates cache key moved to v2, and unflagged candidates aren't cached", () => {
-  assert.match(RELAY, /DECK_BUILDER_CACHE_VERSION = "v2"/);
+test("the candidates cache key is v3 (commander cmc), and unflagged candidates aren't cached", () => {
+  assert.match(RELAY, /DECK_BUILDER_CACHE_VERSION = "v3"/);
+  assert.match(source("buildDeckBuilderCandidates"), /cmc: num\(cmd\?\.cmc\)/);
   assert.match(RELAY, /deckbuilder:\$\{DECK_BUILDER_CACHE_VERSION\}:\$\{slug\}:\$\{bracket\}/);
   const handler = source("handleDeckBuilderCandidates");
   assert.match(handler, /if \(data\.tagsChecked\) \{\s*ctx\.waitUntil/);
@@ -137,7 +138,9 @@ test("Spellbook's answer keeps only two-card combos", () => {
   ]);
   const first = out.combos[0];
   assert.equal(first.url, "https://commanderspellbook.com/combo/1-2/");
-  assert.equal(first.manaValueNeeded, 4);
+  // Spellbook's manaValueNeeded is the mana to run the combo, not what the
+  // cards cost -- it is deliberately not passed on.
+  assert.equal("manaValueNeeded" in first, false);
   assert.equal(first.bracketTag, "S");
   assert.deepEqual([...first.produces], ["Infinite mana"]);
 });
@@ -151,9 +154,9 @@ test("an empty `included` is a real 'no combos', checked", () => {
 
 test("snake_case and unpaginated answers parse too", () => {
   const s = sandbox(async () => json(200, {}));
-  const v = variant("1-2", [["A"], ["B"]], { manaValueNeeded: undefined, bracketTag: undefined, mana_value_needed: 3, bracket_tag: "R" });
+  const v = variant("1-2", [["A"], ["B"]], { bracketTag: undefined, bracket_tag: "R" });
   const out = s.parseSpellbookCombos({ identity: "U", included: [v] });
-  assert.equal(out.combos[0].manaValueNeeded, 3);
+  assert.deepEqual([...out.combos[0].cards], ["A", "B"]);
   assert.equal(out.combos[0].bracketTag, "R");
 });
 

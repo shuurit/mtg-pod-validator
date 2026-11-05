@@ -279,7 +279,7 @@ function buildDeck(data, opts = {}) {
     overBudget,
     shortBy,
     tagsChecked: tagsChecked(data),
-    checks: bracketChecks(picked, bracket, { tagsChecked: tagsChecked(data) }),
+    checks: bracketChecks(picked, bracket, { tagsChecked: tagsChecked(data), commander: data.commander }),
     size: picked.length + basicCount,
   };
 }
@@ -292,7 +292,8 @@ function buildDeck(data, opts = {}) {
 //                    unavailable); ok is null, never shown as passing
 //   "pending"        two-card combos only: Spellbook hasn't answered yet
 // opts.tagsChecked: the candidates carry mass land denial / extra turn
-// flags. opts.combos: the relay's POST /deck-builder/combos answer --
+// flags. opts.commander: { name, cmc }, so a combo using the commander gets
+// a mana cost too. opts.combos: the relay's POST /deck-builder/combos answer --
 // { checked: true, combos: [{ cards: [names], ... }] } or
 // { checked: false, reason }; leave it out while the call is in flight.
 function bracketChecks(cards, bracket, opts = {}) {
@@ -316,7 +317,28 @@ function bracketChecks(cards, bracket, opts = {}) {
   }
 
   checks.twoCardCombos = combosCheck(opts.combos, rules.twoCardCombos);
+  checks.twoCardCombos.combos = checks.twoCardCombos.combos.map(c => ({
+    ...c,
+    manaCost: comboManaCost(c.cards, cards, opts.commander),
+  }));
   return checks;
+}
+
+// What a combo's cards cost to cast, added up -- the number that says how
+// early it can come together. Names are matched against the deck (and the
+// commander) case-insensitively; if any piece's mana value is unknown the
+// total is null, never a guess.
+function comboManaCost(names, cards, commander) {
+  const byName = new Map();
+  for (const c of cards || []) if (c && c.name) byName.set(c.name.toLowerCase(), c.cmc);
+  if (commander && commander.name) byName.set(commander.name.toLowerCase(), commander.cmc);
+  let total = 0;
+  for (const name of names || []) {
+    const cmc = byName.get(String(name).toLowerCase());
+    if (cmc == null || !Number.isFinite(Number(cmc))) return null;
+    total += Number(cmc);
+  }
+  return total;
 }
 
 function combosCheck(answer, rule) {
@@ -361,6 +383,6 @@ function typeOrder(type) {
 if (typeof module !== "undefined") {
   module.exports = {
     BRACKET_RULES, DEFAULT_WEIGHTS, cardStatus, scoreCard, deckTemplate, splitBasics,
-    buildDeck, bracketChecks, combosCheck, comboRequest, tagsChecked, deckToText, typeOrder,
+    buildDeck, bracketChecks, combosCheck, comboManaCost, comboRequest, tagsChecked, deckToText, typeOrder,
   };
 }
