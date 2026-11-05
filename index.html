@@ -17,7 +17,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="style.css?v=84">
+<link rel="stylesheet" href="style.css?v=85">
 
 <!-- Home-screen icon (iOS "Add to Home Screen" + Android/Chrome install).
      Generated from icon-source.png via scripts/generate_icons.py -- rerun
@@ -53,6 +53,7 @@
 <!-- Reuses bg-validator.webp (the Pod tab's table art) until Proposals
      gets artwork of its own -- house rules belong to the table. -->
 <div class="tab-bg" id="bg-proposals"></div>
+<div class="tab-bg" id="bg-deck-builder"></div>
 <!-- Frosted band behind the iOS status bar, shown only once the page has
      scrolled under it -- see .scroll-edge in style.css, initScrollEdge in
      app.js. -->
@@ -127,6 +128,9 @@
               Pod Proposals <span id="auth-proposals-count" class="auth-menu-count" hidden></span>
             </button>
             <button id="auth-house-rules-btn" type="button" class="auth-menu-item auth-menu-item-nav">House Rules</button>
+            <!-- Build a Deck is reached only from here, like Proposals. See
+                 openDeckBuilderTab in app.js. -->
+            <button id="auth-deck-builder-btn" type="button" class="auth-menu-item auth-menu-item-nav">Build a Deck</button>
             <div class="auth-menu-divider"></div>
             <button id="auth-signout-btn" type="button" class="auth-menu-item">Sign out</button>
           </div>
@@ -273,6 +277,50 @@
           <button type="button" id="proposal-cancel">Cancel</button>
         </div>
       </form>
+    </section>
+  </div>
+
+  <!-- Reached only from the avatar menu (Build a Deck) -- see
+       initDeckBuilder and renderDeckBuild in app.js, and deck-builder.js
+       for how a deck is put together. -->
+  <div id="tab-deck-builder" class="tab-panel" hidden>
+    <section class="card">
+      <button type="button" class="back-link" data-goto-tab="tonight">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
+        Tonight
+      </button>
+      <h2>Build a Deck</h2>
+      <p class="hint">Pick a commander and a bracket. The deck comes from what decks at that bracket run on EDHREC, using cards from your Archidekt collection first.</p>
+      <form id="db-form" class="db-form" novalidate>
+        <label class="db-field" for="db-commander">
+          <span class="db-label">Commander</span>
+          <input type="text" id="db-commander" list="db-commander-options" autocomplete="off" autocapitalize="words" spellcheck="false" placeholder="Atraxa, Praetors' Voice" maxlength="200">
+          <datalist id="db-commander-options"></datalist>
+        </label>
+        <div class="db-field">
+          <span class="db-label" id="db-bracket-label">Bracket</span>
+          <div class="view-toggle db-bracket-toggle" role="group" aria-labelledby="db-bracket-label" id="db-bracket-toggle">
+            <button type="button" class="view-toggle-btn" data-bracket="1" aria-pressed="false"><b>1</b><span>Exhibition</span></button>
+            <button type="button" class="view-toggle-btn" data-bracket="2" aria-pressed="false"><b>2</b><span>Core</span></button>
+            <button type="button" class="view-toggle-btn active" data-bracket="3" aria-pressed="true"><b>3</b><span>Upgraded</span></button>
+            <button type="button" class="view-toggle-btn" data-bracket="4" aria-pressed="false"><b>4</b><span>Optimized</span></button>
+            <button type="button" class="view-toggle-btn" data-bracket="5" aria-pressed="false"><b>5</b><span>cEDH</span></button>
+          </div>
+        </div>
+        <label class="db-field" for="db-budget">
+          <span class="db-label">Budget for cards you don't own <output id="db-budget-value" for="db-budget">$0</output></span>
+          <input type="range" id="db-budget" min="0" max="200" step="5" value="0">
+        </label>
+        <label class="db-toggle" for="db-exclude-decks">
+          <input type="checkbox" id="db-exclude-decks">
+          Leave out cards that are in my other decks
+        </label>
+        <div class="row">
+          <button type="submit" class="primary" id="db-build-btn">Build</button>
+        </div>
+      </form>
+      <p class="hint db-status" id="db-status" aria-live="polite" hidden></p>
+      <div id="db-result" class="db-result" hidden></div>
     </section>
   </div>
 
@@ -493,6 +541,7 @@
 </div>
 
 <script src="deck-tally.js?v=2"></script>
-<script src="app.js?v=93"></script>
+<script src="deck-builder.js?v=1"></script>
+<script src="app.js?v=94"></script>
 </body>
 </html>

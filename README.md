@@ -70,6 +70,12 @@ playgroup.gg  <--->  Cloudflare Worker relay  <--->  app.js (this site)
   Kept separate from `app.js` so `tests/deck-tally.test.js` can run it with
   Node's built-in test runner — no packages to install:
   `node --test tests/*.test.js`.
+- `deck-builder.js` — Build a Deck's assembly (avatar menu → Build a
+  Deck): turns a commander's EDHREC cards for one bracket, plus which of
+  them you own in Archidekt (read through the archidekt-trading-app
+  bridge), into a 99 — owned cards first, Game Changers capped by bracket,
+  and a budget spent on the clearest upgrades. Pure functions, tested by
+  `tests/deck-builder.test.js` the same way as `deck-tally.js`.
 - `cloudflare-worker/` — the relay Worker, its D1 schema, and its own
   README.
 - `deck-strength.xlsx` — the pre-D1 spreadsheet, kept as a frozen

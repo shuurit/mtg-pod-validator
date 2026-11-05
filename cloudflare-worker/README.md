@@ -205,6 +205,18 @@ works without one.
   table. A seat whose player picked their own deck is theirs: `pick` and
   `unseat` on it from anyone else answer `403` (fill-ins stay open). Stored as one JSON row in `live_table`, written under an
   optimistic lock on its `version`.
+- `GET /deck-builder/candidates?commander=<name>&bracket=<1-5>` — Build a
+  Deck's inputs: EDHREC's cards for that commander measured among decks at
+  that bracket (`json.edhrec.com/pages/commanders/<slug>/<bracket>.json`),
+  the bracket's average-deck shape and basic land split, each card's
+  Scryfall oracle id/type/price/Game Changer flag, and which of them the
+  signed-in player owns. That last part comes from archidekt-trading-app's
+  `POST /api/internal/collection-match` (needs `COLLECTION_BRIDGE_KEY`, see
+  below). The EDHREC + Scryfall part is cached in `DECK_CACHE` for a week
+  per commander + bracket; ownership is read fresh every time. Answers
+  `{reason: "no-edhrec"}` for a commander EDHREC has no page for (not
+  cached). Without the secret, or if the trading app is down, the deck
+  still builds and `collection` says `{connected: false, reason}`.
 
 ## Updating an already-deployed Worker (new code only, no new bindings)
 
@@ -228,7 +240,7 @@ no new bindings, same `DECK_CACHE`/`DB` bindings as before.
 3. **Deploy**: Cloudflare dashboard → Workers & Pages → Create → Worker →
    Start with Hello World → paste in `relay.js` → Deploy.
 4. **Secrets**: Worker → Settings → Variables and Secrets (or `npx
-   wrangler secret put <NAME>` from this folder) → add all five listed at
+   wrangler secret put <NAME>` from this folder) → add the secrets listed at
    the top of this file:
    - `GITHUB_TOKEN` (step 1) and `PLAYGROUP_API_KEY` (step 2).
    - `DISCORD_CLIENT_SECRET` — Discord Developer Portal → your application
@@ -238,6 +250,10 @@ no new bindings, same `DECK_CACHE`/`DB` bindings as before.
    - `SEASON_ANNOUNCE_API_KEY` — any random string. Set the same value on
      archidekt-trading-app's Pages project (`npx wrangler pages secret put
      SEASON_ANNOUNCE_API_KEY --project-name archidekt-trading-app`).
+   - `COLLECTION_BRIDGE_KEY` — any random string. Set the same value on
+     archidekt-trading-app's Pages project (`npx wrangler pages secret put
+     COLLECTION_BRIDGE_KEY --project-name archidekt-trading-app`). Lets
+     Build a Deck read the player's Archidekt collection.
 5. **KV namespace**: **Workers & Pages** → **KV** → **Create a namespace**
    (e.g. `mtg-pod-validator-cache`) → bind it to the Worker under
    **Settings** → **Bindings**, variable name exactly `DECK_CACHE`.
