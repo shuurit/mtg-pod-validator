@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const {
   BRACKET_RULES, ROLE_MINIMUMS, roleCounts, cardStatus, scoreCard, deckTemplate, splitBasics, buildDeck, deckToText,
   bracketChecks, comboRequest, comboManaCost, swapOptions, applySwap,
+  deckSize, combinedIdentity, pairingOf, secondCommanderKind, canPair, pairOrder,
 } = require("../deck-builder.js");
 
 let n = 0;
@@ -586,4 +587,115 @@ test("a swap that drops a role below its minimum says so, without blocking it", 
   assert.ok(o, "shares the draw role, so it's offered");
   assert.equal(o.blocked, null);
   assert.equal(o.roleNote, "Removal would drop to 7 of 8");
+});
+
+// ---- Two commanders (Partner, Partner with, Partner groups, Background, Doctor) ----
+const PAIRING = Object.fromEntries(require("./fixtures/pairing-cards.json").map(c => [c.name, pairingOf(c)]));
+const P = name => { assert.ok(PAIRING[name], name); return PAIRING[name]; };
+// Same rule as the relay's edhrecSlug, enough for these names.
+const slugOf = n => n.split(" // ")[0].toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "")
+  .replace(/['’,.]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+
+test("pairing abilities are read from real Scryfall cards (Nov 2026)", () => {
+  assert.equal(secondCommanderKind(P("Thrasios, Triton Hero")).kind, "partner");
+  assert.deepEqual(secondCommanderKind(P("Pir, Imaginative Rascal")),
+    { kind: "partner-with", label: "Partner with Toothy, Imaginary Friend", suggest: "Toothy, Imaginary Friend" });
+  // Scryfall tags these plain "Partner"; the oracle text says which group.
+  assert.equal(P("Cecily, Haunted Mage").partnerGroup, "Friends forever");
+  assert.equal(P("Cecily, Haunted Mage").partner, false);
+  assert.equal(secondCommanderKind(P("Wilson, Refined Grizzly")).kind, "background");
+  assert.equal(secondCommanderKind(P("Raised by Giants")).kind, "background-for");
+  assert.equal(secondCommanderKind(P("The Tenth Doctor")).kind, "companion");
+  assert.equal(secondCommanderKind(P("Rose Tyler")).kind, "doctor");
+  assert.equal(secondCommanderKind(P("Atraxa, Praetors' Voice")), null, "no second commander for Atraxa");
+});
+
+test("which pairs are legal", () => {
+  const ok = (a, b) => canPair(P(a), P(b)).ok;
+  assert.ok(ok("Thrasios, Triton Hero", "Tymna the Weaver"));
+  assert.ok(ok("Pir, Imaginative Rascal", "Toothy, Imaginary Friend"));
+  assert.ok(ok("Cecily, Haunted Mage", "Bjorna, Nightfall Alchemist"));
+  assert.ok(ok("Wilson, Refined Grizzly", "Raised by Giants"));
+  assert.ok(ok("Cultist of the Absolute", "Lae'zel, Vlaakith's Champion"), "either order");
+  assert.ok(ok("Rose Tyler", "The Tenth Doctor"));
+  assert.equal(canPair(P("Pir, Imaginative Rascal"), P("Thrasios, Triton Hero")).reason,
+    "Pir, Imaginative Rascal can only partner with Toothy, Imaginary Friend.");
+  assert.match(canPair(P("Cecily, Haunted Mage"), P("Thrasios, Triton Hero")).reason, /Partner—Friends forever/);
+  assert.ok(!ok("Wilson, Refined Grizzly", "Thrasios, Triton Hero"));
+  assert.ok(!ok("Atraxa, Praetors' Voice", "Tymna the Weaver"));
+  assert.ok(!ok("Thrasios, Triton Hero", "Thrasios, Triton Hero"));
+});
+
+test("pairOrder matches EDHREC's page names for the pairs checked live", () => {
+  // Canonical page names seen on json.edhrec.com (Nov 2026); the other
+  // order of each answers with a redirect.
+  const cases = [
+    ["Tymna the Weaver", "Thrasios, Triton Hero", "thrasios-triton-hero-tymna-the-weaver"],
+    ["Tymna the Weaver", "Kraum, Ludevic's Opus", "kraum-ludevics-opus-tymna-the-weaver"],
+    ["Toothy, Imaginary Friend", "Pir, Imaginative Rascal", "pir-imaginative-rascal-toothy-imaginary-friend"],
+    ["Raised by Giants", "Wilson, Refined Grizzly", "wilson-refined-grizzly-raised-by-giants"],
+    ["Cultist of the Absolute", "Lae'zel, Vlaakith's Champion", "laezel-vlaakiths-champion-cultist-of-the-absolute"],
+    ["Rose Tyler", "The Tenth Doctor", "the-tenth-doctor-rose-tyler"],
+    ["Bjorna, Nightfall Alchemist", "Cecily, Haunted Mage", "bjorna-nightfall-alchemist-cecily-haunted-mage"],
+  ];
+  for (const [a, b, page] of cases) {
+    for (const [x, y] of [[a, b], [b, a]]) {
+      const [first, second] = pairOrder(P(x), P(y), slugOf);
+      assert.equal(`${slugOf(first.name)}-${slugOf(second.name)}`, page, `${x} + ${y}`);
+    }
+  }
+});
+
+const pairData = (candidates, collection, more = {}) => data(candidates, collection, 3, {
+  commander: { name: "Thrasios, Triton Hero", oracleId: "thrasios", colorIdentity: "GU", cmc: 2 },
+  commanders: [
+    { name: "Thrasios, Triton Hero", oracleId: "thrasios", colorIdentity: "GU", cmc: 2 },
+    { name: "Tymna the Weaver", oracleId: "tymna", colorIdentity: "WB", cmc: 3 },
+  ],
+  averageBasics: {},
+  ...more,
+});
+
+test("with two commanders the deck is 98 cards, and neither commander is in it", () => {
+  const cands = [{ ...card("Thrasios, Triton Hero"), oracleId: "thrasios" }, { ...card("Tymna the Weaver"), oracleId: "tymna" }, ...pool({ each: 30 })];
+  const d = pairData(cands, owning(cands));
+  assert.equal(deckSize(d), 98);
+  const b = buildDeck(d);
+  assert.equal(b.size, 98);
+  assert.ok(!b.cards.some(c => c.oracleId === "thrasios" || c.oracleId === "tymna"));
+  assert.equal(b.cards.length + b.basics.reduce((n, x) => n + x.count, 0), 98);
+  assert.deepEqual(b.commanders.map(c => c.name), ["Thrasios, Triton Hero", "Tymna the Weaver"]);
+  assert.equal(b.colorIdentity, "WUBG");
+});
+
+test("the pair's combined color identity sets the basics", () => {
+  assert.equal(combinedIdentity([{ colorIdentity: "GU" }, { colorIdentity: "WB" }]), "WUBG");
+  const b = buildDeck(pairData(pool({ each: 5, lands: 0 }), { connected: false }));
+  assert.deepEqual(b.basics.map(x => x.name).sort(), ["Forest", "Island", "Plains", "Swamp"]);
+  assert.equal(b.basics.reduce((n, x) => n + x.count, 0), 98 - b.cards.length);
+});
+
+test("the text export lists both commanders first and adds up to 100", () => {
+  const cands = pool();
+  const lines = deckToText(buildDeck(pairData(cands, owning(cands)))).split("\n");
+  assert.deepEqual(lines.slice(0, 2), ["1 Thrasios, Triton Hero", "1 Tymna the Weaver"]);
+  assert.equal(lines.reduce((n, l) => n + Number(l.split(" ")[0]), 0), 100);
+});
+
+test("combos see both commanders", () => {
+  const cands = pool();
+  const b = buildDeck(pairData(cands, owning(cands)));
+  const req = comboRequest(b);
+  assert.deepEqual(req.commanders, ["Thrasios, Triton Hero", "Tymna the Weaver"]);
+  assert.equal(req.commander, "Thrasios, Triton Hero");
+  const deck = [card("Sanguine Bond", { cmc: 5 })];
+  assert.equal(comboManaCost(["Tymna the Weaver", "Sanguine Bond"], deck, b.commanders), 8);
+});
+
+test("an older single-commander answer (no `commanders`) still builds 99", () => {
+  const cands = pool();
+  const b = buildDeck(data(cands, owning(cands)));
+  assert.equal(b.size, 99);
+  assert.deepEqual(b.commanders.map(c => c.name), ["Atraxa, Praetors' Voice"]);
+  assert.equal(deckToText(b).split("\n")[0], "1 Atraxa, Praetors' Voice");
 });

@@ -24,7 +24,120 @@
 // count) or push spending past the budget. Only if the deck still isn't full
 // does it take over-budget cards, and it says so (overBudget).
 
+// A Commander deck is 100 cards with its commander(s): 99 with one, 98 with
+// a pair (Partner, Partner with, Friends forever, a Background, a Doctor and
+// companion).
 const DECK_BUILDER_DECK_SIZE = 99;
+
+// The relay's commanders: `commanders` (one or two) when it sent them,
+// otherwise the single `commander` an older cached answer carries.
+function deckCommanders(data) {
+  if (data && Array.isArray(data.commanders) && data.commanders.length) return data.commanders.filter(Boolean);
+  return data && data.commander ? [data.commander] : [];
+}
+
+// Cards in the deck besides its commanders.
+function deckSize(data) {
+  return 100 - Math.max(1, deckCommanders(data).length);
+}
+
+// The pair's combined color identity ("WUBRG" order), which sets the basics.
+function combinedIdentity(commanders) {
+  const all = commanders.map(c => String((c && c.colorIdentity) || "").toUpperCase()).join("");
+  return "WUBRG".split("").filter(c => all.includes(c)).join("");
+}
+
+// ---- Commander pairs ----
+// How a card can share the command zone, from its Scryfall object
+// (keywords, oracle_text, type_line). Read from the oracle text where
+// Scryfall's keywords blur it (checked Nov 2026):
+//   - "Partner with X" cards also carry the plain Partner keyword;
+//   - the newer partner groups print as "Partner—Friends forever",
+//     "Partner—Character select", "Partner—Survivors", "Partner—Father &
+//     son", also tagged plain Partner, but each pairs only within its group.
+function pairingOf(card) {
+  if (!card) return null;
+  const keywords = (card.keywords || []).map(k => String(k).toLowerCase());
+  const text = String(card.oracle_text || (card.card_faces || []).map(f => f.oracle_text || "").join("\n"));
+  const typeLine = String(card.type_line || "");
+  const partnerWith = /^Partner with ([^(\n]+?)\s*(\(|$)/m.exec(text);
+  const group = /^Partner\s*[—-]\s*([^(\n]+?)\s*(\(|$)/m.exec(text);
+  // Older printings' plain "Friends forever" keyword is the same group.
+  const partnerGroup = group ? group[1].trim() : keywords.includes("friends forever") ? "Friends forever" : null;
+  return {
+    name: card.name,
+    partnerWith: partnerWith ? partnerWith[1].trim() : null,
+    partnerGroup,
+    partner: !partnerWith && !partnerGroup && keywords.includes("partner"),
+    chooseBackground: keywords.includes("choose a background"),
+    background: /\bBackground\b/.test(typeLine),
+    doctor: /\bTime Lord Doctor\b/.test(typeLine),
+    companion: keywords.includes("doctor's companion"),
+  };
+}
+
+// Whether a second commander field makes sense for this card, and what
+// kind of card goes in it (for the form's label).
+function secondCommanderKind(p) {
+  if (!p) return null;
+  if (p.partnerWith) return { kind: "partner-with", label: `Partner with ${p.partnerWith}`, suggest: p.partnerWith };
+  if (p.partnerGroup) return { kind: "partner-group", label: `Partner—${p.partnerGroup}` };
+  if (p.partner) return { kind: "partner", label: "Partner" };
+  if (p.chooseBackground) return { kind: "background", label: "Background" };
+  if (p.background) return { kind: "background-for", label: "Creature that can choose a Background" };
+  if (p.doctor) return { kind: "companion", label: "Doctor's companion" };
+  if (p.companion) return { kind: "doctor", label: "Doctor" };
+  return null;
+}
+
+// Whether two cards can be commanders together: { ok, kind } or
+// { ok: false, reason }.
+function canPair(a, b) {
+  if (!a || !b) return { ok: false, reason: "Both commanders are needed." };
+  if (a.name && b.name && a.name.toLowerCase() === b.name.toLowerCase()) return { ok: false, reason: "That's the same card twice." };
+  const same = (x, y) => String(x || "").toLowerCase() === String(y || "").toLowerCase();
+  if (a.partnerWith || b.partnerWith) {
+    if (same(a.partnerWith, b.name) || same(b.partnerWith, a.name)) return { ok: true, kind: "partner-with" };
+    const p = a.partnerWith ? a : b;
+    return { ok: false, reason: `${p.name} can only partner with ${p.partnerWith}.` };
+  }
+  if (a.partnerGroup || b.partnerGroup) {
+    if (same(a.partnerGroup, b.partnerGroup)) return { ok: true, kind: "partner-group" };
+    const p = a.partnerGroup ? a : b;
+    return { ok: false, reason: `${p.name} can only pair with another “Partner—${p.partnerGroup}” commander.` };
+  }
+  if (a.partner && b.partner) return { ok: true, kind: "partner" };
+  if ((a.chooseBackground && b.background) || (b.chooseBackground && a.background)) return { ok: true, kind: "background" };
+  if ((a.doctor && b.companion) || (b.doctor && a.companion)) return { ok: true, kind: "doctor" };
+  return { ok: false, reason: `${a.name} and ${b.name} can't be commanders together.` };
+}
+
+// EDHREC's page slug for a card name -- the same rule as the relay's
+// edhrecSlug (tests/deck-builder-relay.test.js keeps the two matching).
+function deckBuilderSlug(name) {
+  return String(name || "")
+    .split(" // ")[0]
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/['’,.]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+// The order EDHREC names a pair's page in. Checked against 13 real pairs
+// (Nov 2026): the creature before its Background, the Doctor before the
+// companion, otherwise alphabetical by slug (Partner, Partner with, Friends
+// forever). The other order answers with a redirect, which the relay
+// follows anyway; this just saves that request.
+function pairOrder(a, b, slugOf = deckBuilderSlug) {
+  if (a.background && b.chooseBackground && !b.background) return [b, a];
+  if (b.background && a.chooseBackground && !a.background) return [a, b];
+  if (a.companion && b.doctor) return [b, a];
+  if (b.companion && a.doctor) return [a, b];
+  return slugOf(a.name) <= slugOf(b.name) ? [a, b] : [b, a];
+}
+
 
 // Wizards' Commander Brackets.
 //   gameChangers   the most Game Changers a deck may run.
@@ -113,9 +226,9 @@ function scoreCard(card, status, weights = DEFAULT_WEIGHTS) {
 }
 
 // Land and nonland targets from the average deck's type counts, scaled so
-// they add up to 99. Falls back to a plain 36-land shape when EDHREC sent
-// no counts.
-function deckTemplate(template) {
+// they add up to the deck's size (99, or 98 beside a pair). Falls back to a
+// plain 36-land shape when EDHREC sent no counts.
+function deckTemplate(template, size = DECK_BUILDER_DECK_SIZE) {
   const t = template || {};
   const nonland = {};
   let nonlandTotal = 0;
@@ -124,9 +237,9 @@ function deckTemplate(template) {
     nonlandTotal += nonland[type];
   }
   let lands = Math.max(0, Number(t.land) || 0);
-  if (!lands || !nonlandTotal) return { lands: 36, nonbasic: 0, nonland: null, nonlandSlots: DECK_BUILDER_DECK_SIZE - 36 };
+  if (!lands || !nonlandTotal) return { lands: 36, nonbasic: 0, nonland: null, nonlandSlots: size - 36 };
   lands = Math.min(42, Math.max(30, lands));
-  const nonlandSlots = DECK_BUILDER_DECK_SIZE - lands;
+  const nonlandSlots = size - lands;
   // Scale to the open slots; any rounding gap is taken by the flex pass.
   const scale = nonlandSlots / nonlandTotal;
   for (const type of NONLAND_TYPES) nonland[type] = Math.floor(nonland[type] * scale);
@@ -159,11 +272,11 @@ function splitBasics(count, averageBasics, colorIdentity) {
 function candidatePool(data, opts = {}) {
   const weights = { ...DEFAULT_WEIGHTS, ...(opts.weights || {}) };
   const excluded = new Set(opts.excluded || []);
-  const commanderOracle = data.commander && data.commander.oracleId;
+  const commanderOracles = new Set(deckCommanders(data).map(c => c && c.oracleId).filter(Boolean));
   const seen = new Set();
   const pool = [];
   for (const card of data.candidates || []) {
-    if (!card.oracleId || seen.has(card.oracleId) || card.oracleId === commanderOracle) continue;
+    if (!card.oracleId || seen.has(card.oracleId) || commanderOracles.has(card.oracleId)) continue;
     seen.add(card.oracleId);
     if (excluded.has(card.oracleId)) continue;
     const status = cardStatus(card, data.collection, opts);
@@ -185,7 +298,9 @@ function buildDeck(data, opts = {}) {
   const rules = BRACKET_RULES[bracket] || BRACKET_RULES[3];
   const weights = { ...DEFAULT_WEIGHTS, ...(opts.weights || {}) };
   const budget = Math.max(0, Number(opts.budget) || 0);
-  const shape = deckTemplate(data.template);
+  const commanders = deckCommanders(data);
+  const size = deckSize(data);
+  const shape = deckTemplate(data.template, size);
   const pinnedIds = new Set(opts.pinned || []);
   const pool = candidatePool(data, opts);
 
@@ -325,8 +440,8 @@ function buildDeck(data, opts = {}) {
   // Basics fill the rest -- including any nonland slots EDHREC didn't have
   // enough cards for (shortBy says how many).
   const shortBy = Math.max(0, shape.nonlandSlots - nonlandsPicked());
-  const basicCount = DECK_BUILDER_DECK_SIZE - picked.length;
-  const basics = splitBasics(basicCount, data.averageBasics, data.commander && data.commander.colorIdentity);
+  const basicCount = size - picked.length;
+  const basics = splitBasics(basicCount, data.averageBasics, combinedIdentity(commanders));
 
   const tally = { free: 0, deck: 0, missing: 0, missingCost: 0, unknownPrices: 0 };
   for (const card of picked) {
@@ -355,7 +470,9 @@ function buildDeck(data, opts = {}) {
   }
 
   return {
-    commander: data.commander,
+    commander: commanders[0] || data.commander,
+    commanders,
+    colorIdentity: combinedIdentity(commanders),
     bracket,
     roles,
     roleShortfall,
@@ -369,7 +486,7 @@ function buildDeck(data, opts = {}) {
     pinsDropped,
     shortBy,
     tagsChecked: tagsChecked(data),
-    checks: bracketChecks(picked, bracket, { tagsChecked: tagsChecked(data), commander: data.commander }),
+    checks: bracketChecks(picked, bracket, { tagsChecked: tagsChecked(data), commanders }),
     size: picked.length + basicCount,
   };
 }
@@ -382,8 +499,8 @@ function buildDeck(data, opts = {}) {
 //                    unavailable); ok is null, never shown as passing
 //   "pending"        two-card combos only: Spellbook hasn't answered yet
 // opts.tagsChecked: the candidates carry mass land denial / extra turn
-// flags. opts.commander: { name, cmc }, so a combo using the commander gets
-// a mana cost too. opts.combos: the relay's POST /deck-builder/combos answer --
+// flags. opts.commanders: [{ name, cmc }] (opts.commander for one), so a
+// combo using a commander gets a mana cost too. opts.combos: the relay's POST /deck-builder/combos answer --
 // { checked: true, combos: [{ cards: [names], ... }] } or
 // { checked: false, reason }; leave it out while the call is in flight.
 function bracketChecks(cards, bracket, opts = {}) {
@@ -409,7 +526,7 @@ function bracketChecks(cards, bracket, opts = {}) {
   checks.twoCardCombos = combosCheck(opts.combos, rules.twoCardCombos);
   checks.twoCardCombos.combos = checks.twoCardCombos.combos.map(c => ({
     ...c,
-    manaCost: comboManaCost(c.cards, cards, opts.commander),
+    manaCost: comboManaCost(c.cards, cards, opts.commanders || opts.commander),
   }));
   return checks;
 }
@@ -418,10 +535,10 @@ function bracketChecks(cards, bracket, opts = {}) {
 // early it can come together. Names are matched against the deck (and the
 // commander) case-insensitively; if any piece's mana value is unknown the
 // total is null, never a guess.
-function comboManaCost(names, cards, commander) {
+function comboManaCost(names, cards, commanders) {
   const byName = new Map();
   for (const c of cards || []) if (c && c.name) byName.set(c.name.toLowerCase(), c.cmc);
-  if (commander && commander.name) byName.set(commander.name.toLowerCase(), commander.cmc);
+  for (const c of [].concat(commanders || [])) if (c && c.name) byName.set(c.name.toLowerCase(), c.cmc);
   let total = 0;
   for (const name of names || []) {
     const cmc = byName.get(String(name).toLowerCase());
@@ -443,14 +560,13 @@ function combosCheck(answer, rule) {
   return { ...base, status: "fail", ok: false };
 }
 
-// The finished 99 plus the commander, as the relay's POST
+// The finished deck plus its commander(s), as the relay's POST
 // /deck-builder/combos takes it: names only, basics left out (no combo
-// needs them, and it keeps the request small).
+// needs them, and it keeps the request small). `commander` stays for the
+// relay versions that only read one.
 function comboRequest(build) {
-  return {
-    commander: build.commander && build.commander.name ? build.commander.name : null,
-    cards: build.cards.map(c => c.name),
-  };
+  const names = (build.commanders && build.commanders.length ? build.commanders : [build.commander]).filter(c => c && c.name).map(c => c.name);
+  return { commander: names[0] || null, commanders: names, cards: build.cards.map(c => c.name) };
 }
 
 // ---- Swaps ----
@@ -510,11 +626,12 @@ function applySwap(swaps, outId, inId) {
   return { pinned: [...pinned], excluded: [...excluded] };
 }
 
-// Plain "1 Card Name" lines, commander first: the format Archidekt's (and
+// Plain "1 Card Name" lines, commander(s) first: the format Archidekt's (and
 // most deck sites') text import reads.
 function deckToText(build) {
   const lines = [];
-  if (build.commander && build.commander.name) lines.push(`1 ${build.commander.name}`);
+  const commanders = build.commanders && build.commanders.length ? build.commanders : [build.commander];
+  for (const c of commanders) if (c && c.name) lines.push(`1 ${c.name}`);
   const byType = [...build.cards].sort((a, b) => typeOrder(a.type) - typeOrder(b.type) || a.name.localeCompare(b.name));
   for (const card of byType) lines.push(`1 ${card.name}`);
   for (const b of build.basics) lines.push(`${b.count} ${b.name}`);
@@ -529,6 +646,7 @@ function typeOrder(type) {
 
 if (typeof module !== "undefined") {
   module.exports = {
+    DECK_BUILDER_DECK_SIZE, deckBuilderSlug, deckCommanders, deckSize, combinedIdentity, pairingOf, secondCommanderKind, canPair, pairOrder,
     BRACKET_RULES, DEFAULT_WEIGHTS, ROLE_MINIMUMS, ROLE_LABELS, roleCounts, cardStatus, scoreCard, deckTemplate, splitBasics,
     buildDeck, candidatePool, swapOptions, applySwap, SWAP_OPTION_COUNT, bracketChecks, combosCheck, comboManaCost, comboRequest, tagsChecked, deckToText, typeOrder,
   };

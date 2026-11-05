@@ -6987,9 +6987,20 @@ button.uta-bracket-btn[aria-pressed="true"] {
 /* Full width: the commander name is the one long thing typed here, and the
    base input rule sizes text inputs to their content. 16px stops iOS
    zooming the page when the field takes focus. */
-#db-commander {
+#db-commander, #db-commander2 {
   width: 100%;
   font-size: 1rem;
+  min-height: 44px;
+}
+/* .db-field sets display, which would otherwise beat the hidden attribute
+   updateSecondCommanderField uses. */
+.db-field[hidden] { display: none; }
+.db-commander2-hint { margin: 0; }
+/* "Build from <first>'s own page" sits on its own line under the status
+   message that offers it (setDeckBuilderStatus's action). */
+.db-status-action {
+  display: block;
+  margin-top: 8px;
   min-height: 44px;
 }
 #db-budget {

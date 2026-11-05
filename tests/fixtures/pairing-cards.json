@@ -1,0 +1,189 @@
+[
+ {
+  "name": "Thrasios, Triton Hero",
+  "keywords": [
+   "Partner",
+   "Scry"
+  ],
+  "type_line": "Legendary Creature — Merfolk Wizard",
+  "oracle_text": "{4}: Scry 1, then reveal the top card of your library. If it's a land card, put it onto the battlefield tapped. Otherwise, draw a card.\nPartner (You can have two commanders if both have partner.)",
+  "color_identity": [
+   "G",
+   "U"
+  ]
+ },
+ {
+  "name": "Tymna the Weaver",
+  "keywords": [
+   "Lifelink",
+   "Partner"
+  ],
+  "type_line": "Legendary Creature — Human Cleric",
+  "oracle_text": "Lifelink\nAt the beginning of each of your postcombat main phases, you may pay X life, where X is the number of opponents that were dealt combat damage this turn. If you do, draw X cards.\nPartner (You can have two commanders if both have partner.)",
+  "color_identity": [
+   "B",
+   "W"
+  ]
+ },
+ {
+  "name": "Pir, Imaginative Rascal",
+  "keywords": [
+   "Partner with",
+   "Partner"
+  ],
+  "type_line": "Legendary Creature — Human",
+  "oracle_text": "Partner with Toothy, Imaginary Friend (When this creature enters, target player may put Toothy into their hand from their library, then shuffle.)\nIf one or more counters would be put on a permanent your team controls, that many plus one of each of those kinds of counters are put on that permanent instead.",
+  "color_identity": [
+   "G"
+  ]
+ },
+ {
+  "name": "Toothy, Imaginary Friend",
+  "keywords": [
+   "Partner with",
+   "Partner"
+  ],
+  "type_line": "Legendary Creature — Illusion",
+  "oracle_text": "Partner with Pir, Imaginative Rascal (When this creature enters, target player may put Pir into their hand from their library, then shuffle.)\nWhenever you draw a card, put a +1/+1 counter on Toothy.\nWhen Toothy leaves the battlefield, draw a card for each +1/+1 counter on it.",
+  "color_identity": [
+   "U"
+  ]
+ },
+ {
+  "name": "Wilson, Refined Grizzly",
+  "keywords": [
+   "Reach",
+   "Vigilance",
+   "Choose a background",
+   "Trample",
+   "Ward"
+  ],
+  "type_line": "Legendary Creature — Bear Warrior",
+  "oracle_text": "This spell can't be countered.\nReach, vigilance, trample\nWard {2} (Whenever this creature becomes the target of a spell or ability an opponent controls, counter it unless that player pays {2}.)\nChoose a Background (You can have a Background as a second commander.)",
+  "color_identity": [
+   "G"
+  ]
+ },
+ {
+  "name": "Raised by Giants",
+  "keywords": [],
+  "type_line": "Legendary Enchantment — Background",
+  "oracle_text": "Commander creatures you own have base power and toughness 10/10 and are Giants in addition to their other types.",
+  "color_identity": [
+   "G"
+  ]
+ },
+ {
+  "name": "Faceless One",
+  "keywords": [
+   "Choose a background"
+  ],
+  "type_line": "Legendary Enchantment Creature — Background",
+  "oracle_text": "If Faceless One is your commander, choose a color before the game begins. Faceless One is the chosen color.\nChoose a Background (You can have a Background as a second commander.)",
+  "color_identity": []
+ },
+ {
+  "name": "The Tenth Doctor",
+  "keywords": [
+   "Allons-y!",
+   "Time Travel",
+   "Timey-Wimey"
+  ],
+  "type_line": "Legendary Creature — Time Lord Doctor",
+  "oracle_text": "Allons-y! — Whenever you attack, exile cards from the top of your library until you exile a nonland card. Put three time counters on it. If it doesn't have suspend, it gains suspend.\nTimey-Wimey — {7}: Time travel three times. Activate only as a sorcery. (For each suspended card you own and each permanent you control with a time counter on it, you may add or remove a time counter. Then do it two more times.)",
+  "color_identity": [
+   "R",
+   "U"
+  ]
+ },
+ {
+  "name": "Rose Tyler",
+  "keywords": [
+   "Bad Wolf",
+   "Doctor's companion"
+  ],
+  "type_line": "Legendary Creature — Human",
+  "oracle_text": "Rose Tyler gets +1/+1 for each time counter on it.\nBad Wolf — Whenever Rose Tyler attacks, put a time counter on it for each suspended card you own and each other permanent you control with a time counter on it.\nDoctor's companion (You can have two commanders if the other is the Doctor.)",
+  "color_identity": [
+   "W"
+  ]
+ },
+ {
+  "name": "Atraxa, Praetors' Voice",
+  "keywords": [
+   "Deathtouch",
+   "Flying",
+   "Lifelink",
+   "Vigilance",
+   "Proliferate"
+  ],
+  "type_line": "Legendary Creature — Phyrexian Angel Horror",
+  "oracle_text": "Flying, vigilance, deathtouch, lifelink\nAt the beginning of your end step, proliferate. (Choose any number of permanents and/or players, then give each another counter of each kind already there.)",
+  "color_identity": [
+   "B",
+   "G",
+   "U",
+   "W"
+  ]
+ },
+ {
+  "name": "Cecily, Haunted Mage",
+  "keywords": [
+   "Partner"
+  ],
+  "type_line": "Legendary Creature — Human Wizard",
+  "oracle_text": "Your maximum hand size is eleven.\nWhenever Cecily, Haunted Mage attacks, you draw a card and you lose 1 life. Then if you have eleven or more cards in your hand, you may cast an instant or sorcery spell from your hand without paying its mana cost.\nPartner—Friends forever (You can have two commanders if both have this ability.)",
+  "color_identity": [
+   "B",
+   "R",
+   "U"
+  ]
+ },
+ {
+  "name": "Bjorna, Nightfall Alchemist",
+  "keywords": [
+   "Goad",
+   "Partner"
+  ],
+  "type_line": "Legendary Creature — Human",
+  "oracle_text": "{T}, Sacrifice an artifact: Bjorna, Nightfall Alchemist deals 1 damage to target creature. Goad that creature. (Until your next turn, that creature attacks each combat if able and attacks a player other than you if able.)\nPartner—Friends forever (You can have two commanders if both have this ability.)",
+  "color_identity": [
+   "R",
+   "U"
+  ]
+ },
+ {
+  "name": "Lae'zel, Vlaakith's Champion",
+  "keywords": [
+   "Choose a background"
+  ],
+  "type_line": "Legendary Creature — Gith Warrior",
+  "oracle_text": "If you would put one or more counters on a creature or planeswalker you control or on yourself, put that many plus one of each of those kinds of counters on that permanent or player instead.\nChoose a Background (You can have a Background as a second commander.)",
+  "color_identity": [
+   "W"
+  ]
+ },
+ {
+  "name": "Cultist of the Absolute",
+  "keywords": [],
+  "type_line": "Legendary Enchantment — Background",
+  "oracle_text": "Commander creatures you own get +3/+3 and have flying, deathtouch, \"Ward—Pay 3 life,\" and \"At the beginning of your upkeep, sacrifice a creature.\"",
+  "color_identity": [
+   "B"
+  ]
+ },
+ {
+  "name": "Kraum, Ludevic's Opus",
+  "keywords": [
+   "Flying",
+   "Haste",
+   "Partner"
+  ],
+  "type_line": "Legendary Creature — Zombie Horror",
+  "oracle_text": "Flying, haste\nWhenever an opponent casts their second spell each turn, draw a card.\nPartner (You can have two commanders if both have partner.)",
+  "color_identity": [
+   "R",
+   "U"
+  ]
+ }
+]

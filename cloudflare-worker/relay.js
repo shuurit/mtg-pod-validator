@@ -2345,14 +2345,26 @@ function edhrecSlug(name) {
     .replace(/^-+|-+$/g, "");
 }
 
-async function edhrecJson(path) {
+// EDHREC names a commander pair's page in one order; the other order
+// answers 200 with only { redirect: "/commanders/<other order>/<bracket>" }
+// (the same for average-decks/). Checked Nov 2026 on 13 pairs. One redirect
+// is followed, and only to another page of the same kind.
+const EDHREC_REDIRECT_RE = /^\/(commanders|average-decks)\/[a-z0-9-]+(\/[a-z]+)?$/;
+
+async function edhrecJson(path, followRedirect = true) {
   const res = await fetch(`${EDHREC_JSON_BASE}/${path}`, {
     headers: { "User-Agent": DECK_BUILDER_USER_AGENT, Accept: "application/json" },
   });
   // EDHREC answers an unknown page with 403 (an S3 AccessDenied), not 404.
   if (res.status === 404 || res.status === 403) return null;
   if (!res.ok) throw new Error(`EDHREC didn't answer (HTTP ${res.status})`);
-  return res.json();
+  const data = await res.json();
+  if (data && typeof data.redirect === "string" && Object.keys(data).length === 1) {
+    const kind = path.split("/")[0];
+    if (!followRedirect || !EDHREC_REDIRECT_RE.test(data.redirect) || !data.redirect.startsWith(`/${kind}/`)) return null;
+    return edhrecJson(`${data.redirect.slice(1)}.json`, false);
+  }
+  return data;
 }
 
 // Front face's type, so a modal double-faced "Instant // Land" counts as the
@@ -2430,18 +2442,31 @@ function recordScryfallBackoff(env, ctx) {
   );
 }
 
-async function scryfallCollection(uids) {
+// Lowercased front-face name, for matching a typed commander name to the
+// card Scryfall sends back.
+function deckBuilderNameKey(name) {
+  return String(name || "").split(" // ")[0].trim().toLowerCase();
+}
+
+// Cards by Scryfall id, plus (names) cards looked up by exact name in the
+// same requests, kept on the result's byName map.
+async function scryfallCollection(uids, names = []) {
   const byId = new Map();
-  for (let i = 0; i < uids.length; i += 75) {
+  byId.byName = new Map();
+  const identifiers = [...uids.map(id => ({ id })), ...names.map(name => ({ name }))];
+  for (let i = 0; i < identifiers.length; i += 75) {
     // Scryfall asks for 50-100ms between requests.
     const res = await scryfallFetch(`${SCRYFALL_API_BASE}/cards/collection`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ identifiers: uids.slice(i, i + 75).map(id => ({ id })) }),
+      body: JSON.stringify({ identifiers: identifiers.slice(i, i + 75) }),
     }, { essential: true });
     if (!res.ok) throw new Error(`Scryfall didn't answer (HTTP ${res.status})`);
     const data = await res.json();
-    for (const c of data.data || []) byId.set(c.id, c);
+    for (const c of data.data || []) {
+      byId.set(c.id, c);
+      byId.byName.set(deckBuilderNameKey(c.name), c);
+    }
   }
   return byId;
 }
@@ -2666,7 +2691,12 @@ function deckBuilderCardRoles(oracleId, edhrecRank, faces, roleTags) {
 // only after the card lookup a build can't do without -- so a rate-limited
 // Scryfall degrades them instead of failing the build. tagsFor may also be
 // the tags themselves.
-async function buildDeckBuilderCandidates(slug, bracket, tagsFor = null, roleTagsFor = async () => null) {
+// opts.commanderNames: two names for a commander pair. `slug` is then the
+// page to read: the pair's own, or (pairSource "first-commander") the first
+// commander's when EDHREC has no page for the pair. Both commanders are
+// looked up by name in the same Scryfall request as the candidates, both
+// are left out of the candidates, and the answer carries both.
+async function buildDeckBuilderCandidates(slug, bracket, tagsFor = null, roleTagsFor = async () => null, opts = {}) {
   const bracketSlug = DECK_BUILDER_BRACKET_SLUGS[bracket];
   const [page, average] = await Promise.all([
     edhrecJson(`commanders/${slug}/${bracketSlug}.json`),
@@ -2706,10 +2736,18 @@ async function buildDeckBuilderCandidates(slug, bracket, tagsFor = null, roleTag
     template[key] = typeof page[key] === "number" ? page[key] : 0;
   }
 
-  const commanderUid = dict.card?.id || null;
-  const scry = await scryfallCollection([...picks.keys(), ...(commanderUid ? [commanderUid] : [])]);
+  const pairNames = Array.isArray(opts.commanderNames) && opts.commanderNames.length === 2 ? opts.commanderNames : null;
+  const commanderUid = pairNames ? null : dict.card?.id || null;
+  const scry = await scryfallCollection([...picks.keys(), ...(commanderUid ? [commanderUid] : [])], pairNames || []);
+  const cmdCards = pairNames
+    ? pairNames.map(n => scry.byName.get(deckBuilderNameKey(n)) || null)
+    : [commanderUid ? scry.get(commanderUid) : null];
+  if (pairNames && cmdCards.some(c => !c)) return { reason: "unknown-commander", missing: pairNames.filter((n, i) => !cmdCards[i]) };
+  const commanderOracles = new Set(cmdCards.map(c => c && c.oracle_id && c.oracle_id.toLowerCase()).filter(Boolean));
+  const identityOf = c => (c?.color_identity || []).join("");
+  const unionIdentity = "WUBRG".split("").filter(l => cmdCards.some(c => identityOf(c).includes(l))).join("");
   const tags = typeof tagsFor === "function" ? await tagsFor() : tagsFor;
-  const roleInfo = await roleTagsFor((dict.card?.color_identity || []).join(""));
+  const roleInfo = await roleTagsFor(pairNames ? unionIdentity : (dict.card?.color_identity || []).join(""));
   const roleTags = roleInfo ? roleInfo.roles : null;
   const roleStats = { tagger: 0, keywords: 0 };
   const num = v => (v != null && Number.isFinite(Number(v)) ? Number(v) : null);
@@ -2718,7 +2756,7 @@ async function buildDeckBuilderCandidates(slug, bracket, tagsFor = null, roleTag
   for (const p of picks.values()) {
     const c = scry.get(p.uid);
     const oracleId = c && (c.oracle_id || c.card_faces?.[0]?.oracle_id);
-    if (!oracleId || p.uid === commanderUid) continue;
+    if (!oracleId || p.uid === commanderUid || commanderOracles.has(oracleId.toLowerCase())) continue;
     if (c.legalities && c.legalities.commander !== "legal") continue;
     const typeLine = c.type_line || c.card_faces?.[0]?.type_line || "";
     const faces = c.card_faces && c.card_faces.length
@@ -2744,18 +2782,25 @@ async function buildDeckBuilderCandidates(slug, bracket, tagsFor = null, roleTag
     });
   }
 
-  const cmd = commanderUid ? scry.get(commanderUid) : null;
+  const describe = (c, fallbackName) => ({
+    name: c?.name || fallbackName || null,
+    uid: c?.id || null,
+    oracleId: c?.oracle_id ? c.oracle_id.toLowerCase() : null,
+    cmc: num(c?.cmc),
+    colorIdentity: identityOf(c) || (pairNames ? "" : (dict.card?.color_identity || []).join("")),
+    artUrl: c?.image_uris?.art_crop || c?.card_faces?.[0]?.image_uris?.art_crop || null,
+  });
+  const commanders = pairNames
+    ? cmdCards.map((c, i) => describe(c, pairNames[i]))
+    : [describe(cmdCards[0], dict.card?.name)];
+  const cmd = cmdCards[0];
   return {
     slug,
     bracket,
-    commander: {
-      name: cmd?.name || dict.card?.name || null,
-      uid: commanderUid,
-      oracleId: cmd?.oracle_id ? cmd.oracle_id.toLowerCase() : null,
-      cmc: num(cmd?.cmc),
-      colorIdentity: (cmd?.color_identity || dict.card?.color_identity || []).join(""),
-      artUrl: cmd?.image_uris?.art_crop || cmd?.card_faces?.[0]?.image_uris?.art_crop || null,
-    },
+    // `commander` is the first, as before; `commanders` has one or both.
+    commander: commanders[0],
+    commanders,
+    pairSource: pairNames ? (opts.pairSource || "pair") : null,
     edhrecUrl: `https://edhrec.com/commanders/${slug}/${bracketSlug}`,
     template,
     averageBasics,
@@ -2795,19 +2840,36 @@ async function handleDeckBuilderCandidates(env, ctx, session, url) {
   const bracket = Number(url.searchParams.get("bracket"));
   if (!DECK_BUILDER_BRACKET_SLUGS[bracket]) return jsonResponse({ error: "Pick a bracket from 1 to 5." }, 400);
   const commander = String(url.searchParams.get("commander") || "").trim().slice(0, 200);
+  const commander2 = String(url.searchParams.get("commander2") || "").trim().slice(0, 200);
   const slug = edhrecSlug(commander);
   if (!slug) return jsonResponse({ error: "Which commander?" }, 400);
+  const slug2 = commander2 ? edhrecSlug(commander2) : "";
+  if (commander2 && (!slug2 || slug2 === slug)) return jsonResponse({ error: "Pick two different commanders." }, 400);
+  // pairFallback=1: EDHREC has no page for the pair, and the player chose to
+  // build from the first commander's own page anyway.
+  const pairFallback = !!slug2 && url.searchParams.get("pairFallback") === "1";
 
-  const cacheKey = `deckbuilder:${DECK_BUILDER_CACHE_VERSION}:${slug}:${bracket}`;
+  // A pair's page is named "<first>-<second>" in EDHREC's order, which the
+  // page sends in (pairOrder in deck-builder.js); edhrecJson follows the
+  // redirect if it's the other way round. The cache key holds both slugs,
+  // sorted, so either order finds it; a fallback build has its own.
+  const pageSlug = slug2 && !pairFallback ? `${slug}-${slug2}` : slug;
+  const keySlug = slug2 ? [slug, slug2].sort().join("+") + (pairFallback ? "~first" : "") : slug;
+  const cacheKey = `deckbuilder:${DECK_BUILDER_CACHE_VERSION}:${keySlug}:${bracket}`;
   let data = await kvGetJson(env, cacheKey, null);
   if (!data) {
     try {
-      data = await buildDeckBuilderCandidates(slug, bracket, () => deckBuilderTags(env, ctx),
-        identity => deckBuilderRoleTags(env, ctx, identity));
+      data = await buildDeckBuilderCandidates(pageSlug, bracket, () => deckBuilderTags(env, ctx),
+        identity => deckBuilderRoleTags(env, ctx, identity),
+        slug2 ? { commanderNames: [commander, commander2], pairSource: pairFallback ? "first-commander" : "pair" } : {});
     } catch (err) {
       return jsonResponse({ error: err.message }, 502);
     }
-    if (!data) return jsonResponse({ slug, bracket, reason: "no-edhrec" }, 200, { "Cache-Control": "no-store" });
+    if (!data) {
+      const reason = slug2 && !pairFallback ? "no-edhrec-pair" : "no-edhrec";
+      return jsonResponse({ slug: pageSlug, bracket, reason, commander, commander2: commander2 || null }, 200, { "Cache-Control": "no-store" });
+    }
+    if (data.reason) return jsonResponse({ ...data, bracket, commander, commander2 }, 200, { "Cache-Control": "no-store" });
     // Without the Tagger flags or roles, don't cache: the next build retries.
     if (data.tagsChecked && data.rolesFromTagger) {
       ctx.waitUntil(
@@ -2881,7 +2943,8 @@ function parseSpellbookCombos(body) {
 async function handleDeckBuilderCombos(request) {
   const body = await request.json().catch(() => null);
   const clean = v => (typeof v === "string" ? v.trim().slice(0, 200) : "");
-  const commander = clean(body && body.commander);
+  const commanders = (Array.isArray(body && body.commanders) ? body.commanders : [body && body.commander])
+    .map(clean).filter(Boolean).slice(0, 2);
   const cards = Array.isArray(body && body.cards) ? [...new Set(body.cards.map(clean).filter(Boolean))] : null;
   if (!cards || !cards.length) return jsonResponse({ error: "Send the deck's card names." }, 400);
   if (cards.length > DECK_BUILDER_COMBO_MAX_CARDS) return jsonResponse({ error: `At most ${DECK_BUILDER_COMBO_MAX_CARDS} cards.` }, 400);
@@ -2893,7 +2956,7 @@ async function handleDeckBuilderCombos(request) {
       headers: { "User-Agent": DECK_BUILDER_USER_AGENT, Accept: "application/json", "Content-Type": "application/json" },
       body: JSON.stringify({
         main: cards.map(card => ({ card, quantity: 1 })),
-        commanders: commander ? [{ card: commander, quantity: 1 }] : [],
+        commanders: commanders.map(card => ({ card, quantity: 1 })),
       }),
       signal: AbortSignal.timeout(DECK_BUILDER_COMBO_TIMEOUT_MS),
     });
