@@ -217,6 +217,22 @@ works without one.
   `{reason: "no-edhrec"}` for a commander EDHREC has no page for (not
   cached). Without the secret, or if the trading app is down, the deck
   still builds and `collection` says `{connected: false, reason}`.
+  Each candidate also carries `massLandDenial` and `extraTurn`, from the
+  Scryfall Tagger searches `otag:mass-land-denial` and `otag:extra-turn`
+  (one set of searches for every commander, kept in `DECK_CACHE` under
+  `deckbuilder:tags:v1` for a week). If Scryfall can't be searched the
+  answer says `tagsChecked: false`, isn't cached, and the page shows those
+  two bracket checks as "not checked". The candidates cache key is
+  `deckbuilder:v2:<slug>:<bracket>` (v1 entries lacked the flags).
+- `POST /deck-builder/combos` — Build a Deck's two-card combo check. Body
+  `{commander, cards: [names]}` (at most 120 names). Asks Commander
+  Spellbook's `POST https://backend.commanderspellbook.com/find-my-combos`
+  and answers `{checked: true, combos: [{id, cards: [a, b], produces,
+  manaValueNeeded, bracketTag, url}]}` with only the combos made of exactly
+  two cards and nothing else ("requires" empty). Spellbook down, slow (15 s
+  timeout) or answering in a shape it doesn't recognise gives `{checked:
+  false, reason}`, which the page shows as "not checked", never as passing.
+  Not cached. No key needed.
 
 ## Updating an already-deployed Worker (new code only, no new bindings)
 

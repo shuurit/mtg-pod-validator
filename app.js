@@ -11158,6 +11158,11 @@ initViewportHeight();
 // out deck cards" toggle rebuilds instantly with no request.
 
 const DECK_BUILDER_RELAY_URL = RELAY_BASE_URL + "/deck-builder/candidates";
+// The finished list goes here for Commander Spellbook's two-card combo
+// check -- the one check that needs a request after the build. Debounced,
+// so dragging the budget doesn't send a list per step.
+const DECK_BUILDER_COMBOS_URL = RELAY_BASE_URL + "/deck-builder/combos";
+const DECK_BUILDER_COMBO_DEBOUNCE_MS = 500;
 const SCRYFALL_AUTOCOMPLETE_URL = "https://api.scryfall.com/cards/autocomplete";
 const DECK_BUILDER_TYPE_LABELS = {
   creature: "Creatures", planeswalker: "Planeswalkers", battle: "Battles", instant: "Instants",
@@ -11168,6 +11173,10 @@ const deckBuilderUi = {
   data: null,       // the last /deck-builder/candidates response
   builtFor: null,   // { commander, bracket } that response is for
   busy: false,
+  // Spellbook's answer for one exact list: { key, answer }. answer stays
+  // undefined while the request is out (the row reads "checking").
+  combos: null,
+  comboTimer: null,
   autocompleteTimer: null,
   autocompleteSeq: 0,
 };
@@ -11276,6 +11285,7 @@ async function runDeckBuild() {
     }
     deckBuilderUi.data = body;
     deckBuilderUi.builtFor = { commander, bracket };
+    deckBuilderUi.combos = null;
     setDeckBuilderStatus("");
     renderDeckBuild();
   } catch (err) {
@@ -11357,6 +11367,36 @@ function deckBuilderRow(card) {
   return row;
 }
 
+// Two-card combos for this exact list: Spellbook's answer if it's in, or
+// undefined after scheduling the request. When it lands and the list on
+// screen is still the same one, the page re-renders with it. A failed
+// call is { checked: false } -- "not checked", never passing.
+function deckBuilderCombosFor(build) {
+  const request = comboRequest(build);
+  const key = JSON.stringify(request);
+  if (deckBuilderUi.combos && deckBuilderUi.combos.key === key) return deckBuilderUi.combos.answer;
+  deckBuilderUi.combos = { key, answer: undefined };
+  clearTimeout(deckBuilderUi.comboTimer);
+  deckBuilderUi.comboTimer = setTimeout(async () => {
+    let answer;
+    try {
+      const res = await fetch(DECK_BUILDER_COMBOS_URL, {
+        method: "POST",
+        cache: "no-store",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: key,
+      });
+      answer = res.ok ? await res.json() : { checked: false, reason: `HTTP ${res.status}` };
+    } catch (err) {
+      answer = { checked: false, reason: err.message };
+    }
+    if (!deckBuilderUi.combos || deckBuilderUi.combos.key !== key) return;
+    deckBuilderUi.combos.answer = answer || { checked: false };
+    renderDeckBuild();
+  }, DECK_BUILDER_COMBO_DEBOUNCE_MS);
+  return undefined;
+}
+
 function renderDeckBuild() {
   const data = deckBuilderUi.data;
   const result = document.getElementById("db-result");
@@ -11415,6 +11455,10 @@ function renderDeckBuild() {
     warnings.push(`${t.unknownPrices} card${t.unknownPrices === 1 ? " has" : "s have"} no price on Scryfall, so the total leaves ${t.unknownPrices === 1 ? "it" : "them"} out.`);
   }
 
+  build.checks = bracketChecks(build.cards, build.bracket, {
+    tagsChecked: build.tagsChecked,
+    combos: deckBuilderCombosFor(build),
+  });
   const gc = build.checks.gameChangers;
   const checks = makeEl("ul", "db-checks");
   checks.setAttribute("aria-label", "Bracket check");
@@ -11426,12 +11470,71 @@ function renderDeckBuild() {
     return li;
   };
   const gcValue = gc.cap === Infinity ? `${gc.count} · no limit` : `${gc.count} of ${gc.cap} ${gc.ok ? "✓" : "✗"}`;
+  const TONES = { pass: "ok", fail: "bad", warn: "warn", unchecked: "unchecked", pending: "unchecked" };
+  const mld = build.checks.massLandDenial;
+  const turns = build.checks.extraTurns;
+  const combo = build.checks.twoCardCombos;
+  const comboNames = combo.combos.map(c => c.cards.join(" + "));
+
+  let mldValue = "not checked";
+  if (mld.status === "fail") mldValue = `${mld.cards.join(", ")} ✗`;
+  else if (mld.status === "pass") mldValue = mld.allowed ? `${mld.count} · allowed` : "none ✓";
+
+  let turnsValue = "not checked";
+  if (turns.status === "fail") turnsValue = `${turns.cards.join(", ")} ✗`;
+  else if (turns.status === "pass") {
+    turnsValue = turns.cap === Infinity ? `${turns.count} · no limit` : turns.count ? `${turns.count} of ${turns.cap} ✓` : "none ✓";
+  }
+
+  let comboValue = "not checked";
+  if (combo.status === "pending") comboValue = "checking…";
+  else if (combo.status === "fail") comboValue = `${comboNames.join("; ")} ✗`;
+  else if (combo.status === "warn") comboValue = `${combo.count} to judge ⚠`;
+  else if (combo.status === "pass") comboValue = combo.count ? `${combo.count} · allowed` : "none ✓";
+  const comboTitle = combo.status === "unchecked"
+    ? "Commander Spellbook couldn't be reached, so this wasn't checked."
+    : comboNames.join("; ") || null;
+
   checks.append(
     check("Game Changers", gcValue, gc.ok ? "ok" : "bad", gc.cards.join(", ") || null),
-    check("Mass land denial", "not checked yet", "unchecked"),
-    check("Extra turns", "not checked yet", "unchecked"),
-    check("Two-card combos", "not checked yet", "unchecked"),
+    check("Mass land denial", mldValue, TONES[mld.status], mld.cards.join(", ") || null),
+    check(turns.cap === 0 || turns.cap === Infinity ? "Extra turns" : "Extra turns (no chaining)", turnsValue, TONES[turns.status], turns.cards.join(", ") || null),
+    check("Two-card combos", comboValue, TONES[combo.status], comboTitle),
   );
+
+  // The combos themselves, linked to Spellbook, whenever any were found.
+  // Bracket 3 bans only early-game infinite combos, and "early" is the
+  // player's call, so there they're a warning with the mana each needs.
+  let comboNote = null;
+  if (combo.combos.length) {
+    const lead = combo.status === "warn"
+      ? "Bracket 3 allows two-card combos unless they win early. Judge these:"
+      : combo.status === "fail"
+        ? `Bracket ${build.bracket} allows no two-card combos. Swap a piece of each:`
+        : "Two-card combos in this deck:";
+    comboNote = makeEl("div", `db-combos db-combos-${TONES[combo.status]}`);
+    comboNote.append(makeEl("p", null, lead));
+    const ul = makeEl("ul");
+    for (const c of combo.combos) {
+      const li = makeEl("li");
+      const label = c.cards.join(" + ");
+      if (typeof c.url === "string" && c.url.startsWith("https://commanderspellbook.com/")) {
+        const a = makeEl("a", null, label);
+        a.href = c.url;
+        a.target = "_blank";
+        a.rel = "noopener";
+        li.append(a);
+      } else {
+        li.append(label);
+      }
+      const bits = [];
+      if (c.manaValueNeeded != null) bits.push(`needs ${c.manaValueNeeded} mana`);
+      if (c.produces && c.produces.length) bits.push(c.produces.slice(0, 2).join(", "));
+      if (bits.length) li.append(` · ${bits.join(" · ")}`);
+      ul.append(li);
+    }
+    comboNote.append(ul);
+  }
 
   const groups = makeEl("div", "db-groups");
   const byType = new Map();
@@ -11510,6 +11613,7 @@ function renderDeckBuild() {
     meter,
     ...warnings.map(w => makeEl("p", "db-note db-note-warn", w)),
     checks,
+    ...(comboNote ? [comboNote] : []),
     groups,
     actions,
     copyNote,
