@@ -2303,7 +2303,9 @@ const DECK_BUILDER_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60;
 const DECK_BUILDER_USER_AGENT = "mtg-pod-validator-relay (+small playgroup app)";
 const EDHREC_JSON_BASE = "https://json.edhrec.com/pages";
 const SCRYFALL_API_BASE = "https://api.scryfall.com";
-const DECK_BUILDER_CACHE_VERSION = "v2"; // v2: candidates carry massLandDenial/extraTurn
+// v2: candidates carry massLandDenial/extraTurn. v3: commander carries cmc
+// (Build a Deck sums a combo's mana cost, and a combo can use the commander).
+const DECK_BUILDER_CACHE_VERSION = "v3";
 const DECK_BUILDER_TAGS_CACHE_KEY = "deckbuilder:tags:v1";
 const DECK_BUILDER_TAGS = { massLandDenial: "mass-land-denial", extraTurn: "extra-turn" };
 const DECK_BUILDER_TEMPLATE_KEYS = ["creature", "instant", "sorcery", "artifact", "enchantment", "planeswalker", "battle", "land", "basic", "nonbasic"];
@@ -2480,6 +2482,7 @@ async function buildDeckBuilderCandidates(slug, bracket, tags) {
       name: cmd?.name || dict.card?.name || null,
       uid: commanderUid,
       oracleId: cmd?.oracle_id ? cmd.oracle_id.toLowerCase() : null,
+      cmc: num(cmd?.cmc),
       colorIdentity: (cmd?.color_identity || dict.card?.color_identity || []).join(""),
       artUrl: cmd?.image_uris?.art_crop || cmd?.card_faces?.[0]?.image_uris?.art_crop || null,
     },
@@ -2555,8 +2558,12 @@ async function handleDeckBuilderCandidates(env, ctx, session, url) {
 // included: [variant], almostIncluded: [...], ... } }, a variant being
 // { id, uses: [{ card: { name, oracleId }, quantity, mustBeCommander }],
 // requires: [templates like "a sacrifice outlet"], produces: [{ feature:
-// { name } }], manaValueNeeded, bracketTag }. snake_case is accepted too
-// in case the renderer ever changes.
+// { name } }], bracketTag }. snake_case is accepted too in case the
+// renderer ever changes. Spellbook's own manaValueNeeded is NOT passed on:
+// it's the extra mana the combo needs once its pieces are out (0 for
+// Sanguine Bond + Exquisite Blood), not what the cards cost, so it misleads
+// the "early game" call. The page sums the cards' mana values from Scryfall
+// (the candidates' cmc) instead.
 //
 // Never answers "no combos" unless Spellbook actually said so: anything
 // unreachable or unrecognisable comes back { checked: false, reason }, and
@@ -2583,12 +2590,10 @@ function parseSpellbookCombos(body) {
     if (uses.length !== 2 || pieces !== 2 || requires.length) continue;
     const cards = uses.map(u => u && u.card && u.card.name).filter(n => typeof n === "string");
     if (cards.length !== 2) continue;
-    const manaValue = v.manaValueNeeded ?? v.mana_value_needed;
     combos.push({
       id: String(v.id),
       cards,
       produces: (Array.isArray(v.produces) ? v.produces : []).map(f => f && f.feature && f.feature.name).filter(Boolean),
-      manaValueNeeded: Number.isFinite(Number(manaValue)) && manaValue !== null ? Number(manaValue) : null,
       bracketTag: v.bracketTag ?? v.bracket_tag ?? null,
       url: `${SPELLBOOK_SITE_BASE}/combo/${encodeURIComponent(String(v.id))}/`,
     });

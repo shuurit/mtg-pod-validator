@@ -3,7 +3,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   BRACKET_RULES, cardStatus, scoreCard, deckTemplate, splitBasics, buildDeck, deckToText,
-  bracketChecks, comboRequest,
+  bracketChecks, comboRequest, comboManaCost,
 } = require("../deck-builder.js");
 
 let n = 0;
@@ -215,7 +215,7 @@ test("the checks fail and name the cards when a list breaks the bracket", () => 
 });
 
 // ---- Two-card combos (Commander Spellbook, through the relay) ----
-const combo = (a, b) => ({ id: `${a}-${b}`, cards: [a, b], produces: ["Infinite mana"], manaValueNeeded: 4 });
+const combo = (a, b) => ({ id: `${a}-${b}`, cards: [a, b], produces: ["Infinite mana"] });
 const found = { checked: true, combos: [combo("Dramatic Reversal", "Isochron Scepter")] };
 
 test("two-card combos fail brackets 1-2, warn in 3, pass in 4-5", () => {
@@ -251,6 +251,21 @@ test("only two-card combos count", () => {
   const c = bracketChecks([], 1, { combos: answer }).twoCardCombos;
   assert.equal(c.ok, true);
   assert.equal(c.count, 0);
+});
+
+test("a combo's mana cost is what its two cards cost to cast, commander included", () => {
+  const deck = [card("Sanguine Bond", { cmc: 5 }), card("Exquisite Blood", { cmc: 5 }), card("Thassa's Oracle", { cmc: 2 })];
+  const commander = { name: "Kenrith, the Returned King", cmc: 5 };
+  assert.equal(comboManaCost(["Sanguine Bond", "Exquisite Blood"], deck, commander), 10);
+  assert.equal(comboManaCost(["kenrith, the returned king", "Thassa's Oracle"], deck, commander), 7, "matches names case-insensitively");
+  // A piece with no known mana value gives no total, never a guess.
+  assert.equal(comboManaCost(["Sanguine Bond", "Not In Deck"], deck, commander), null);
+  assert.equal(comboManaCost(["Sanguine Bond", "Kenrith, the Returned King"], deck, { name: commander.name, cmc: null }), null);
+  // bracketChecks attaches it to every combo it reports.
+  const answer = { checked: true, combos: [combo("Sanguine Bond", "Exquisite Blood")] };
+  const c = bracketChecks(deck, 3, { combos: answer, commander }).twoCardCombos;
+  assert.equal(c.status, "warn");
+  assert.equal(c.combos[0].manaCost, 10);
 });
 
 test("the combo request is the commander plus every nonbasic in the 99", () => {

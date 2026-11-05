@@ -11457,6 +11457,7 @@ function renderDeckBuild() {
 
   build.checks = bracketChecks(build.cards, build.bracket, {
     tagsChecked: build.tagsChecked,
+    commander: build.commander,
     combos: deckBuilderCombosFor(build),
   });
   const gc = build.checks.gameChangers;
@@ -11528,7 +11529,7 @@ function renderDeckBuild() {
         li.append(label);
       }
       const bits = [];
-      if (c.manaValueNeeded != null) bits.push(`needs ${c.manaValueNeeded} mana`);
+      if (c.manaCost != null) bits.push(`cards cost ${c.manaCost} mana`);
       if (c.produces && c.produces.length) bits.push(c.produces.slice(0, 2).join(", "));
       if (bits.length) li.append(` · ${bits.join(" · ")}`);
       ul.append(li);

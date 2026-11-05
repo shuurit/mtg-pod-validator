@@ -223,12 +223,13 @@ works without one.
   `deckbuilder:tags:v1` for a week). If Scryfall can't be searched the
   answer says `tagsChecked: false`, isn't cached, and the page shows those
   two bracket checks as "not checked". The candidates cache key is
-  `deckbuilder:v2:<slug>:<bracket>` (v1 entries lacked the flags).
+  `deckbuilder:v3:<slug>:<bracket>` (v1 entries lacked the flags, v2 the
+  commander's `cmc`).
 - `POST /deck-builder/combos` — Build a Deck's two-card combo check. Body
   `{commander, cards: [names]}` (at most 120 names). Asks Commander
   Spellbook's `POST https://backend.commanderspellbook.com/find-my-combos`
   and answers `{checked: true, combos: [{id, cards: [a, b], produces,
-  manaValueNeeded, bracketTag, url}]}` with only the combos made of exactly
+  bracketTag, url}]}` with only the combos made of exactly
   two cards and nothing else ("requires" empty). Spellbook down, slow (15 s
   timeout) or answering in a shape it doesn't recognise gives `{checked:
   false, reason}`, which the page shows as "not checked", never as passing.
