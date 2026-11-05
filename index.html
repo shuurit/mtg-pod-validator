@@ -17,7 +17,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="style.css?v=92">
+<link rel="stylesheet" href="style.css?v=93">
 
 <!-- Home-screen icon (iOS "Add to Home Screen" + Android/Chrome install).
      Generated from icon-source.png via scripts/generate_icons.py -- rerun
@@ -307,13 +307,15 @@
           <span class="hint db-commander2-hint" id="db-commander2-hint"></span>
         </label>
         <!-- Read by plain rules (parseDeckRequest in deck-builder.js) into
-             role minimums/maximums, weights, a budget or a theme; the line
-             under it says what was understood. -->
-        <label class="db-field" for="db-request">
-          <span class="db-label">What are you looking for? <span class="db-optional">Optional</span></span>
-          <textarea id="db-request" rows="2" maxlength="300" placeholder="More removal and ramp, cards I own, under $50" aria-describedby="db-request-read"></textarea>
+             role minimums/maximums, weights, a budget or a theme, and by
+             Workers AI on Build for the rest (readDeckRequest in app.js).
+             The line under it says what was understood, and by which. A div,
+             not a label: that line can hold a button. -->
+        <div class="db-field">
+          <label class="db-label" for="db-request">What are you looking for? <span class="db-optional">Optional</span></label>
+          <textarea id="db-request" rows="3" maxlength="300" placeholder="Write it your way: more removal, cards I own, under $50, and things that make my opponents discard" aria-describedby="db-request-read"></textarea>
           <span class="hint db-request-read" id="db-request-read" aria-live="polite"></span>
-        </label>
+        </div>
         <div class="db-field">
           <span class="db-label" id="db-bracket-label">Bracket</span>
           <div class="view-toggle db-bracket-toggle" role="group" aria-labelledby="db-bracket-label" id="db-bracket-toggle">
@@ -572,7 +574,7 @@
 </div>
 
 <script src="deck-tally.js?v=2"></script>
-<script src="deck-builder.js?v=9"></script>
-<script src="app.js?v=102"></script>
+<script src="deck-builder.js?v=10"></script>
+<script src="app.js?v=103"></script>
 </body>
 </html>

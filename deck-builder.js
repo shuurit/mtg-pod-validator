@@ -50,8 +50,9 @@ function combinedIdentity(commanders) {
 // ---- "What are you looking for?" ----
 // A player's free-text request, read by plain rules into settings the
 // builder already has: role minimums, scoring weights, a budget, an EDHREC
-// theme. Nothing is guessed: what isn't understood comes back in `ignored`
-// and the page shows it, so the player can rephrase.
+// theme. Nothing is guessed: what isn't understood comes back in `ignored`.
+// The page also has the AI read the request (readingToRequest, below) and
+// shows what each understood.
 
 const REQUEST_ROLE_WORDS = {
   ramp: ["mana rocks", "mana dorks", "land ramp", "ramp", "acceleration", "rocks", "dorks"],
@@ -84,6 +85,25 @@ function requestedMinimum(base, intensity, number) {
 function requestIntensity(text) {
   for (const [name, re] of REQUEST_INTENSITY) if (re.test(text)) return name;
   return null;
+}
+
+// One role change into a request reading (parseDeckRequest's shape): the
+// first change to a role wins. Returns whether it was applied.
+function applyRoleChange(out, role, intensity, number, base) {
+  if (!(role in ROLE_LABELS) || out.roleMinimums[role] != null || out.roleMaximums[role] != null) return false;
+  const was = base[role] || 0;
+  const now = requestedMinimum(was, intensity, number);
+  // "less" and "no" are caps: decks usually run more of a role than its
+  // minimum, so lowering the minimum alone would change nothing.
+  if (number == null && (intensity === "less" || intensity === "none")) {
+    out.roleMaximums[role] = now;
+    out.roleMinimums[role] = Math.min(was, now);
+    out.understood.push(now === 0 ? `${ROLE_LABELS[role]}: none` : `${ROLE_LABELS[role]}: at most ${now}`);
+  } else {
+    out.roleMinimums[role] = now;
+    out.understood.push(`${ROLE_LABELS[role]}: at least ${now} (usually ${was})`);
+  }
+  return true;
 }
 
 const requestTokens = s => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean);
@@ -149,20 +169,7 @@ function parseDeckRequest(text, themes = [], base = ROLE_MINIMUMS) {
       const intensity = requestIntensity(before) || carry || "more";
       carry = intensity;
       from = m.end;
-      if (out.roleMinimums[m.role] != null || out.roleMaximums[m.role] != null) return;
-      const was = base[m.role] || 0;
-      const now = requestedMinimum(was, intensity, number);
-      // "less" and "no" are caps: decks usually run more of a role than its
-      // minimum, so lowering the minimum alone would change nothing.
-      if (number == null && (intensity === "less" || intensity === "none")) {
-        out.roleMaximums[m.role] = now;
-        out.roleMinimums[m.role] = Math.min(was, now);
-        out.understood.push(now === 0 ? `${ROLE_LABELS[m.role]}: none` : `${ROLE_LABELS[m.role]}: at most ${now}`);
-      } else {
-        out.roleMinimums[m.role] = now;
-        out.understood.push(`${ROLE_LABELS[m.role]}: at least ${now} (usually ${was})`);
-      }
-      used = true;
+      if (applyRoleChange(out, m.role, intensity, number, base)) used = true;
     });
 
     if (/\b(don'?t care about owning|ignore my (collection|cards)|doesn'?t matter if i own)\b/.test(c)) {
@@ -207,6 +214,88 @@ function parseDeckRequest(text, themes = [], base = ROLE_MINIMUMS) {
     if (!used && !(themeWords.length && clauseText.includes(` ${themeWords.join(" ")} `))) out.ignored.push(clause);
   }
   return out;
+}
+
+// ---- The AI's reading of a request ----
+// The rules above only know their phrases, so the page also asks the
+// relay (POST /deck-builder/read-request) to have Cloudflare Workers AI read
+// the whole request into the same settings, plus Archidekt tags to search
+// the player's collection with and short notes on what else it understood.
+// readingToRequest turns that answer into parseDeckRequest's shape;
+// mergeDeckRequests lays the rules' reading over it, so whatever the rules
+// understood stays exactly as they read it and the AI fills in the rest.
+const REQUEST_SEARCH_TAG_RE = /^[a-z0-9][a-z0-9 +/'-]{0,39}$/;
+
+function readingToRequest(reading, themes = [], base = ROLE_MINIMUMS) {
+  const out = { roleMinimums: {}, roleMaximums: {}, weights: {}, budget: null, theme: null, understood: [], ignored: [], searchTags: [], notes: [], keys: [] };
+  if (!reading || typeof reading !== "object") return out;
+  const line = (key, text) => { out.understood.push(text); out.keys.push(key); };
+  for (const r of Array.isArray(reading.roles) ? reading.roles : []) {
+    if (!r || typeof r !== "object") continue;
+    const count = Number.isInteger(r.count) && r.count >= 0 ? r.count : null;
+    const intensity = ["more", "lots", "less", "none"].includes(r.change) ? r.change : r.change === "exactly" && count != null ? "more" : null;
+    if (!intensity) continue;
+    const before = out.understood.length;
+    if (applyRoleChange(out, r.role, intensity, r.change === "exactly" ? count : null, base)) {
+      out.keys.push(...Array(out.understood.length - before).fill(`role:${r.role}`));
+    }
+  }
+  const budget = Number(reading.budget);
+  if (Number.isFinite(budget) && budget >= 1) {
+    out.budget = Math.min(200, Math.round(budget));
+    line("budget", `Budget: $${out.budget}${budget > 200 ? " (the most the slider goes)" : ""}`);
+  }
+  if (reading.ownership === "only") { Object.assign(out.weights, { ownedFree: 150, ownedInDeck: 60 }); line("owned", "Cards you own, as far as they go"); }
+  else if (reading.ownership === "prefer") { Object.assign(out.weights, { ownedFree: 80, ownedInDeck: 30 }); line("owned", "Prefer cards you own"); }
+  else if (reading.ownership === "ignore") { Object.assign(out.weights, { ownedFree: 10, ownedInDeck: 5 }); line("owned", "Owning a card matters less"); }
+  if (reading.price === "cheaper") { out.weights.pricePerDollar = 2.0; line("price", "Cheaper cards when buying"); }
+  else if (reading.price === "any") { out.weights.pricePerDollar = 0.2; line("price", "Price matters less"); }
+  if (reading.style === "synergy") { Object.assign(out.weights, { synergy: 0.8, inclusion: 0.2 }); line("style", "Lean on synergy with the commander"); }
+  else if (reading.style === "staples") { Object.assign(out.weights, { synergy: 0.25, inclusion: 0.75 }); line("style", "Lean on popular staples"); }
+  const theme = (themes || []).find(t => t && t.slug && t.slug === reading.theme);
+  if (theme) { out.theme = theme.slug; line("theme", `Theme: ${theme.name || humanizeThemeSlug(theme.slug)}`); }
+  const tags = (Array.isArray(reading.searchTags) ? reading.searchTags : [])
+    .map(t => String(t || "").trim().toLowerCase()).filter(t => REQUEST_SEARCH_TAG_RE.test(t));
+  out.searchTags = [...new Set(tags)].slice(0, 12);
+  out.notes = (Array.isArray(reading.notes) ? reading.notes : [])
+    .map(n => String(n || "").replace(/\s+/g, " ").trim().slice(0, 80)).filter(Boolean).slice(0, 4);
+  return out;
+}
+
+// rules: parseDeckRequest's reading. ai: readingToRequest's, or null.
+// Returns parseDeckRequest's shape plus aiUnderstood (the AI's lines for
+// what the rules didn't set, then its notes), searchTags, and byAi. With
+// the AI's reading nothing is left `ignored`: it read the whole request.
+function mergeDeckRequests(rules, ai) {
+  if (!ai) return { ...rules, aiUnderstood: [], searchTags: [], byAi: false };
+  const rulesRoles = new Set([...Object.keys(rules.roleMinimums), ...Object.keys(rules.roleMaximums)]);
+  const pick = map => Object.fromEntries(Object.entries(map).filter(([role]) => !rulesRoles.has(role)));
+  const w = rules.weights || {};
+  const rulesKeys = new Set([
+    ...[...rulesRoles].map(r => `role:${r}`),
+    ...(rules.budget != null ? ["budget"] : []),
+    ...(w.ownedFree != null ? ["owned"] : []),
+    ...(w.pricePerDollar != null ? ["price"] : []),
+    ...(w.synergy != null ? ["style"] : []),
+    ...(rules.theme ? ["theme"] : []),
+  ]);
+  const aiLines = ai.understood.filter((_, i) => !rulesKeys.has(ai.keys[i]));
+  return {
+    roleMinimums: { ...pick(ai.roleMinimums), ...rules.roleMinimums },
+    roleMaximums: { ...pick(ai.roleMaximums), ...rules.roleMaximums },
+    weights: { ...(rulesKeys.has("owned") ? {} : pickKeys(ai.weights, ["ownedFree", "ownedInDeck"])), ...(rulesKeys.has("price") ? {} : pickKeys(ai.weights, ["pricePerDollar"])), ...(rulesKeys.has("style") ? {} : pickKeys(ai.weights, ["synergy", "inclusion"])), ...w },
+    budget: rules.budget != null ? rules.budget : ai.budget,
+    theme: rules.theme || ai.theme,
+    understood: rules.understood,
+    ignored: [],
+    aiUnderstood: [...aiLines, ...ai.notes],
+    searchTags: ai.searchTags,
+    byAi: true,
+  };
+}
+
+function pickKeys(obj, keys) {
+  return Object.fromEntries(keys.filter(k => obj && obj[k] != null).map(k => [k, obj[k]]));
 }
 
 // ---- Themes ----
@@ -899,7 +988,7 @@ function typeOrder(type) {
 
 if (typeof module !== "undefined") {
   module.exports = {
-    DECK_BUILDER_DECK_SIZE, parseDeckRequest, requestedMinimum, humanizeThemeSlug, themeName, themeOptions, deckBuilderSlug, deckCommanders, deckSize, combinedIdentity, pairingOf, secondCommanderKind, canPair, pairOrder,
+    DECK_BUILDER_DECK_SIZE, parseDeckRequest, readingToRequest, mergeDeckRequests, requestedMinimum, humanizeThemeSlug, themeName, themeOptions, deckBuilderSlug, deckCommanders, deckSize, combinedIdentity, pairingOf, secondCommanderKind, canPair, pairOrder,
     pickBlockReason, mergeCollectionPicks,
     BRACKET_RULES, DEFAULT_WEIGHTS, ROLE_MINIMUMS, ROLE_LABELS, roleCounts, cardStatus, scoreCard, deckTemplate, splitBasics,
     buildDeck, candidatePool, swapOptions, applySwap, SWAP_OPTION_COUNT, bracketChecks, combosCheck, comboManaCost, comboRequest, tagsChecked, deckToText, typeOrder,

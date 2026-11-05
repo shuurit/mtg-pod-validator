@@ -49,6 +49,9 @@ function sandbox(fetchImpl, kv = new Map()) {
     Array,
     JSON,
     Promise,
+    crypto: globalThis.crypto,
+    TextEncoder,
+    Uint8Array,
     env: {
       DECK_CACHE: {
         get: async (k) => (kv.has(k) ? kv.get(k) : null),
@@ -67,15 +70,18 @@ function sandbox(fetchImpl, kv = new Map()) {
     "EDHREC_JSON_BASE", "DECK_BUILDER_TEMPLATE_KEYS", "DECK_BUILDER_BRACKET_SLUGS", "EDHREC_REDIRECT_RE",
     "DECK_BUILDER_THEME_LIMIT", "DECK_BUILDER_THEME_MIN_DECKS", "DECK_BUILDER_THEME_RE",
     "DECK_BUILDER_AI_MODEL", "COLLECTION_PICKS_MAX", "COLLECTION_PICKS_SHORTLIST", "ARCHIDEKT_TRADING_APP_BASE_URL",
-    "DECK_BUILDER_REQUEST_STOPWORDS",
+    "DECK_BUILDER_REQUEST_STOPWORDS", "DECK_BUILDER_TAG_RE", "DECK_BUILDER_READ_CACHE_PREFIX",
+    "DECK_BUILDER_READ_CACHE_TTL_SECONDS", "DECK_BUILDER_READ_ROLES", "DECK_BUILDER_TAG_EXAMPLES",
   ].map(constant).join("\n").replace(/^const /gm, "var "), ctx);
   vm.runInContext(block("DECK_BUILDER_ROLE_KEYWORDS"), ctx);
   vm.runInContext(block("DECK_BUILDER_ROLE_ARCHIDEKT_TAGS"), ctx);
   vm.runInContext(block("DECK_BUILDER_PICKS_SCHEMA"), ctx);
+  vm.runInContext(block("DECK_BUILDER_READING_SCHEMA"), ctx);
   // The handler answers through jsonResponse; a plain object is enough here.
   ctx.jsonResponse = (body, status = 200) => ({ body, status });
   vm.runInContext([
     "deckBuilderSearchTags", "deckBuilderPicksPrompt", "deckBuilderValidatePicks", "deckBuilderFallbackPicks", "handleDeckBuilderCollectionPicks",
+    "deckBuilderReadingPrompt", "deckBuilderValidateReading", "handleDeckBuilderReadRequest",
     "scryfallFetch", "scryfallBackingOff", "recordScryfallBackoff", "kvGetJson",
     "edhrecJson", "deckBuilderThemes", "hasCardlists", "deckBuilderPages", "deckBuilderPrimaryType", "deckBuilderNameKey", "scryfallCollection", "buildDeckBuilderCandidates", "scryfallSearchOracleIds", "deckBuilderTags", "parseSpellbookCombos",
     "scryfallRoleSearch", "deckBuilderIdentityKey", "deckBuilderRoleTags", "deckBuilderKeywordRoles", "deckBuilderCardRoles",
@@ -786,4 +792,107 @@ test("no linked collection, nothing to search, or a bad request get a plain answ
 test("the relay has its Workers AI binding", () => {
   const toml = fs.readFileSync(path.join(__dirname, "..", "cloudflare-worker", "wrangler.toml"), "utf8");
   assert.match(toml, /\[ai\]\s*\nbinding = "AI"/);
+});
+
+// ---- POST /deck-builder/read-request: the AI reads the request ----
+const THEMES = [{ slug: "infect", name: "Infect" }, { slug: "plus-1-plus-1-counters", name: "+1/+1 Counters" }];
+const readRequest = (more = {}) => ({
+  json: async () => ({ request: "a few more ways to make my opponents discard, and keep it cheap", commanders: ["Atraxa, Praetors' Voice"], bracket: 3, themes: THEMES, ...more }),
+});
+function readSandbox(ai, kv = new Map()) {
+  const calls = [];
+  const s = sandbox(async () => json(500, {}), kv);
+  if (ai) s.env.AI = { run: async (model, input) => { calls.push({ model, input }); return ai(); } };
+  return { s, calls, kv };
+}
+
+test("AI tags replace a sentence's plain words in the collection search; roles keep theirs", () => {
+  const s = sandbox(async () => json(200, {}));
+  assert.deepEqual([...s.deckBuilderSearchTags(["draw"], "make my opponents discard", ["discard", "hand disruption", "NOT A TAG!"])], ["draw", "card advantage", "discard", "hand disruption"]);
+  // Without AI tags, the old word rule still applies.
+  assert.ok(s.deckBuilderSearchTags([], "make my opponents discard").includes("opponents"));
+});
+
+test("the reading prompt names the commander, the bracket, the themes, Archidekt's tag words and the request", () => {
+  const s = sandbox(async () => json(200, {}));
+  const [system, user] = s.deckBuilderReadingPrompt({ requestText: "graveyard stuff", commanders: ["Meren of Clan Nel Toth"], bracket: 2, themes: THEMES });
+  assert.match(system.content, /ramp, draw, removal, wipe, protection/);
+  assert.match(system.content, /hand disruption/);
+  assert.match(user.content, /Meren of Clan Nel Toth/);
+  assert.match(user.content, /Bracket: 2/);
+  assert.match(user.content, /infect = Infect/);
+  assert.match(user.content, /graveyard stuff$/);
+});
+
+test("a reading is validated: known roles and changes only, real themes, tag-shaped tags, bounded notes", () => {
+  const s = sandbox(async () => json(200, {}));
+  const r = s.deckBuilderValidateReading({ response: {
+    roles: [
+      { role: "draw", change: "more" },
+      { role: "draw", change: "less" },          // a second change to the same role
+      { role: "ramp", change: "exactly", count: 99 },
+      { role: "removal", change: "exactly" },    // no count
+      { role: "lands", change: "more" },         // not a role
+      { role: "wipe", change: "double" },        // not a change
+    ],
+    budget: 75, ownership: "only", price: "cheapest", style: "synergy", theme: "voltron",
+    searchTags: ["Discard", "hand disruption", "<script>", "x".repeat(60), "discard"],
+    notes: ["Cards that make opponents discard", "", "  two   spaces  "],
+  } }, THEMES);
+  assert.deepEqual(JSON.parse(JSON.stringify(r)), {
+    roles: [{ role: "draw", change: "more" }, { role: "ramp", change: "exactly", count: 30 }],
+    budget: 75, ownership: "only", price: "", style: "synergy", theme: "",
+    searchTags: ["discard", "hand disruption"],
+    notes: ["Cards that make opponents discard", "two spaces"],
+  });
+  assert.equal(s.deckBuilderValidateReading({ response: "not json" }, THEMES), null);
+  assert.equal(s.deckBuilderValidateReading({ response: '{"roles":[],"searchTags":[],"notes":[],"theme":"infect"}' }, THEMES).theme, "infect");
+  assert.equal(s.deckBuilderValidateReading(null, THEMES), null);
+});
+
+test("the route reads the request once, then serves it from KV", async () => {
+  const answer = { response: { roles: [], price: "cheaper", searchTags: ["discard", "hand disruption"], notes: ["Cards that make opponents discard"] } };
+  const { s, calls, kv } = readSandbox(async () => answer);
+  const res = await s.handleDeckBuilderReadRequest(readRequest(), s.env, s.ctx);
+  assert.equal(res.status, 200);
+  assert.equal(res.body.read, true);
+  assert.equal(res.body.cached, false);
+  assert.equal(res.body.reading.price, "cheaper");
+  assert.deepEqual([...res.body.reading.searchTags], ["discard", "hand disruption"]);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].model, "@cf/meta/llama-3.3-70b-instruct-fp8-fast");
+  assert.equal(calls[0].input.response_format.type, "json_schema");
+  await Promise.all(s.waits);
+  assert.equal([...kv.keys()].filter(k => k.startsWith("deckbuilder:read:v1:")).length, 1);
+  // Same request, any capitalisation: no second AI call.
+  const again = await s.handleDeckBuilderReadRequest(readRequest({ request: "A few more ways to make my opponents DISCARD, and keep it cheap" }), s.env, s.ctx);
+  assert.equal(again.body.cached, true);
+  assert.equal(again.body.reading.price, "cheaper");
+  assert.equal(calls.length, 1);
+});
+
+test("the route says plainly when the AI can't read it, and caches nothing", async () => {
+  for (const [ai, reason] of [[null, "ai-off"], [async () => { throw new Error("daily allocation used up"); }, "ai-failed"], [async () => ({ response: "garbled" }), "unreadable"]]) {
+    const { s, kv } = readSandbox(ai);
+    const res = await s.handleDeckBuilderReadRequest(readRequest(), s.env, s.ctx);
+    assert.deepEqual([res.body.read, res.body.reason], [false, reason]);
+    await Promise.all(s.waits);
+    assert.equal(kv.size, 0);
+  }
+  const { s } = readSandbox(async () => ({}));
+  assert.equal((await s.handleDeckBuilderReadRequest(readRequest({ request: "" }), s.env, s.ctx)).status, 400);
+  assert.equal((await s.handleDeckBuilderReadRequest(readRequest({ bracket: 9 }), s.env, s.ctx)).status, 400);
+});
+
+test("the picks route passes the reading's tags to the collection search", async () => {
+  const { s, calls } = picksSandbox({ search: { connected: true, cards: [] }, ai: null, scryfall: {} });
+  const res = await s.handleDeckBuilderCollectionPicks(picksRequest({ request: "make my opponents discard", roles: [], tags: ["discard", "hand disruption"] }), s.env, s.ctx, { discordUserId: "1" });
+  assert.equal(res.body.checked, true);
+  assert.deepEqual(calls.search.tags, ["discard", "hand disruption"]);
+});
+
+test("the read-request route sits behind the sign-in check", () => {
+  const signIn = RELAY.indexOf('url.pathname === "/deck-builder/candidates"');
+  const read = RELAY.indexOf('url.pathname === "/deck-builder/read-request"');
+  assert.ok(signIn > 0 && read > signIn, "read-request is routed with the other signed-in deck-builder routes");
 });

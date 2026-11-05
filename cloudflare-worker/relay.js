@@ -3084,6 +3084,9 @@ const DECK_BUILDER_ROLE_ARCHIDEKT_TAGS = {
   wipe: ["sweeper", "board wipe", "wrath"],
   protection: ["protection"],
 };
+// The shape of an Archidekt tag ("draw", "hand disruption",
+// "reanimate-creature"); the trading app checks the same.
+const DECK_BUILDER_TAG_RE = /^[a-z0-9][a-z0-9 +/'-]{0,39}$/;
 // Words in a request that are never themselves a tag worth searching.
 const DECK_BUILDER_REQUEST_STOPWORDS = new Set(("more less lots plenty some want need with without that this have from into focus cards card deck decks good great play make more much many really very also maybe like only just please under over dollars bucks cheap cheaper budget mostly own owned collection binder stuff things thing help helps every each other what which when where them they their there these those would could should about around little extra heavy light fewer most least lean on in of to the and for my me it is be can not no").split(" "));
 
@@ -3091,9 +3094,14 @@ const DECK_BUILDER_REQUEST_STOPWORDS = new Set(("more less lots plenty some want
 // any other plain word from the request ("tokens", "lifegain", "mill") as
 // a tag of its own -- Archidekt tags are mostly such words, and one that
 // matches nothing just finds nothing.
-function deckBuilderSearchTags(roles, requestText) {
+// aiTags: the tags the AI's reading of the request chose (POST
+// /deck-builder/read-request); when there are some, they replace the plain
+// words, which are mostly noise in a sentence ("opponents", "turns").
+function deckBuilderSearchTags(roles, requestText, aiTags = []) {
   const tags = [];
   for (const role of roles || []) for (const t of DECK_BUILDER_ROLE_ARCHIDEKT_TAGS[role] || []) tags.push(t);
+  const chosen = (Array.isArray(aiTags) ? aiTags : []).map(t => String(t || "").trim().toLowerCase()).filter(t => DECK_BUILDER_TAG_RE.test(t));
+  if (chosen.length) return [...new Set([...tags, ...chosen])].slice(0, 20);
   const roleWords = new Set(["ramp", "draw", "removal", "wipe", "wipes", "board", "protection", "interaction", "sweepers", "wraths", "rocks", "dorks", "advantage", "answers", "hexproof", "indestructible", "acceleration"]);
   for (const w of String(requestText || "").toLowerCase().match(/[a-z][a-z'-]{3,}/g) || []) {
     if (DECK_BUILDER_REQUEST_STOPWORDS.has(w) || roleWords.has(w)) continue;
@@ -3177,6 +3185,149 @@ function deckBuilderFallbackPicks(shortlist, max = COLLECTION_PICKS_MAX) {
   }));
 }
 
+// ---------- POST /deck-builder/read-request ----------
+// The request box in the player's own words, read by Cloudflare Workers AI
+// into the settings Build a Deck already has (deck-builder.js
+// readingToRequest): role changes, a budget, how much owning a card and
+// its price matter, synergy or staples, one of the commander's EDHREC
+// themes -- plus Archidekt tags to search the player's collection with for
+// anything else they asked for ("make my opponents discard" -> "discard",
+// "hand disruption"), and short notes saying what it took from the request.
+// The page lays its plain rules' reading (parseDeckRequest) over this one,
+// so whatever those rules are sure of stays as they read it.
+// A reading is a small call (~1k tokens, ~40 neurons) and is kept in KV per
+// request + commanders + bracket + themes, so asking again is free.
+const DECK_BUILDER_READ_CACHE_PREFIX = "deckbuilder:read:v1:";
+const DECK_BUILDER_READ_CACHE_TTL_SECONDS = 30 * 24 * 60 * 60;
+const DECK_BUILDER_READ_ROLES = ["ramp", "draw", "removal", "wipe", "protection"];
+
+const DECK_BUILDER_READING_SCHEMA = {
+  type: "object",
+  properties: {
+    roles: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          role: { type: "string", enum: DECK_BUILDER_READ_ROLES },
+          change: { type: "string", enum: ["more", "lots", "less", "none", "exactly"] },
+          count: { type: "integer" },
+        },
+        required: ["role", "change"],
+      },
+    },
+    budget: { type: "integer" },
+    ownership: { type: "string", enum: ["", "prefer", "only", "ignore"] },
+    price: { type: "string", enum: ["", "cheaper", "any"] },
+    style: { type: "string", enum: ["", "synergy", "staples"] },
+    theme: { type: "string" },
+    searchTags: { type: "array", items: { type: "string" } },
+    notes: { type: "array", items: { type: "string" } },
+  },
+  required: ["roles", "searchTags", "notes"],
+};
+
+// Tag names checked on archidekt.com/api/cards/v2 (Nov 2026), so the AI
+// searches with words Archidekt really uses.
+const DECK_BUILDER_TAG_EXAMPLES = "draw, card advantage, ramp, mana dork, removal, spot removal, counterspell, sweeper, protection, tutor, discard, hand disruption, lifegain, drain life, death trigger, sacrifice outlet, reanimate, recursion, mill, mill-self, flicker, burn, multiple bodies, repeatable token generator, token doubler, counter increaser, counters matter, landfall, lands matter, overrun, tax, theft";
+
+function deckBuilderReadingPrompt({ requestText, commanders, bracket, themes }) {
+  const themeLines = themes.length ? themes.map(t => `${t.slug} = ${t.name}`).join("\n") : "(none known)";
+  return [
+    {
+      role: "system",
+      content: [
+        "You read what a Magic: The Gathering player wants from a Commander deck that will be built for them, and turn it into settings. Only set what the player actually asked for; leave everything else empty.",
+        `roles: changes to how many cards fill a role. role is one of ${DECK_BUILDER_READ_ROLES.join(", ")} (wipe = board wipes; protection = keeping their own creatures or commander safe). change is "more", "lots" (a lot more), "less", "none", or "exactly" with count.`,
+        "budget: a total spend in US dollars, or 0. ownership: \"prefer\" to favour cards they own, \"only\" for only cards they own, \"ignore\" if owning doesn't matter, else \"\". price: \"cheaper\" for cheaper cards, \"any\" if price doesn't matter, else \"\". style: \"synergy\" for cards that work with the commander, \"staples\" for popular proven cards, else \"\".",
+        "theme: the slug of one THEME below if the player asked for that strategy, else \"\".",
+        `searchTags: up to 8 lowercase Archidekt card tags that would find the cards the player asked for in their collection, including what a role covers. Archidekt tags look like: ${DECK_BUILDER_TAG_EXAMPLES}.`,
+        "notes: up to 3 short phrases (under 10 words each) saying what you understood that isn't covered by the settings above, e.g. \"Cards that make opponents discard\".",
+      ].join("\n"),
+    },
+    {
+      role: "user",
+      content: `Commander: ${commanders.join(" + ")}\nBracket: ${bracket}\nTHEMES:\n${themeLines}\n\nThe player wrote: ${requestText}`,
+    },
+  ];
+}
+
+// The AI's answer -> a reading the page can apply, or null when it can't be
+// read. Only known roles and changes, a theme that's really one of the
+// commander's, tags in Archidekt's shape; everything bounded.
+function deckBuilderValidateReading(answer, themes) {
+  let body = answer && typeof answer === "object" && "response" in answer ? answer.response : answer;
+  if (typeof body === "string") {
+    try { body = JSON.parse(body); } catch { return null; }
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  const pickEnum = (v, allowed) => (allowed.includes(v) ? v : "");
+  const roles = [];
+  for (const r of Array.isArray(body.roles) ? body.roles : []) {
+    if (!r || !DECK_BUILDER_READ_ROLES.includes(r.role) || roles.some(x => x.role === r.role)) continue;
+    const change = pickEnum(r.change, ["more", "lots", "less", "none", "exactly"]);
+    const count = Number.isInteger(r.count) && r.count >= 0 ? Math.min(30, r.count) : null;
+    if (!change || (change === "exactly" && count == null)) continue;
+    roles.push(change === "exactly" ? { role: r.role, change, count } : { role: r.role, change });
+  }
+  const budget = Number.isFinite(Number(body.budget)) && Number(body.budget) >= 1 ? Math.min(10000, Math.round(Number(body.budget))) : 0;
+  const theme = themes.some(t => t.slug === body.theme) ? body.theme : "";
+  const searchTags = [...new Set((Array.isArray(body.searchTags) ? body.searchTags : [])
+    .map(t => String(t || "").trim().toLowerCase()).filter(t => DECK_BUILDER_TAG_RE.test(t)))].slice(0, 8);
+  const notes = (Array.isArray(body.notes) ? body.notes : [])
+    .map(n => String(n || "").replace(/\s+/g, " ").trim().slice(0, 80)).filter(Boolean).slice(0, 3);
+  return {
+    roles,
+    budget,
+    ownership: pickEnum(body.ownership, ["prefer", "only", "ignore"]),
+    price: pickEnum(body.price, ["cheaper", "any"]),
+    style: pickEnum(body.style, ["synergy", "staples"]),
+    theme,
+    searchTags,
+    notes,
+  };
+}
+
+async function handleDeckBuilderReadRequest(request, env, ctx) {
+  const body = await request.json().catch(() => null);
+  const clean = (v, n = 200) => (typeof v === "string" ? v.replace(/\s+/g, " ").trim().slice(0, n) : "");
+  const requestText = clean(body && body.request, 300);
+  const commanders = (Array.isArray(body && body.commanders) ? body.commanders : []).map(v => clean(v)).filter(Boolean).slice(0, 2);
+  const bracket = Number(body && body.bracket);
+  const themes = (Array.isArray(body && body.themes) ? body.themes : [])
+    .filter(t => t && typeof t.slug === "string" && /^[a-z0-9-]{1,60}$/.test(t.slug))
+    .map(t => ({ slug: t.slug, name: clean(t.name, 60) || t.slug }))
+    .slice(0, 40);
+  if (!requestText || !commanders.length || !DECK_BUILDER_BRACKET_SLUGS[bracket]) {
+    return jsonResponse({ error: "Send the request, the commander(s) and the bracket." }, 400);
+  }
+  const noStore = { "Cache-Control": "no-store" };
+  if (!env.AI) return jsonResponse({ read: false, reason: "ai-off" }, 200, noStore);
+
+  const keyText = JSON.stringify([requestText.toLowerCase(), commanders, bracket, themes.map(t => t.slug)]);
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(keyText));
+  const cacheKey = DECK_BUILDER_READ_CACHE_PREFIX + [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, "0")).join("");
+  const cached = await kvGetJson(env, cacheKey, null).catch(() => null);
+  if (cached && cached.reading) return jsonResponse({ read: true, cached: true, model: DECK_BUILDER_AI_MODEL, reading: cached.reading }, 200, noStore);
+
+  let reading = null;
+  try {
+    const answer = await env.AI.run(DECK_BUILDER_AI_MODEL, {
+      messages: deckBuilderReadingPrompt({ requestText, commanders, bracket, themes }),
+      response_format: { type: "json_schema", json_schema: DECK_BUILDER_READING_SCHEMA },
+      max_tokens: 400,
+    });
+    reading = deckBuilderValidateReading(answer, themes);
+    if (!reading) console.error("Workers AI reading: answer didn't fit the schema");
+  } catch (err) {
+    console.error(`Workers AI reading failed: ${err.message}`);
+    return jsonResponse({ read: false, reason: "ai-failed" }, 200, noStore);
+  }
+  if (!reading) return jsonResponse({ read: false, reason: "unreadable" }, 200, noStore);
+  ctx.waitUntil(env.DECK_CACHE.put(cacheKey, JSON.stringify({ reading }), { expirationTtl: DECK_BUILDER_READ_CACHE_TTL_SECONDS }).catch(() => {}));
+  return jsonResponse({ read: true, cached: false, model: DECK_BUILDER_AI_MODEL, reading }, 200, noStore);
+}
+
 async function handleDeckBuilderCollectionPicks(request, env, ctx, session) {
   const body = await request.json().catch(() => null);
   const clean = (v, n = 200) => (typeof v === "string" ? v.trim().slice(0, n) : "");
@@ -3190,10 +3341,11 @@ async function handleDeckBuilderCollectionPicks(request, env, ctx, session) {
     .filter(c => c && uidOk(c.oracleId) && clean(c.name))
     .map(c => ({ oracleId: c.oracleId.toLowerCase(), name: clean(c.name), roles: (Array.isArray(c.roles) ? c.roles : []).filter(r => r in DECK_BUILDER_ROLE_ARCHIDEKT_TAGS) }));
   const exclude = (Array.isArray(body && body.exclude) ? body.exclude : []).filter(uidOk).slice(0, 1000);
+  const aiTags = (Array.isArray(body && body.tags) ? body.tags : []).slice(0, 12);
   if (!requestText || !commanders.length || !/^[WUBRG]{0,5}$/.test(identity) || !DECK_BUILDER_BRACKET_SLUGS[bracket]) {
     return jsonResponse({ error: "Send the request, the commander(s), their colour identity and the bracket." }, 400);
   }
-  const tags = deckBuilderSearchTags(roles, requestText);
+  const tags = deckBuilderSearchTags(roles, requestText, aiTags);
   if (!tags.length) return jsonResponse({ checked: false, reason: "nothing-to-search" }, 200, { "Cache-Control": "no-store" });
   if (!env.COLLECTION_BRIDGE_KEY) return jsonResponse({ checked: false, reason: "bridge-off" }, 200, { "Cache-Control": "no-store" });
 
@@ -5282,6 +5434,10 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/deck-builder/combos") {
       return handleDeckBuilderCombos(request);
+    }
+
+    if (request.method === "POST" && url.pathname === "/deck-builder/read-request") {
+      return handleDeckBuilderReadRequest(request, env, ctx);
     }
 
     if (request.method === "POST" && url.pathname === "/deck-builder/collection-picks") {

@@ -7021,6 +7021,7 @@ button.uta-bracket-btn[aria-pressed="true"] {
 .db-request-read { margin: 0; }
 .db-request-read:empty { display: none; }
 .db-request-ignored { color: var(--warn); }
+.db-request-read-btn { display: flex; margin-top: 8px; }
 /* The chosen theme in the result header (renderDeckBuild), in ink so it
    reads as part of what was built, not as the muted metadata around it. */
 .db-sub-theme { color: var(--ink); font-weight: 600; }
