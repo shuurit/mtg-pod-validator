@@ -12,9 +12,11 @@
 //      bracket, plus a bonus for owning it (bigger when the copy is free), a
 //      small bonus for being in the bracket's average deck, and a penalty by
 //      price when it would have to be bought.
-//   3. Nonbasic lands, then nonland cards by type, are taken best-score
-//      first, aiming at the average deck's type counts. Then any open
-//      nonland slots go to the best cards left of any type.
+//   3. Role minimums first (ROLE_MINIMUMS: ramp, draw, removal, board
+//      wipes, protection), each filled with its best-scoring cards. Then
+//      nonland cards by type, best score first, aiming at the average
+//      deck's type counts, and any open nonland slots go to the best cards
+//      left of any type. Then nonbasic lands.
 //   4. Basic lands fill out the land count, split the way the average deck
 //      splits them.
 // A card is skipped when it would break the bracket (Game Changers over the
@@ -49,6 +51,26 @@ const BRACKET_RULES = {
 // loaded; otherwise those two rules can't be enforced or checked.
 function tagsChecked(data) {
   return !!(data && data.tagsChecked === true);
+}
+
+// The fewest of each role a deck should run. The playgroup can tune these:
+// they're the only place the numbers live. A card can fill several roles
+// (a removal spell that also draws counts for both). Roles come from the
+// relay (Scryfall Tagger, keyword rules where Tagger can't say).
+const ROLE_MINIMUMS = { ramp: 10, draw: 10, removal: 8, wipe: 3, protection: 2 };
+const ROLE_LABELS = { ramp: "Ramp", draw: "Card draw", removal: "Removal", wipe: "Board wipes", protection: "Protection" };
+// Filled scarcest first, so a card that fills a scarce role and a common
+// one isn't spent on the common one before the scarce one gets a look.
+const ROLE_FILL_ORDER = ["wipe", "protection", "removal", "draw", "ramp"];
+
+const hasRole = (card, role) => Array.isArray(card.roles) && card.roles.includes(role);
+
+// How many cards fill each role in a list.
+function roleCounts(cards) {
+  const out = {};
+  for (const role of Object.keys(ROLE_MINIMUMS)) out[role] = 0;
+  for (const card of cards) for (const role of card.roles || []) if (role in out) out[role]++;
+  return out;
 }
 
 // Starting weights. synergy runs about -100..+100 and inclusion 0..100.
@@ -193,7 +215,19 @@ function buildDeck(data, opts = {}) {
 
   // Spells first, so the budget goes where nothing can stand in for a
   // missing card -- a basic can always take a land slot for free.
+  const minimums = { ...ROLE_MINIMUMS, ...(opts.roleMinimums || {}) };
+  const roleCount = role => picked.filter(c => hasRole(c, role)).length;
   for (const allowOverBudget of [false, true]) {
+    // Role minimums, best score first: they come before the type targets,
+    // so a deck short on creatures still gets its removal. Same rules as
+    // every other pick (Game Changer cap, bracket rules, budget -- the
+    // over-budget pass only runs when the deck can't be filled otherwise).
+    for (const role of ROLE_FILL_ORDER) {
+      for (const card of nonlands) {
+        if (roleCount(role) >= (minimums[role] || 0) || nonlandsPicked() >= shape.nonlandSlots) break;
+        if (hasRole(card, role)) tryTake(card, allowOverBudget);
+      }
+    }
     // Nonland cards by type, then the best of whatever's left.
     if (shape.nonland) {
       for (const card of nonlands) {
@@ -237,6 +271,9 @@ function buildDeck(data, opts = {}) {
         if (p.type !== card.type || p.status === "missing") continue;
         if (card.gameChanger && !p.gameChanger && gameChangers >= rules.gameChangers) continue;
         if (card.extraTurn && !p.extraTurn && extraTurns >= rules.extraTurns) continue;
+        // Never swap out a card a role minimum is leaning on, unless the
+        // upgrade fills that role too.
+        if ((p.roles || []).some(role => !hasRole(card, role) && roleCount(role) <= (minimums[role] || 0))) continue;
         if (!weakest || quality(p) < quality(weakest)) weakest = p;
       }
       if (!weakest || quality(card) - quality(weakest) < UPGRADE_MARGIN) continue;
@@ -268,9 +305,26 @@ function buildDeck(data, opts = {}) {
   tally.free += basicCount;
   tally.missingCost = Math.round(tally.missingCost * 100) / 100;
 
+  // Each role against its minimum; nonbasic lands count too (Boseiju is
+  // removal wherever it was picked). A shortfall is reported, never
+  // dropped: the pool (or the budget) just didn't have enough.
+  const counts = roleCounts(picked);
+  const roles = {};
+  const roleShortfall = [];
+  for (const role of Object.keys(ROLE_MINIMUMS)) {
+    const min = minimums[role] || 0;
+    roles[role] = { label: ROLE_LABELS[role], count: counts[role], min, short: Math.max(0, min - counts[role]) };
+    // Role cards the pool had but the deck left out (budget, Game Changer
+    // cap, bracket rules): 0 means EDHREC's pool itself ran out.
+    if (roles[role].short) roles[role].leftOut = nonlands.filter(c => hasRole(c, role) && !taken.has(c.oracleId)).length;
+    if (roles[role].short) roleShortfall.push({ role, ...roles[role] });
+  }
+
   return {
     commander: data.commander,
     bracket,
+    roles,
+    roleShortfall,
     bracketName: rules.name,
     cards: picked,
     basics,
@@ -382,7 +436,7 @@ function typeOrder(type) {
 
 if (typeof module !== "undefined") {
   module.exports = {
-    BRACKET_RULES, DEFAULT_WEIGHTS, cardStatus, scoreCard, deckTemplate, splitBasics,
+    BRACKET_RULES, DEFAULT_WEIGHTS, ROLE_MINIMUMS, ROLE_LABELS, roleCounts, cardStatus, scoreCard, deckTemplate, splitBasics,
     buildDeck, bracketChecks, combosCheck, comboManaCost, comboRequest, tagsChecked, deckToText, typeOrder,
   };
 }

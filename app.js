@@ -11177,6 +11177,7 @@ const deckBuilderUi = {
   // undefined while the request is out (the row reads "checking").
   combos: null,
   comboTimer: null,
+  view: "role",     // "role" | "type": how the card list is grouped
   autocompleteTimer: null,
   autocompleteSeq: 0,
 };
@@ -11217,6 +11218,18 @@ function initDeckBuilder() {
       } else if (deckBuilderUi.data) {
         setDeckBuilderStatus("");
       }
+    });
+  });
+
+  document.querySelectorAll("#db-view-toggle [data-db-view]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      deckBuilderUi.view = btn.dataset.dbView;
+      document.querySelectorAll("#db-view-toggle [data-db-view]").forEach(b => {
+        const on = b === btn;
+        b.classList.toggle("active", on);
+        b.setAttribute("aria-pressed", String(on));
+      });
+      if (deckBuilderUi.data) renderDeckBuild();
     });
   });
 
@@ -11397,6 +11410,89 @@ function deckBuilderCombosFor(build) {
   return undefined;
 }
 
+// Basic land rows (one per name) for whichever group shows the lands.
+function deckBuilderBasicRows(build) {
+  return build.basics.map(b => {
+    const row = makeEl("li", "db-row");
+    const main = makeEl("div", "db-row-main");
+    main.append(makeEl("div", "db-row-name", `${b.count} ${b.name}`));
+    row.append(main, makeEl("span", "db-chip db-chip-own", "Basic"));
+    return row;
+  });
+}
+
+function deckBuilderGroup(title, rows, titleExtra) {
+  const group = makeEl("section", "db-group");
+  const h = makeEl("h4", "db-group-title", title);
+  if (titleExtra) h.append(titleExtra);
+  const list = makeEl("ul", "db-list");
+  list.append(...rows);
+  group.append(h, list);
+  return group;
+}
+
+// Every role against its minimum, as one compact row of counts: shown in
+// both views, so "By type" still says whether the deck has its removal.
+function deckBuilderRoleSummary(build) {
+  const ul = makeEl("ul", "db-roles");
+  ul.setAttribute("aria-label", "Roles against their minimums");
+  for (const r of Object.values(build.roles)) {
+    const li = makeEl("li", `db-role ${r.short ? "db-role-short" : "db-role-ok"}`);
+    li.append(makeEl("span", null, r.label), makeEl("b", null, `${r.count}/${r.min} ${r.short ? "✗" : "✓"}`));
+    li.title = r.short ? `${r.short} short of the minimum of ${r.min}` : `At least ${r.min}`;
+    ul.append(li);
+  }
+  return ul;
+}
+
+function deckBuilderTypeGroups(build) {
+  const groups = makeEl("div", "db-groups");
+  const byType = new Map();
+  for (const card of build.cards) {
+    if (!byType.has(card.type)) byType.set(card.type, []);
+    byType.get(card.type).push(card);
+  }
+  if (!byType.has("land") && build.basics.length) byType.set("land", []);
+  const types = [...byType.keys()].sort((a, b) => typeOrder(a) - typeOrder(b));
+  for (const type of types) {
+    const cards = byType.get(type).sort((a, b) => b.score - a.score);
+    const rows = cards.map(deckBuilderRow);
+    let count = cards.length;
+    if (type === "land") {
+      rows.push(...deckBuilderBasicRows(build));
+      count += build.basics.reduce((s, b) => s + b.count, 0);
+    }
+    groups.append(deckBuilderGroup(`${DECK_BUILDER_TYPE_LABELS[type] || type} · ${count}`, rows));
+  }
+  return groups;
+}
+
+// One section per role, headed by its count against the minimum. A card
+// that fills two roles is listed under both (the hint says so); cards with
+// no role follow, then the lands.
+function deckBuilderRoleGroups(build) {
+  const groups = makeEl("div", "db-groups");
+  const byScore = (a, b) => b.score - a.score;
+  for (const [role, r] of Object.entries(build.roles)) {
+    const cards = build.cards.filter(c => (c.roles || []).includes(role)).sort(byScore);
+    const tally = makeEl("span", `db-group-min ${r.short ? "db-bad" : "db-ok"}`, ` ${r.count} of ${r.min} ${r.short ? "✗" : "✓"}`);
+    const rows = cards.map(deckBuilderRow);
+    if (!rows.length) rows.push(makeEl("li", "db-row db-row-empty", "None in EDHREC's list that fit."));
+    groups.append(deckBuilderGroup(`${r.label} ·`, rows, tally));
+  }
+  const noRole = build.cards.filter(c => !(c.roles || []).length);
+  const others = noRole.filter(c => c.type !== "land").sort(byScore);
+  if (others.length) groups.append(deckBuilderGroup(`Everything else · ${others.length}`, others.map(deckBuilderRow)));
+  const lands = noRole.filter(c => c.type === "land").sort(byScore);
+  const basicCount = build.basics.reduce((s, b) => s + b.count, 0);
+  if (lands.length || basicCount) {
+    groups.append(deckBuilderGroup(`Lands · ${lands.length + basicCount}`, [...lands.map(deckBuilderRow), ...deckBuilderBasicRows(build)]));
+  }
+  const multi = build.cards.filter(c => (c.roles || []).length > 1).length;
+  if (multi) groups.prepend(makeEl("p", "hint db-roles-hint", `${multi} card${multi === 1 ? " fills" : "s fill"} more than one role, so ${multi === 1 ? "it shows" : "they show"} under each.`));
+  return groups;
+}
+
 function renderDeckBuild() {
   const data = deckBuilderUi.data;
   const result = document.getElementById("db-result");
@@ -11450,6 +11546,12 @@ function renderDeckBuild() {
   }
   if (build.shortBy) {
     warnings.push(`EDHREC didn't have enough cards for this commander at this bracket, so ${build.shortBy} extra basic land${build.shortBy === 1 ? "" : "s"} fill the gap.`);
+  }
+  for (const r of build.roleShortfall) {
+    const why = r.leftOut
+      ? `${r.leftOut} more in EDHREC's list didn't fit your budget or the bracket`
+      : "EDHREC's list for this commander has no more";
+    warnings.push(`${r.label}: ${r.count} of ${r.min}. ${why}.`);
   }
   if (t.unknownPrices) {
     warnings.push(`${t.unknownPrices} card${t.unknownPrices === 1 ? " has" : "s have"} no price on Scryfall, so the total leaves ${t.unknownPrices === 1 ? "it" : "them"} out.`);
@@ -11537,47 +11639,10 @@ function renderDeckBuild() {
     comboNote.append(ul);
   }
 
-  const groups = makeEl("div", "db-groups");
-  const byType = new Map();
-  for (const card of build.cards) {
-    if (!byType.has(card.type)) byType.set(card.type, []);
-    byType.get(card.type).push(card);
-  }
-  const types = [...byType.keys()].sort((a, b) => typeOrder(a) - typeOrder(b));
-  for (const type of types) {
-    const cards = byType.get(type).sort((a, b) => b.score - a.score);
-    const basicsHere = type === "land" ? build.basics.reduce((s, b) => s + b.count, 0) : 0;
-    const group = makeEl("section", "db-group");
-    group.append(makeEl("h4", "db-group-title", `${DECK_BUILDER_TYPE_LABELS[type] || type} · ${cards.length + basicsHere}`));
-    const list = makeEl("ul", "db-list");
-    list.append(...cards.map(deckBuilderRow));
-    if (type === "land") {
-      for (const b of build.basics) {
-        const row = makeEl("li", "db-row");
-        const main = makeEl("div", "db-row-main");
-        main.append(makeEl("div", "db-row-name", `${b.count} ${b.name}`));
-        row.append(main, makeEl("span", "db-chip db-chip-own", "Basic"));
-        list.append(row);
-      }
-    }
-    group.append(list);
-    groups.append(group);
-  }
-  // A deck with no nonbasic lands still lists its basics.
-  if (!byType.has("land") && build.basics.length) {
-    const group = makeEl("section", "db-group");
-    group.append(makeEl("h4", "db-group-title", `Lands · ${build.basics.reduce((s, b) => s + b.count, 0)}`));
-    const list = makeEl("ul", "db-list");
-    for (const b of build.basics) {
-      const row = makeEl("li", "db-row");
-      const main = makeEl("div", "db-row-main");
-      main.append(makeEl("div", "db-row-name", `${b.count} ${b.name}`));
-      row.append(main, makeEl("span", "db-chip db-chip-own", "Basic"));
-      list.append(row);
-    }
-    group.append(list);
-    groups.append(group);
-  }
+  const roleSummary = deckBuilderRoleSummary(build);
+  const viewToggle = document.getElementById("db-view-toggle");
+  if (viewToggle) viewToggle.hidden = false;
+  const groups = deckBuilderUi.view === "type" ? deckBuilderTypeGroups(build) : deckBuilderRoleGroups(build);
 
   const actions = makeEl("div", "row db-actions");
   const copyBtn = makeEl("button", "primary", "Copy for Archidekt");
@@ -11615,6 +11680,8 @@ function renderDeckBuild() {
     ...warnings.map(w => makeEl("p", "db-note db-note-warn", w)),
     checks,
     ...(comboNote ? [comboNote] : []),
+    roleSummary,
+    ...(viewToggle ? [viewToggle] : []),
     groups,
     actions,
     copyNote,

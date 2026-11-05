@@ -2,7 +2,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
-  BRACKET_RULES, cardStatus, scoreCard, deckTemplate, splitBasics, buildDeck, deckToText,
+  BRACKET_RULES, ROLE_MINIMUMS, roleCounts, cardStatus, scoreCard, deckTemplate, splitBasics, buildDeck, deckToText,
   bracketChecks, comboRequest, comboManaCost,
 } = require("../deck-builder.js");
 
@@ -325,4 +325,118 @@ test("upgrades never break the Game Changer cap", () => {
   const b = buildDeck(data([...gcs, ...cands], owning(cands), 3), { budget: 100 });
   assert.equal(b.checks.gameChangers.count, 3);
   assert.equal(buildDeck(data([...gcs, ...cands], owning(cands), 2), { budget: 100 }).checks.gameChangers.count, 0);
+});
+
+// ---- Role minimums (ramp, draw, removal, wipes, protection) ----
+// Role cards that score BELOW the plain pool, so the type passes alone
+// would never pick them: any that end up in the deck got there through the
+// role pass.
+function rolePool({ ramp = 15, draw = 15, removal = 12, wipe = 5, protection = 4, extra = {} } = {}) {
+  const out = [];
+  const add = (role, n, type) => {
+    for (let i = 0; i < n; i++) out.push(card(`${role} ${i}`, { type, synergy: -60 - i, roles: [role], ...extra }));
+  };
+  add("ramp", ramp, "artifact");
+  add("draw", draw, "enchantment");
+  add("removal", removal, "instant");
+  add("wipe", wipe, "sorcery");
+  add("protection", protection, "instant");
+  return out;
+}
+
+test("the minimums live in one constant", () => {
+  assert.deepEqual(ROLE_MINIMUMS, { ramp: 10, draw: 10, removal: 8, wipe: 3, protection: 2 });
+});
+
+test("role minimums are met when the pool allows, even over better-scoring cards", () => {
+  const cands = [...pool({ each: 30 }), ...rolePool()];
+  for (const bracket of [1, 2, 3, 4, 5]) {
+    const b = buildDeck(data(cands, owning(cands), bracket));
+    assert.equal(b.size, 99, `bracket ${bracket}`);
+    for (const [role, min] of Object.entries(ROLE_MINIMUMS)) {
+      assert.equal(b.roles[role].count, min, `bracket ${bracket} ${role}`);
+      assert.equal(b.roles[role].short, 0);
+    }
+    assert.deepEqual(b.roleShortfall, []);
+  }
+});
+
+test("without the role pass the same pool would miss every minimum", () => {
+  // Guards the test above: the role cards really do lose on score alone.
+  const cands = [...pool({ each: 30 }), ...rolePool()];
+  const zero = Object.fromEntries(Object.keys(ROLE_MINIMUMS).map(r => [r, 0]));
+  const b = buildDeck(data(cands, owning(cands)), { roleMinimums: zero });
+  for (const role of Object.keys(ROLE_MINIMUMS)) assert.equal(b.roles[role].count, 0, role);
+});
+
+test("a short pool reports the shortfall instead of dropping it", () => {
+  const cands = [...pool({ each: 30 }), ...rolePool({ ramp: 6, wipe: 1, protection: 0 })];
+  const b = buildDeck(data(cands, owning(cands)));
+  assert.equal(b.size, 99);
+  assert.deepEqual(b.roleShortfall.map(r => [r.role, r.count, r.min, r.short]), [
+    ["ramp", 6, 10, 4],
+    ["wipe", 1, 3, 2],
+    ["protection", 0, 2, 2],
+  ]);
+  assert.equal(b.roles.draw.short, 0);
+  assert.equal(b.roles.removal.short, 0);
+  assert.equal(b.roles.ramp.leftOut, 0, "the pool ran out, nothing was left behind");
+});
+
+test("a card with several roles counts for each", () => {
+  const both = card("Removal that draws", { type: "instant", synergy: -90, roles: ["removal", "draw"] });
+  assert.deepEqual(roleCounts([both, card("x", { roles: ["ramp"] })]), { ramp: 1, draw: 1, removal: 1, wipe: 0, protection: 0 });
+  const cands = [...pool({ each: 30 }), ...rolePool({ removal: 7 }), both];
+  const b = buildDeck(data(cands, owning(cands)));
+  assert.ok(b.cards.includes(b.cards.find(c => c.name === "Removal that draws")));
+  assert.equal(b.roles.removal.count, 8);
+});
+
+test("role picks respect the Game Changer cap and the bracket's banned cards", () => {
+  const gcWipes = rolePool({ ramp: 0, draw: 0, removal: 0, wipe: 5, protection: 0, extra: { gameChanger: true } });
+  const mldWipes = Array.from({ length: 3 }, (_, i) => card(`Armageddon ${i}`, { type: "sorcery", synergy: -50, roles: ["wipe"], massLandDenial: true }));
+  const cands = [...pool({ each: 30 }), ...gcWipes, ...mldWipes];
+  const b2 = buildDeck(data(cands, owning(cands), 2, { tagsChecked: true }));
+  assert.equal(b2.checks.gameChangers.count, 0);
+  assert.equal(b2.checks.massLandDenial.count, 0);
+  assert.equal(b2.roles.wipe.count, 0);
+  assert.equal(b2.roles.wipe.short, 3, "reported, not forced past the bracket");
+  const b3 = buildDeck(data(cands, owning(cands), 3, { tagsChecked: true }));
+  assert.equal(b3.roles.wipe.count, 3, "3 Game Changers allowed in bracket 3");
+  assert.equal(b3.checks.gameChangers.count, 3);
+});
+
+test("role picks stay within the budget; a role the budget can't buy is reported short", () => {
+  // Owned: the plain pool. Missing: every role card, $5 each.
+  const plain = pool({ each: 30 });
+  const roleCards = rolePool({ extra: { price: 5 } });
+  const cands = [...plain, ...roleCards];
+  const broke = buildDeck(data(cands, owning(plain)), { budget: 0 });
+  assert.equal(broke.overBudget, false);
+  assert.equal(broke.tally.missing, 0);
+  assert.equal(broke.roleShortfall.length, 5);
+  assert.equal(broke.roles.ramp.leftOut, 15, "there were ramp cards, the budget couldn't buy them");
+  const some = buildDeck(data(cands, owning(plain)), { budget: 20 });
+  assert.equal(some.tally.missingCost, 20);
+  assert.equal(some.overBudget, false);
+  assert.equal(Object.values(some.roles).reduce((n, r) => n + r.count, 0), 4);
+});
+
+test("when nothing is owned the role cards still come first in the forced buys", () => {
+  const cands = [...pool(), ...rolePool()];
+  const b = buildDeck(data(cands, { connected: false }), { budget: 0 });
+  assert.equal(b.overBudget, true);
+  assert.deepEqual(b.roleShortfall, []);
+});
+
+test("budget upgrades never pull a role below its minimum", () => {
+  const plain = pool({ each: 30 }).map(c => ({ ...c, synergy: c.synergy - 40 }));
+  const roleCards = rolePool();
+  const owned = [...plain, ...roleCards];
+  // Strong missing cards of the role cards' types, with no role.
+  const stars = ["artifact", "enchantment", "instant", "sorcery"].flatMap(type =>
+    Array.from({ length: 6 }, (_, i) => card(`Star ${type} ${i}`, { type, synergy: 90, inclusion: 90, price: 1 })));
+  const b = buildDeck(data([...stars, ...owned], owning(owned)), { budget: 100 });
+  assert.ok(b.tally.missing > 0, "it did buy upgrades");
+  assert.deepEqual(b.roleShortfall, []);
 });

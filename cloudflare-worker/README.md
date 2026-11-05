@@ -223,8 +223,25 @@ works without one.
   `deckbuilder:tags:v1` for a week). If Scryfall can't be searched the
   answer says `tagsChecked: false`, isn't cached, and the page shows those
   two bracket checks as "not checked". The candidates cache key is
-  `deckbuilder:v3:<slug>:<bracket>` (v1 entries lacked the flags, v2 the
-  commander's `cmc`).
+  `deckbuilder:v4:<slug>:<bracket>` (v1 entries lacked the flags, v2 the
+  commander's `cmc`, v3 the roles).
+
+  Each candidate also carries `roles` (any of `ramp`, `draw`, `removal`,
+  `wipe`, `protection`) and `edhrecRank`, which Build a Deck uses to fill
+  role minimums. Roles come from the Scryfall Tagger searches `otag:ramp`,
+  `otag:draw`, `otag:removal`, `otag:board-wipe` and `otag:protection`,
+  each limited to the commander's color identity (`id<=…
+  f:commander`). The full results are too big to page through (five-color
+  removal alone is ~6,200 cards), so each search is ordered by EDHREC rank
+  and only its first 4 pages are read (20 requests). Those are kept in
+  `DECK_CACHE` under `deckbuilder:roles:v1:<identity>` for a week. A
+  candidate ranked past the last card read gets that role from keyword rules
+  on its oracle text instead (`DECK_BUILDER_ROLE_KEYWORDS`). The answer's
+  `roleStats` counts how many card-role answers came from each. A cold
+  build uses ~30 of the 50 subrequests a Worker invocation allows. All
+  Scryfall calls go through `scryfallFetch`, which spaces them 100 ms apart
+  and retries a 429 once. If the role searches fail, every role comes from
+  keywords, `rolesFromTagger` is `false`, and the candidates aren't cached.
 - `POST /deck-builder/combos` — Build a Deck's two-card combo check. Body
   `{commander, cards: [names]}` (at most 120 names). Asks Commander
   Spellbook's `POST https://backend.commanderspellbook.com/find-my-combos`
