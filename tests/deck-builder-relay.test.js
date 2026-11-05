@@ -65,11 +65,12 @@ function sandbox(fetchImpl, kv = new Map()) {
     "DECK_BUILDER_ROLES_CACHE_PREFIX", "DECK_BUILDER_NOT_DRAW", "SCRYFALL_THROTTLE",
     "SCRYFALL_BACKOFF_MS", "SCRYFALL_BACKOFF_KEY", "DECK_BUILDER_ROLE_PAGE_BUDGET",
     "EDHREC_JSON_BASE", "DECK_BUILDER_TEMPLATE_KEYS", "DECK_BUILDER_BRACKET_SLUGS", "EDHREC_REDIRECT_RE",
+    "DECK_BUILDER_THEME_LIMIT", "DECK_BUILDER_THEME_MIN_DECKS", "DECK_BUILDER_THEME_RE",
   ].map(constant).join("\n").replace(/^const /gm, "var "), ctx);
   vm.runInContext(block("DECK_BUILDER_ROLE_KEYWORDS"), ctx);
   vm.runInContext([
     "scryfallFetch", "scryfallBackingOff", "recordScryfallBackoff", "kvGetJson",
-    "edhrecJson", "deckBuilderPrimaryType", "deckBuilderNameKey", "scryfallCollection", "buildDeckBuilderCandidates", "scryfallSearchOracleIds", "deckBuilderTags", "parseSpellbookCombos",
+    "edhrecJson", "deckBuilderThemes", "hasCardlists", "deckBuilderPages", "deckBuilderPrimaryType", "deckBuilderNameKey", "scryfallCollection", "buildDeckBuilderCandidates", "scryfallSearchOracleIds", "deckBuilderTags", "parseSpellbookCombos",
     "scryfallRoleSearch", "deckBuilderIdentityKey", "deckBuilderRoleTags", "deckBuilderKeywordRoles", "deckBuilderCardRoles",
   ].map(source).join("\n"), ctx);
   return ctx;
@@ -496,7 +497,7 @@ test("a commander name Scryfall doesn't know is reported, not guessed", async ()
 
 test("no page for the pair says so; the fallback reads the first commander's page", () => {
   const handler = source("handleDeckBuilderCandidates");
-  assert.match(handler, /const reason = slug2 && !pairFallback \? "no-edhrec-pair" : "no-edhrec";/);
+  assert.match(handler, /const reason = theme \? "no-edhrec-theme" : slug2 && !pairFallback \? "no-edhrec-pair" : "no-edhrec";/);
   assert.match(handler, /const pageSlug = slug2 && !pairFallback \? `\$\{slug\}-\$\{slug2\}` : slug;/);
   assert.match(handler, /pairSource: pairFallback \? "first-commander" : "pair"/);
 });
@@ -514,4 +515,94 @@ test("the browser's slug rule matches the relay's", () => {
   for (const name of ["Atraxa, Praetors' Voice", "Lae'zel, Vlaakith's Champion", "Kraum, Ludevic's Opus", "Séance Board", "Bjorna, Nightfall Alchemist", "Esika, God of the Tree // The Prismatic Bridge", "Jötun Grunt", "The Tenth Doctor"]) {
     assert.equal(deckBuilderSlug(name), s.edhrecSlug(name), name);
   }
+});
+
+// ---- Themes (EDHREC tag_counts and theme pages) ----
+test("themes: most decks first, at least 5 decks, at most 10, real slugs only", () => {
+  const s = sandbox(async () => json(200, {}));
+  const tags = [
+    { slug: "proliferate", value: "Proliferate", count: 157 },
+    { slug: "infect", value: "Infect", count: 331 },
+    { slug: "plus-1-plus-1-counters", value: "+1/+1 Counters", count: 275 },
+    { slug: "clones", value: "Clones", count: 2 },
+    { slug: "../etc", value: "Bad", count: 999 },
+    ...Array.from({ length: 12 }, (_, i) => ({ slug: `t-${i}`, value: `T${i}`, count: 10 + i })),
+  ];
+  const out = s.deckBuilderThemes(tags);
+  assert.equal(out.length, 10);
+  assert.deepEqual([...out.slice(0, 3).map(t => t.slug)], ["infect", "plus-1-plus-1-counters", "proliferate"]);
+  assert.deepEqual({ ...out[1] }, { slug: "plus-1-plus-1-counters", name: "+1/+1 Counters", count: 275 });
+  assert.ok(!out.some(t => t.slug === "clones" || t.slug === "../etc"));
+  assert.equal(s.deckBuilderThemes(undefined).length, 0);
+});
+
+function themePageFetch(calls, pages) {
+  return async (url) => {
+    const path = url.replace("https://json.edhrec.com/pages/", "").replace(/\.json$/, "");
+    calls.push(path);
+    if (!(path in pages)) return { status: 403, ok: false, json: async () => ({}) };
+    return json(200, pages[path]);
+  };
+}
+const withCards = n => ({ container: { json_dict: { cardlists: [{ header: "x", cardviews: Array.from({ length: n }, (_, i) => ({ id: `c${i}` })) }] } } });
+const empty = { container: { json_dict: { card: { name: "x" } } }, header: "cEDH Voltron" };
+
+test("a theme reads the bracket's theme page, bracket first", async () => {
+  const calls = [];
+  const s = sandbox(themePageFetch(calls, {
+    "commanders/atraxa-praetors-voice/core/infect": withCards(3),
+    "average-decks/atraxa-praetors-voice/core/infect": withCards(2),
+  }));
+  const out = await s.deckBuilderPages("atraxa-praetors-voice", "core", "infect");
+  assert.equal(out.themeSource, "bracket");
+  assert.ok(s.hasCardlists(out.page) && s.hasCardlists(out.average));
+  assert.deepEqual([...calls].sort(), ["average-decks/atraxa-praetors-voice/core/infect", "commanders/atraxa-praetors-voice/core/infect"]);
+});
+
+test("an empty bracket theme page falls back to the theme's all-brackets page", async () => {
+  const calls = [];
+  const s = sandbox(themePageFetch(calls, {
+    "commanders/wilson/cedh/voltron": empty,
+    "average-decks/wilson/cedh/voltron": empty,
+    "commanders/wilson/voltron": withCards(4),
+    "average-decks/wilson/voltron": withCards(2),
+  }));
+  const out = await s.deckBuilderPages("wilson", "cedh", "voltron");
+  assert.equal(out.themeSource, "all-brackets");
+  assert.ok(s.hasCardlists(out.page) && s.hasCardlists(out.average));
+  assert.ok(calls.includes("commanders/wilson/voltron"));
+  // Neither page: nothing to build from (the handler says no-edhrec-theme).
+  const none = await sandbox(themePageFetch([], {})).deckBuilderPages("wilson", "cedh", "nope");
+  assert.equal(none.page, null);
+});
+
+test("a full bracket theme page with an empty average deck borrows the all-brackets average", async () => {
+  const calls = [];
+  const s = sandbox(themePageFetch(calls, {
+    "commanders/x/core/tokens": withCards(3),
+    "average-decks/x/core/tokens": empty,
+    "average-decks/x/tokens": withCards(2),
+  }));
+  const out = await s.deckBuilderPages("x", "core", "tokens");
+  assert.equal(out.themeSource, "bracket");
+  assert.ok(s.hasCardlists(out.average));
+});
+
+test("no theme reads the same pages as before", async () => {
+  const calls = [];
+  const s = sandbox(themePageFetch(calls, { "commanders/x/core": withCards(1) }));
+  const out = await s.deckBuilderPages("x", "core", null);
+  assert.equal(out.themeSource, null);
+  assert.deepEqual([...calls].sort(), ["average-decks/x/core", "commanders/x/core"]);
+});
+
+test("the theme is validated, gets its own cache key, and old cached answers get a theme list", () => {
+  const handler = source("handleDeckBuilderCandidates");
+  assert.match(handler, /DECK_BUILDER_THEME_RE\.test\(theme\)/);
+  // No theme: the key it always had. A theme: its own.
+  assert.match(handler, /:\$\{bracket\}\$\{theme \? `:theme=\$\{theme\}` : ""\}`/);
+  assert.match(handler, /if \(!Array\.isArray\(data\.themes\)\)/);
+  const s = sandbox(async () => json(200, {}));
+  for (const bad of ["../x", "Infect", "a b", "x/y", ""]) assert.equal(s.DECK_BUILDER_THEME_RE.test(bad), false, bad);
+  assert.ok(s.DECK_BUILDER_THEME_RE.test("plus-1-plus-1-counters"));
 });

@@ -11185,6 +11185,7 @@ const deckBuilderUi = {
   openSwap: null,   // the row whose swap panel is open: "<section>|<oracleId>"
   focusKey: null,   // the row button to focus after the next render
   pairingSeq: 0,    // latest second-commander check (updateSecondCommanderField)
+  themesFor: null,  // "<commanders>|<bracket>" the theme picker's list belongs to
 };
 
 function openDeckBuilderTab() {
@@ -11205,6 +11206,36 @@ function setDeckBuilderStatus(text, tone, action) {
     btn.addEventListener("click", action.onClick);
     status.append(btn);
   }
+}
+
+// ---- Theme picker ----
+// Fill the picker from a build's answer (its `themes`), keyed to the
+// commanders and bracket it's for, and show it if there's anything to pick.
+function setDeckBuilderThemes(body, names, bracket) {
+  const field = document.getElementById("db-theme-field");
+  const select = document.getElementById("db-theme");
+  if (!field || !select) return;
+  const chosen = body.theme && body.theme.slug ? body.theme.slug : "";
+  select.replaceChildren(...themeOptions(body.themes, chosen).map(o => {
+    const opt = document.createElement("option");
+    opt.value = o.value;
+    opt.textContent = o.label;
+    return opt;
+  }));
+  select.value = chosen;
+  deckBuilderUi.themesFor = `${names.join("|")}|${bracket}`;
+  field.hidden = select.options.length <= 1;
+}
+
+// Themes belong to one commander (pair) at one bracket: any change to
+// those hides the picker and goes back to "Any" until the next build.
+function resetDeckBuilderThemes() {
+  const field = document.getElementById("db-theme-field");
+  const select = document.getElementById("db-theme");
+  if (!field || !select || field.hidden) return;
+  field.hidden = true;
+  select.value = "";
+  deckBuilderUi.themesFor = null;
 }
 
 // ---- A second commander ----
@@ -11265,6 +11296,7 @@ function initDeckBuilder() {
 
   document.querySelectorAll("#db-bracket-toggle [data-bracket]").forEach(btn => {
     btn.addEventListener("click", () => {
+      if (Number(btn.dataset.bracket) !== deckBuilderUi.bracket) resetDeckBuilderThemes();
       deckBuilderUi.bracket = Number(btn.dataset.bracket);
       document.querySelectorAll("#db-bracket-toggle [data-bracket]").forEach(b => {
         const on = b === btn;
@@ -11339,6 +11371,13 @@ function initDeckBuilder() {
   // name, and right away when a suggestion is picked (change).
   const first = document.getElementById("db-commander");
   let pairTimer = null;
+  first.addEventListener("input", resetDeckBuilderThemes);
+  document.getElementById("db-commander2").addEventListener("input", resetDeckBuilderThemes);
+  // Picking a theme rebuilds toward it straight away, from the same
+  // commander's page the shown deck came from (a pair fallback stays one).
+  document.getElementById("db-theme").addEventListener("change", () => {
+    runDeckBuild({ pairFallback: !!(deckBuilderUi.data && deckBuilderUi.data.pairSource === "first-commander") });
+  });
   first.addEventListener("input", () => {
     clearTimeout(pairTimer);
     pairTimer = setTimeout(updateSecondCommanderField, 500);
@@ -11394,6 +11433,12 @@ async function runDeckBuild(opts = {}) {
     const params = new URLSearchParams({ commander: names[0], bracket: String(bracket) });
     if (names[1]) params.set("commander2", names[1]);
     if (names[1] && opts.pairFallback) params.set("pairFallback", "1");
+    // The picker only shows themes for these commanders at this bracket.
+    const themeField = document.getElementById("db-theme-field");
+    const theme = themeField && !themeField.hidden && deckBuilderUi.themesFor === `${names.join("|")}|${bracket}`
+      ? document.getElementById("db-theme").value
+      : "";
+    if (theme) params.set("theme", theme);
     const res = await fetch(`${DECK_BUILDER_RELAY_URL}?${params}`, {
       cache: "no-store",
       headers: authHeaders(),
@@ -11408,6 +11453,11 @@ async function runDeckBuild(opts = {}) {
       );
       return;
     }
+    if (body.reason === "no-edhrec-theme") {
+      const label = document.getElementById("db-theme").selectedOptions[0];
+      setDeckBuilderStatus(`EDHREC has no ${label ? label.textContent.replace(/ · .*$/, "") : "such"} decks for ${names.join(" and ")} at any bracket. Pick another theme, or Any.`, "error");
+      return;
+    }
     if (body.reason === "unknown-commander") {
       setDeckBuilderStatus(`Scryfall doesn't know ${(body.missing || []).join(" or ")}. Check the spelling.`, "error");
       return;
@@ -11418,6 +11468,7 @@ async function runDeckBuild(opts = {}) {
     }
     deckBuilderUi.data = body;
     deckBuilderUi.builtFor = { commander: names.join(" / "), bracket };
+    setDeckBuilderThemes(body, names, bracket);
     deckBuilderUi.combos = null;
     deckBuilderUi.swaps = { pinned: [], excluded: [] };
     deckBuilderUi.openSwap = null;
@@ -11719,6 +11770,7 @@ function renderDeckBuild() {
   // elsewhere (splitCommanderNames).
   titles.append(makeEl("h3", "db-commander", commanders.map(c => c.name).join(" / ")));
   const sub = makeEl("p", "db-sub", `Bracket ${build.bracket} · ${build.bracketName} · `);
+  if (build.theme) sub.append(makeEl("b", "db-sub-theme", `${build.theme.name} theme`), " · ");
   const link = makeEl("a", null, "EDHREC page");
   link.href = data.edhrecUrl;
   link.target = "_blank";
@@ -11752,6 +11804,9 @@ function renderDeckBuild() {
   }
 
   const warnings = [];
+  if (build.theme && build.theme.source === "all-brackets") {
+    warnings.push(`EDHREC has no Bracket ${build.bracket} decks built around ${build.theme.name}, so these picks come from ${build.theme.name} decks at every bracket. Bracket ${build.bracket}'s rules still apply.`);
+  }
   if (data.pairSource === "first-commander" && commanders.length === 2) {
     warnings.push(`EDHREC has no page for ${commanders[0].name} and ${commanders[1].name} together, so these picks come from ${commanders[0].name}'s own page and don't account for ${commanders[1].name}. Both are your commanders; the deck is 98 cards.`);
   }

@@ -5,6 +5,7 @@ const {
   BRACKET_RULES, ROLE_MINIMUMS, roleCounts, cardStatus, scoreCard, deckTemplate, splitBasics, buildDeck, deckToText,
   bracketChecks, comboRequest, comboManaCost, swapOptions, applySwap,
   deckSize, combinedIdentity, pairingOf, secondCommanderKind, canPair, pairOrder,
+  humanizeThemeSlug, themeName, themeOptions,
 } = require("../deck-builder.js");
 
 let n = 0;
@@ -698,4 +699,38 @@ test("an older single-commander answer (no `commanders`) still builds 99", () =>
   assert.equal(b.size, 99);
   assert.deepEqual(b.commanders.map(c => c.name), ["Atraxa, Praetors' Voice"]);
   assert.equal(deckToText(b).split("\n")[0], "1 Atraxa, Praetors' Voice");
+});
+
+// ---- Themes ----
+const THEMES = [
+  { slug: "infect", name: "Infect", count: 331 },
+  { slug: "plus-1-plus-1-counters", name: "+1/+1 Counters", count: 275 },
+  { slug: "proliferate", name: "Proliferate", count: 157 },
+];
+
+test("theme names come from the relay's list, humanized only as a last resort", () => {
+  assert.equal(themeName(THEMES, "plus-1-plus-1-counters"), "+1/+1 Counters");
+  assert.equal(themeName(THEMES, "lands-matter"), "Lands Matter");
+  assert.equal(themeName(THEMES, ""), null);
+  assert.equal(humanizeThemeSlug("group-hug"), "Group Hug");
+});
+
+test("the picker offers Any first, then each theme with its deck count", () => {
+  assert.deepEqual(themeOptions(THEMES, ""), [
+    { value: "", label: "Any" },
+    { value: "infect", label: "Infect · 331 decks" },
+    { value: "plus-1-plus-1-counters", label: "+1/+1 Counters · 275 decks" },
+    { value: "proliferate", label: "Proliferate · 157 decks" },
+  ]);
+  assert.deepEqual(themeOptions([], ""), [{ value: "", label: "Any" }]);
+  // A chosen theme missing from the list stays choosable.
+  assert.deepEqual(themeOptions(THEMES, "voltron").pop(), { value: "voltron", label: "Voltron" });
+});
+
+test("a themed build carries its theme; an unthemed one carries none", () => {
+  const cands = pool();
+  const themed = buildDeck(data(cands, owning(cands), 3, { themes: THEMES, theme: { slug: "infect", name: null, source: "all-brackets" } }));
+  assert.deepEqual(themed.theme, { slug: "infect", name: "Infect", source: "all-brackets" });
+  assert.equal(themed.size, 99);
+  assert.equal(buildDeck(data(cands, owning(cands), 3, { themes: THEMES })).theme, null);
 });

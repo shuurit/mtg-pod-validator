@@ -47,6 +47,36 @@ function combinedIdentity(commanders) {
   return "WUBRG".split("").filter(c => all.includes(c)).join("");
 }
 
+// ---- Themes ----
+// The relay answers with the commander's EDHREC themes ({ slug, name,
+// count }, most decks first) and, for a themed build, `theme`: { slug,
+// name, source } -- source "bracket" for the bracket's own theme page,
+// "all-brackets" when that bracket had no decks with the theme and the
+// all-brackets page was used (the bracket's rules still apply here).
+
+// "plus-1-plus-1-counters" -> "Plus 1 Plus 1 Counters": only for a theme the
+// relay sent without a name.
+function humanizeThemeSlug(slug) {
+  return String(slug || "").split("-").filter(Boolean).map(w => w[0].toUpperCase() + w.slice(1)).join(" ");
+}
+
+// A theme's display name, from the theme list where it's known.
+function themeName(themes, slug) {
+  if (!slug) return null;
+  const t = (themes || []).find(x => x && x.slug === slug);
+  return (t && t.name) || humanizeThemeSlug(slug);
+}
+
+// The picker's choices: "Any" first, then each theme with its deck count.
+// A chosen theme the list doesn't carry (an older cached answer) is kept,
+// so the picker never silently drops what's being shown.
+function themeOptions(themes, chosen) {
+  const list = (themes || []).filter(t => t && t.slug);
+  const out = [{ value: "", label: "Any" }, ...list.map(t => ({ value: t.slug, label: `${t.name || humanizeThemeSlug(t.slug)} · ${t.count} decks` }))];
+  if (chosen && !list.some(t => t.slug === chosen)) out.push({ value: chosen, label: humanizeThemeSlug(chosen) });
+  return out;
+}
+
 // ---- Commander pairs ----
 // How a card can share the command zone, from its Scryfall object
 // (keywords, oracle_text, type_line). Read from the oracle text where
@@ -472,6 +502,7 @@ function buildDeck(data, opts = {}) {
   return {
     commander: commanders[0] || data.commander,
     commanders,
+    theme: data.theme && data.theme.slug ? { ...data.theme, name: data.theme.name || themeName(data.themes, data.theme.slug) } : null,
     colorIdentity: combinedIdentity(commanders),
     bracket,
     roles,
@@ -646,7 +677,7 @@ function typeOrder(type) {
 
 if (typeof module !== "undefined") {
   module.exports = {
-    DECK_BUILDER_DECK_SIZE, deckBuilderSlug, deckCommanders, deckSize, combinedIdentity, pairingOf, secondCommanderKind, canPair, pairOrder,
+    DECK_BUILDER_DECK_SIZE, humanizeThemeSlug, themeName, themeOptions, deckBuilderSlug, deckCommanders, deckSize, combinedIdentity, pairingOf, secondCommanderKind, canPair, pairOrder,
     BRACKET_RULES, DEFAULT_WEIGHTS, ROLE_MINIMUMS, ROLE_LABELS, roleCounts, cardStatus, scoreCard, deckTemplate, splitBasics,
     buildDeck, candidatePool, swapOptions, applySwap, SWAP_OPTION_COUNT, bracketChecks, combosCheck, comboManaCost, comboRequest, tagsChecked, deckToText, typeOrder,
   };

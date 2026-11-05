@@ -17,7 +17,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="style.css?v=89">
+<link rel="stylesheet" href="style.css?v=90">
 
 <!-- Home-screen icon (iOS "Add to Home Screen" + Android/Chrome install).
      Generated from icon-source.png via scripts/generate_icons.py -- rerun
@@ -316,6 +316,14 @@
             <button type="button" class="view-toggle-btn" data-bracket="5" aria-pressed="false"><b>5</b><span>cEDH</span></button>
           </div>
         </div>
+        <!-- Filled in from each build's answer (the commander's EDHREC
+             themes at that bracket) and hidden again when the commander or
+             bracket changes; see setDeckBuilderThemes in app.js. -->
+        <label class="db-field" for="db-theme" id="db-theme-field" hidden>
+          <span class="db-label">Theme</span>
+          <select id="db-theme" aria-describedby="db-theme-hint"></select>
+          <span class="hint db-theme-hint" id="db-theme-hint">EDHREC's themes for this commander at this bracket. Picking one rebuilds the deck toward it.</span>
+        </label>
         <label class="db-field" for="db-budget">
           <span class="db-label">Budget for cards you don't own <output id="db-budget-value" for="db-budget">$0</output></span>
           <input type="range" id="db-budget" min="0" max="200" step="5" value="0">
@@ -556,7 +564,7 @@
 </div>
 
 <script src="deck-tally.js?v=2"></script>
-<script src="deck-builder.js?v=6"></script>
-<script src="app.js?v=99"></script>
+<script src="deck-builder.js?v=7"></script>
+<script src="app.js?v=100"></script>
 </body>
 </html>
