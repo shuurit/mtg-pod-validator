@@ -11208,6 +11208,35 @@ function setDeckBuilderStatus(text, tone, action) {
   }
 }
 
+// ---- "What are you looking for?" ----
+// The request box, read by parseDeckRequest (deck-builder.js) against the
+// shown deck's themes when there is one.
+function deckBuilderRequest() {
+  const box = document.getElementById("db-request");
+  const themes = deckBuilderUi.data && deckBuilderUi.themesFor ? deckBuilderUi.data.themes || [] : [];
+  return parseDeckRequest(box ? box.value : "", themes);
+}
+
+// The line under the box: what was understood, and anything that wasn't.
+function updateDeckBuilderRequestReadback() {
+  const out = document.getElementById("db-request-read");
+  if (!out) return;
+  const req = deckBuilderRequest();
+  out.replaceChildren();
+  if (req.understood.length) out.append(`Understood: ${req.understood.join(" · ")}.`);
+  if (req.ignored.length) {
+    if (req.understood.length) out.append(" ");
+    const quoted = req.ignored.map(x => `“${x}”`).join(", ");
+    // Before a build, the commander's EDHREC themes aren't known yet, so an
+    // unread word may still be one ("infect"): say so instead of "not
+    // understood", and check again once the build answers.
+    const themesKnown = !!(deckBuilderUi.data && deckBuilderUi.themesFor);
+    out.append(makeEl("span", "db-request-ignored", themesKnown
+      ? `Not understood: ${quoted}. Try words like “more removal”, “less draw”, “cards I own”, “under $50”, or one of the themes above.`
+      : `Not read yet: ${quoted}. If it's one of the commander's EDHREC themes, Build will pick it up.`));
+  }
+}
+
 // ---- Theme picker ----
 // Fill the picker from a build's answer (its `themes`), keyed to the
 // commanders and bracket it's for, and show it if there's anything to pick.
@@ -11373,6 +11402,17 @@ function initDeckBuilder() {
   let pairTimer = null;
   first.addEventListener("input", resetDeckBuilderThemes);
   document.getElementById("db-commander2").addEventListener("input", resetDeckBuilderThemes);
+  // The request box: read back as it's typed, and a shown deck follows its
+  // role and weighting parts at once, with no request. A budget or theme
+  // in it waits for Build.
+  let requestTimer = null;
+  document.getElementById("db-request").addEventListener("input", () => {
+    clearTimeout(requestTimer);
+    requestTimer = setTimeout(() => {
+      updateDeckBuilderRequestReadback();
+      if (deckBuilderUi.data) renderDeckBuild();
+    }, 300);
+  });
   // Picking a theme rebuilds toward it straight away, from the same
   // commander's page the shown deck came from (a pair fallback stays one).
   document.getElementById("db-theme").addEventListener("change", () => {
@@ -11429,7 +11469,20 @@ async function runDeckBuild(opts = {}) {
       firstName = p1.name;
       names = opts.pairFallback ? [p1.name, p2.name] : pairOrder(p1, p2).map(p => p.name);
     }
-    setDeckBuilderStatus("Reading EDHREC and your collection…");
+    // The request box's budget and theme take effect on Build: the budget
+    // moves the slider, and a theme it names selects that theme (when this
+    // commander's themes are known; otherwise after this build, below).
+    const req = deckBuilderRequest();
+    if (req.budget != null) {
+      const slider = document.getElementById("db-budget");
+      slider.value = String(req.budget);
+      document.getElementById("db-budget-value").textContent = `$${slider.value}`;
+    }
+    const themeSelect = document.getElementById("db-theme");
+    if (req.theme && deckBuilderUi.themesFor === `${names.join("|")}|${bracket}` && [...themeSelect.options].some(o => o.value === req.theme)) {
+      themeSelect.value = req.theme;
+    }
+    setDeckBuilderStatus(opts.fromRequest ? "Building toward the theme you asked for…" : "Reading EDHREC and your collection…");
     const params = new URLSearchParams({ commander: names[0], bracket: String(bracket) });
     if (names[1]) params.set("commander2", names[1]);
     if (names[1] && opts.pairFallback) params.set("pairFallback", "1");
@@ -11474,6 +11527,18 @@ async function runDeckBuild(opts = {}) {
     deckBuilderUi.openSwap = null;
     setDeckBuilderStatus("");
     renderDeckBuild();
+    updateDeckBuilderRequestReadback();
+    // The request names a theme this commander only turned out to have now:
+    // build toward it once (fromRequest stops it going round again).
+    if (!opts.fromRequest && !theme) {
+      const asked = parseDeckRequest(document.getElementById("db-request").value, body.themes || []).theme;
+      if (asked && [...themeSelect.options].some(o => o.value === asked)) {
+        themeSelect.value = asked;
+        deckBuilderUi.busy = false;
+        await runDeckBuild({ ...opts, fromRequest: true });
+        return;
+      }
+    }
   } catch (err) {
     setDeckBuilderStatus(`Couldn't build the deck (${err.message}). Try again in a moment.`, "error");
   } finally {
@@ -11687,8 +11752,10 @@ function deckBuilderRoleSummary(build) {
   ul.setAttribute("aria-label", "Roles against their minimums");
   for (const r of Object.values(build.roles)) {
     const li = makeEl("li", `db-role ${r.short ? "db-role-short" : "db-role-ok"}`);
-    li.append(makeEl("span", null, r.label), makeEl("b", null, `${r.count}/${r.min} ${r.short ? "✗" : "✓"}`));
-    li.title = r.short ? `${r.short} short of the minimum of ${r.min}` : `At least ${r.min}`;
+    // A role the request capped ("less draw", "no wipes") shows its cap.
+    const value = r.max != null ? `${r.count} · max ${r.max}` : `${r.count}/${r.min} ${r.short ? "✗" : "✓"}`;
+    li.append(makeEl("span", null, r.label), makeEl("b", null, value));
+    li.title = r.max != null ? `At most ${r.max}, as you asked` : r.short ? `${r.short} short of the minimum of ${r.min}` : `At least ${r.min}`;
     ul.append(li);
   }
   return ul;
@@ -11724,9 +11791,11 @@ function deckBuilderRoleGroups(build, ctx) {
   const byScore = (a, b) => b.score - a.score;
   for (const [role, r] of Object.entries(build.roles)) {
     const cards = build.cards.filter(c => (c.roles || []).includes(role)).sort(byScore);
-    const tally = makeEl("span", `db-group-min ${r.short ? "db-bad" : "db-ok"}`, ` ${r.count} of ${r.min} ${r.short ? "✗" : "✓"}`);
+    const tally = r.max != null
+      ? makeEl("span", "db-group-min", ` ${r.count} · at most ${r.max}`)
+      : makeEl("span", `db-group-min ${r.short ? "db-bad" : "db-ok"}`, ` ${r.count} of ${r.min} ${r.short ? "✗" : "✓"}`);
     const rows = cards.map(c => deckBuilderRow(c, role, ctx));
-    if (!rows.length) rows.push(makeEl("li", "db-row db-row-empty", "None in EDHREC's list that fit."));
+    if (!rows.length) rows.push(makeEl("li", "db-row db-row-empty", r.max === 0 ? "None, as you asked." : "None in EDHREC's list that fit."));
     groups.append(deckBuilderGroup(`${r.label} ·`, rows, tally));
   }
   const noRole = build.cards.filter(c => !(c.roles || []).length);
@@ -11753,11 +11822,15 @@ function renderDeckBuild() {
   if (!deckBuilderUi.focusKey && focused && result.contains(focused) && focused.dataset && focused.dataset.focusKey) {
     deckBuilderUi.focusKey = focused.dataset.focusKey;
   }
+  const request = deckBuilderRequest();
   const buildOpts = {
     budget: Number(document.getElementById("db-budget").value) || 0,
     excludeDeckCards: document.getElementById("db-exclude-decks").checked,
     pinned: deckBuilderUi.swaps.pinned,
     excluded: deckBuilderUi.swaps.excluded,
+    roleMinimums: request.roleMinimums,
+    roleMaximums: request.roleMaximums,
+    weights: request.weights,
   };
   const build = buildDeck(data, buildOpts);
 
@@ -11962,9 +12035,16 @@ function renderDeckBuild() {
     actions.append(reset);
   }
 
+  // What the request box changed, so the deck says why it looks the way it
+  // does (the box's own line says the same before Build).
+  const requestNote = request.understood.length
+    ? makeEl("p", "db-note", `Following your request: ${request.understood.join(" · ")}.`)
+    : null;
+
   result.replaceChildren(
     head,
     noteEl,
+    ...(requestNote ? [requestNote] : []),
     tally,
     meter,
     ...warnings.map(w => makeEl("p", "db-note db-note-warn", w)),
