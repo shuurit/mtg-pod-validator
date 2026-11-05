@@ -45,6 +45,10 @@ function sandbox(fetchImpl, kv = new Map()) {
     Object,
     Number,
     Math,
+    String,
+    Array,
+    JSON,
+    Promise,
     env: {
       DECK_CACHE: {
         get: async (k) => (kv.has(k) ? kv.get(k) : null),
@@ -59,10 +63,13 @@ function sandbox(fetchImpl, kv = new Map()) {
     "SCRYFALL_API_BASE", "SPELLBOOK_SITE_BASE", "DECK_BUILDER_USER_AGENT", "DECK_BUILDER_CACHE_TTL_SECONDS",
     "DECK_BUILDER_TAGS_CACHE_KEY", "DECK_BUILDER_TAGS", "DECK_BUILDER_ROLE_TAGS", "DECK_BUILDER_ROLE_PAGES",
     "DECK_BUILDER_ROLES_CACHE_PREFIX", "DECK_BUILDER_NOT_DRAW", "SCRYFALL_THROTTLE",
+    "SCRYFALL_BACKOFF_MS", "SCRYFALL_BACKOFF_KEY", "DECK_BUILDER_ROLE_PAGE_BUDGET",
+    "EDHREC_JSON_BASE", "DECK_BUILDER_TEMPLATE_KEYS", "DECK_BUILDER_BRACKET_SLUGS",
   ].map(constant).join("\n").replace(/^const /gm, "var "), ctx);
   vm.runInContext(block("DECK_BUILDER_ROLE_KEYWORDS"), ctx);
   vm.runInContext([
-    "scryfallFetch", "kvGetJson", "scryfallSearchOracleIds", "deckBuilderTags", "parseSpellbookCombos",
+    "scryfallFetch", "scryfallBackingOff", "recordScryfallBackoff", "kvGetJson",
+    "edhrecJson", "deckBuilderPrimaryType", "scryfallCollection", "buildDeckBuilderCandidates", "scryfallSearchOracleIds", "deckBuilderTags", "parseSpellbookCombos",
     "scryfallRoleSearch", "deckBuilderIdentityKey", "deckBuilderRoleTags", "deckBuilderKeywordRoles", "deckBuilderCardRoles",
   ].map(source).join("\n"), ctx);
   return ctx;
@@ -258,40 +265,132 @@ test("a role search reads at most its page cap, best EDHREC rank first", async (
   assert.equal(all.throughRank, Infinity);
 });
 
-test("roles are fetched once per color identity, then served from KV", async () => {
+// A role search answer: `pages` pages of 2 cards each, more after unless last.
+function roleSearchFetch(calls, { pagesPerRole = 4, status = 200 } = {}) {
+  return async (url) => {
+    calls.push(url);
+    if (status !== 200) return { status, ok: false, headers: { get: () => null }, json: async () => ({}) };
+    const tag = /otag%3A([a-z-]+)/.exec(url)[1];
+    const page = Number((/[?&]page=(\d+)/.exec(url) || [0, 1])[1]);
+    return json(200, {
+      has_more: page < pagesPerRole,
+      next_page: `https://api.scryfall.com/cards/search?q=otag%3A${tag}&page=${page + 1}`,
+      data: [{ oracle_id: `${tag}-${page}-a`, edhrec_rank: page * 10 }, { oracle_id: `${tag}-${page}-b`, edhrec_rank: page * 10 + 5 }],
+    });
+  };
+}
+
+test("roles fill in over a few builds: two per build, each cached on its own", async () => {
   const kv = new Map();
   const calls = [];
-  const s = sandbox(async (url) => {
-    calls.push(url);
-    return json(200, { has_more: false, data: [{ oracle_id: url.includes("board-wipe") ? "WIPE" : "OTHER", edhrec_rank: 1 }] });
-  }, kv);
+  const s = sandbox(roleSearchFetch(calls), kv);
   const first = await s.deckBuilderRoleTags(s.env, s.ctx, "GWU");
   await Promise.all(s.waits);
-  assert.equal(calls.length, 5, "one search per role");
-  assert.ok(calls.every(u => /id%3C%3Dwug%20/.test(u)), "WUBRG order, lowercase");
-  assert.ok(first.wipe.ids.has("wipe"));
-  assert.ok(kv.has("deckbuilder:roles:v1:wug"));
-  const again = await s.deckBuilderRoleTags(s.env, s.ctx, "UGW");
-  assert.equal(calls.length, 5, "same identity, from KV");
-  assert.ok(again.wipe.ids.has("wipe"));
-  assert.equal(again.wipe.complete, true);
+  assert.equal(calls.length, 8, "the page budget: two roles of four pages");
+  assert.ok(calls.filter(u => !/[?&]page=/.test(u)).every(u => /id%3C%3Dwug%20/.test(u)), "WUBRG order, lowercase");
+  assert.equal(first.complete, false);
+  assert.deepEqual(Object.keys(first.roles).filter(r => first.roles[r]), ["ramp", "draw"]);
+  assert.equal(first.roles.removal, null, "not fetched yet: keywords answer it");
+  assert.ok(kv.has("deckbuilder:roles:v2:wug:ramp") && kv.has("deckbuilder:roles:v2:wug:draw"));
+
+  await s.deckBuilderRoleTags(s.env, s.ctx, "UGW");
+  await Promise.all(s.waits);
+  assert.equal(calls.length, 16, "second build: the next two roles");
+  const third = await s.deckBuilderRoleTags(s.env, s.ctx, "WUG");
+  await Promise.all(s.waits);
+  assert.equal(calls.length, 20);
+  assert.equal(third.complete, true);
+  assert.ok(third.roles.protection.ids.has("protection-1-a"));
+
+  const fourth = await s.deckBuilderRoleTags(s.env, s.ctx, "GUW");
+  assert.equal(calls.length, 20, "all five from KV now");
+  assert.equal(fourth.complete, true);
   assert.equal(s.deckBuilderIdentityKey(""), "c");
 });
 
-test("if Scryfall fails, roles are null (keywords take over) and nothing is cached", async () => {
+test("a rate-limited role search stops the rest and starts a backoff every isolate sees", async () => {
+  const kv = new Map();
+  const calls = [];
+  const s = sandbox(roleSearchFetch(calls, { status: 429 }), kv);
+  s.SCRYFALL_THROTTLE.backoffUntil = 0;
+  const out = await s.deckBuilderRoleTags(s.env, s.ctx, "R");
+  await Promise.all(s.waits);
+  assert.equal(calls.length, 2, "one request plus its one retry, then stop");
+  assert.equal(out.complete, false);
+  assert.ok(Object.values(out.roles).every(t => t === null));
+  assert.ok(kv.has("deckbuilder:scryfall-backoff"), "other isolates back off too");
+  assert.ok(![...kv.keys()].some(k => k.startsWith("deckbuilder:roles:")), "nothing half-fetched is cached");
+
+  // While backing off: no requests, cached roles still served.
+  kv.set("deckbuilder:roles:v2:r:ramp", JSON.stringify({ ids: ["x"], throughRank: 50, complete: false }));
+  const s2 = sandbox(roleSearchFetch(calls), kv);
+  s2.SCRYFALL_THROTTLE.backoffUntil = 0;
+  const during = await s2.deckBuilderRoleTags(s2.env, s2.ctx, "R");
+  assert.equal(calls.length, 2, "no requests during the backoff");
+  assert.ok(during.roles.ramp.ids.has("x"));
+  assert.equal(await s2.deckBuilderTags(s2.env, s2.ctx), null, "bracket tags wait too");
+});
+
+test("a failure that isn't a rate limit doesn't start a backoff", async () => {
   const kv = new Map();
   const s = sandbox(async () => json(500, {}), kv);
-  assert.equal(await s.deckBuilderRoleTags(s.env, s.ctx, "R"), null);
+  s.SCRYFALL_THROTTLE.backoffUntil = 0;
+  const out = await s.deckBuilderRoleTags(s.env, s.ctx, "R");
   await Promise.all(s.waits);
+  assert.equal(out.complete, false);
   assert.equal(kv.size, 0);
 });
 
-test("the role searches fit the subrequest budget", () => {
-  // 5 roles x pages, on top of EDHREC (2), the two bracket tags (2),
+test("the card lookup runs before any optional search, and survives them failing", async () => {
+  const calls = [];
+  const edhrec = {
+    container: { json_dict: { card: { id: "cmdr-uid", name: "Test Commander", color_identity: ["G"] }, cardlists: [
+      { header: "Creatures", cardviews: [{ id: "uid-1", name: "Llanowar Elves", synergy: 0.1, num_decks: 5, potential_decks: 10 }] },
+    ] } },
+    creature: 30, land: 36,
+  };
+  const s = sandbox(async (url, init) => {
+    calls.push(url);
+    if (url.includes("edhrec")) return json(200, url.includes("average-decks") ? {} : edhrec);
+    if (url.includes("/cards/collection")) {
+      return json(200, { data: [
+        { id: "uid-1", oracle_id: "OID-1", name: "Llanowar Elves", type_line: "Creature — Elf Druid", oracle_text: "{T}: Add {G}.", cmc: 1, legalities: { commander: "legal" }, prices: { usd: "0.25" }, edhrec_rank: 40 },
+        { id: "cmdr-uid", oracle_id: "CMDR", name: "Test Commander", type_line: "Legendary Creature", cmc: 3, color_identity: ["G"] },
+      ] });
+    }
+    return { status: 429, ok: false, headers: { get: () => null }, json: async () => ({}) };
+  });
+  s.SCRYFALL_THROTTLE.backoffUntil = 0;
+  const data = await s.buildDeckBuilderCandidates("test-commander", 3,
+    () => s.deckBuilderTags(s.env, s.ctx),
+    id => s.deckBuilderRoleTags(s.env, s.ctx, id));
+  const scryfall = calls.filter(u => u.includes("scryfall"));
+  assert.match(scryfall[0], /\/cards\/collection/, "card lookup first");
+  assert.ok(data, "the build still has its candidates");
+  assert.equal(data.candidates.length, 1);
+  assert.equal(data.tagsChecked, false);
+  assert.equal(data.rolesFromTagger, false);
+  assert.deepEqual([...data.candidates[0].roles], ["ramp"], "keywords stood in for the rate-limited roles");
+});
+
+test("the card lookup is patient: two retries before it gives up", async () => {
+  let n = 0;
+  const s = sandbox(async () => (++n < 3 ? { status: 429, ok: false, headers: { get: () => null }, json: async () => ({}) } : json(200, { data: [{ id: "u" }] })));
+  s.SCRYFALL_THROTTLE.backoffUntil = 0;
+  const byId = await s.scryfallCollection(["u"]);
+  assert.equal(n, 3);
+  assert.ok(byId.has("u"));
+  assert.equal(s.SCRYFALL_THROTTLE.backoffUntil, 0, "it got through, so no backoff");
+});
+
+test("a build's Scryfall requests stay small", () => {
+  // Role pages per build, on top of EDHREC (2), the two bracket tags (2),
   // Scryfall's collection lookups (~5 for 300 cards) and the collection
-  // bridge (1) -- all inside Workers' 50 per invocation.
-  const pages = Number(/^const DECK_BUILDER_ROLE_PAGES = (\d+);$/m.exec(RELAY)[1]);
-  assert.ok(5 * pages + 2 + 2 + 5 + 1 <= 50, `5 x ${pages} role pages would blow the budget`);
+  // bridge (1). Well inside Workers' 50 -- and, since 2026-11-05, small
+  // enough that Scryfall doesn't rate-limit the burst.
+  const budget = Number(/^const DECK_BUILDER_ROLE_PAGE_BUDGET = (\d+);$/m.exec(RELAY)[1]);
+  assert.ok(budget <= 8, `${budget} role pages a build is the burst that got rate-limited`);
+  assert.ok(budget + 2 + 2 + 5 + 1 <= 20);
 });
 
 test("every Scryfall call is spaced out and a 429 is retried once", async () => {
@@ -306,7 +405,9 @@ test("every Scryfall call is spaced out and a 429 is retried once", async () => 
   assert.equal((await s.scryfallFetch("https://api.scryfall.com/x")).status, 200, "retried after the 429");
   assert.ok(waits.includes(1000), "backed off a second before retrying");
   assert.ok(waits.some(ms => ms > 0 && ms <= 100), "kept the gap between requests");
+  s.SCRYFALL_THROTTLE.backoffUntil = 0;
   assert.equal((await s.scryfallFetch("https://api.scryfall.com/y")).status, 429, "a second 429 is returned, not looped on");
+  assert.ok(s.SCRYFALL_THROTTLE.backoffUntil > Date.now(), "and starts a backoff");
   assert.match(source("scryfallCollection"), /scryfallFetch\(/);
   assert.match(source("scryfallSearchOracleIds"), /scryfallFetch\(/);
   assert.match(source("scryfallRoleSearch"), /scryfallFetch\(/);

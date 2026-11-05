@@ -233,15 +233,29 @@ works without one.
   each limited to the commander's color identity (`id<=…
   f:commander`). The full results are too big to page through (five-color
   removal alone is ~6,200 cards), so each search is ordered by EDHREC rank
-  and only its first 4 pages are read (20 requests). Those are kept in
-  `DECK_CACHE` under `deckbuilder:roles:v1:<identity>` for a week. A
-  candidate ranked past the last card read gets that role from keyword rules
+  and only its first 4 pages are read. Each role is kept in `DECK_CACHE`
+  under `deckbuilder:roles:v2:<identity>:<role>` for a week, and a build
+  fetches at most 8 role pages (two roles), so a colour identity's five
+  roles fill in over about three builds. A role not fetched yet, or a
+  candidate ranked past the last card read, gets the role from keyword rules
   on its oracle text instead (`DECK_BUILDER_ROLE_KEYWORDS`). The answer's
-  `roleStats` counts how many card-role answers came from each. A cold
-  build uses ~30 of the 50 subrequests a Worker invocation allows. All
-  Scryfall calls go through `scryfallFetch`, which spaces them 100 ms apart
-  and retries a 429 once. If the role searches fail, every role comes from
-  keywords, `rolesFromTagger` is `false`, and the candidates aren't cached.
+  `roleStats` counts how many card-role answers came from each. Candidates
+  are cached only once all five roles are in (`rolesFromTagger`).
+
+  **Scryfall rate limits.** On 2026-11-05 a cold build sent ~25 Scryfall
+  requests in a row (all 20 role pages at once). Scryfall answered 429, the
+  card lookup every build needs failed, and every retry repeated the burst.
+  The relay was rolled back while it was fixed. Now:
+  - the card lookup (`/cards/collection`) runs first, right after EDHREC,
+    and retries a 429 twice;
+  - the optional searches (bracket tags, roles) come after it, retry once,
+    and on a 429 that survives start a two-minute backoff (in the isolate,
+    and as `deckbuilder:scryfall-backoff` in KV for the others) during which
+    they're skipped and keywords stand in;
+  - all Scryfall calls go through `scryfallFetch`, 100 ms apart.
+
+  A cold build now makes at most ~14 Scryfall requests (~19 subrequests
+  in all).
 - `POST /deck-builder/combos` — Build a Deck's two-card combo check. Body
   `{commander, cards: [names]}` (at most 120 names). Asks Commander
   Spellbook's `POST https://backend.commanderspellbook.com/find-my-combos`
