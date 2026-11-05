@@ -66,9 +66,16 @@ function sandbox(fetchImpl, kv = new Map()) {
     "SCRYFALL_BACKOFF_MS", "SCRYFALL_BACKOFF_KEY", "DECK_BUILDER_ROLE_PAGE_BUDGET",
     "EDHREC_JSON_BASE", "DECK_BUILDER_TEMPLATE_KEYS", "DECK_BUILDER_BRACKET_SLUGS", "EDHREC_REDIRECT_RE",
     "DECK_BUILDER_THEME_LIMIT", "DECK_BUILDER_THEME_MIN_DECKS", "DECK_BUILDER_THEME_RE",
+    "DECK_BUILDER_AI_MODEL", "COLLECTION_PICKS_MAX", "COLLECTION_PICKS_SHORTLIST", "ARCHIDEKT_TRADING_APP_BASE_URL",
+    "DECK_BUILDER_REQUEST_STOPWORDS",
   ].map(constant).join("\n").replace(/^const /gm, "var "), ctx);
   vm.runInContext(block("DECK_BUILDER_ROLE_KEYWORDS"), ctx);
+  vm.runInContext(block("DECK_BUILDER_ROLE_ARCHIDEKT_TAGS"), ctx);
+  vm.runInContext(block("DECK_BUILDER_PICKS_SCHEMA"), ctx);
+  // The handler answers through jsonResponse; a plain object is enough here.
+  ctx.jsonResponse = (body, status = 200) => ({ body, status });
   vm.runInContext([
+    "deckBuilderSearchTags", "deckBuilderPicksPrompt", "deckBuilderValidatePicks", "deckBuilderFallbackPicks", "handleDeckBuilderCollectionPicks",
     "scryfallFetch", "scryfallBackingOff", "recordScryfallBackoff", "kvGetJson",
     "edhrecJson", "deckBuilderThemes", "hasCardlists", "deckBuilderPages", "deckBuilderPrimaryType", "deckBuilderNameKey", "scryfallCollection", "buildDeckBuilderCandidates", "scryfallSearchOracleIds", "deckBuilderTags", "parseSpellbookCombos",
     "scryfallRoleSearch", "deckBuilderIdentityKey", "deckBuilderRoleTags", "deckBuilderKeywordRoles", "deckBuilderCardRoles",
@@ -605,4 +612,178 @@ test("the theme is validated, gets its own cache key, and old cached answers get
   const s = sandbox(async () => json(200, {}));
   for (const bad of ["../x", "Infect", "a b", "x/y", ""]) assert.equal(s.DECK_BUILDER_THEME_RE.test(bad), false, bad);
   assert.ok(s.DECK_BUILDER_THEME_RE.test("plus-1-plus-1-counters"));
+});
+
+// ---- "What are you looking for?": picks from the player's own collection ----
+const OID = n => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+
+test("a request becomes Archidekt tags: roles map to their tags, other words are tried as tags", () => {
+  const s = sandbox(async () => json(200, {}));
+  assert.deepEqual([...s.deckBuilderSearchTags(["draw"], "more card draw please")], ["draw", "card advantage"]);
+  assert.deepEqual([...s.deckBuilderSearchTags(["wipe"], "")], ["sweeper", "board wipe", "wrath"]);
+  assert.deepEqual([...s.deckBuilderSearchTags([], "lots of tokens and lifegain")], ["lots", "tokens", "token", "lifegain"].filter(t => t !== "lots"));
+  assert.equal(s.deckBuilderSearchTags([], "more cards please").length, 0, "nothing worth searching");
+});
+
+const SHORTLIST = [
+  { oracleId: OID(1), name: "Phyrexian Arena", typeLine: "Enchantment", cmc: 3, tags: ["draw"], matched: ["draw", "card advantage"], text: "At the beginning of your upkeep, you draw a card and you lose 1 life.", qty: 1, decks: [] },
+  { oracleId: OID(2), name: "Mulldrifter", typeLine: "Creature Elemental", cmc: 5, tags: ["draw"], matched: ["draw"], text: "When Mulldrifter enters, draw two cards.", qty: 2, decks: ["Old Deck"] },
+  { oracleId: OID(3), name: "Night's Whisper", typeLine: "Sorcery", cmc: 2, tags: ["draw"], matched: ["draw"], text: "You draw two cards and you lose 2 life.", qty: 1, decks: [] },
+];
+const DECK = [
+  { oracleId: OID(10), name: "Divination", roles: ["draw"] },
+  { oracleId: OID(11), name: "Llanowar Elves", roles: ["ramp"] },
+];
+
+test("the prompt names the commander, the request, the deck and the owned shortlist", () => {
+  const s = sandbox(async () => json(200, {}));
+  const [system, user] = s.deckBuilderPicksPrompt({ commanders: ["Atraxa, Praetors' Voice"], bracket: 3, requestText: "more card draw", deck: DECK, shortlist: SHORTLIST, max: 6 });
+  assert.equal(system.role, "system");
+  assert.match(system.content, /Only choose from OWNED/);
+  assert.match(user.content, /Commander: Atraxa, Praetors' Voice/);
+  assert.match(user.content, /The player asked: more card draw/);
+  assert.match(user.content, /Divination \[draw\]/);
+  assert.match(user.content, /Phyrexian Arena \| Enchantment \| mv 3 \| tags: draw \| At the beginning/);
+});
+
+test("AI picks are validated: only shortlist cards, each once, replacements only from the deck", () => {
+  const s = sandbox(async () => json(200, {}));
+  const answer = { response: { picks: [
+    { name: "phyrexian arena", why: "Steady draw every turn.", replace: "Divination" },
+    { name: "Black Lotus", why: "Invented.", replace: "" },
+    { name: "Mulldrifter", why: "Draws two.", replace: "Divination" },
+    { name: "Phyrexian Arena", why: "Duplicate.", replace: "" },
+    { name: "Night's Whisper", why: "Cheap draw.", replace: "Not In Deck" },
+  ] } };
+  const out = s.deckBuilderValidatePicks(answer, SHORTLIST, DECK);
+  assert.deepEqual([...out.map(p => p.name)], ["Phyrexian Arena", "Mulldrifter", "Night's Whisper"]);
+  assert.deepEqual({ ...out[0].replace }, { oracleId: OID(10), name: "Divination" });
+  assert.equal(out[1].replace, null, "Divination is already being replaced");
+  assert.equal(out[2].replace, null, "a replacement not in the deck is dropped");
+  assert.equal(out[0].why, "Steady draw every turn.");
+  // A JSON string answer works too; an unreadable one is null (fall back), an empty list is [].
+  assert.equal(s.deckBuilderValidatePicks(JSON.stringify({ picks: [{ name: "Mulldrifter", why: "x" }] }), SHORTLIST, DECK).length, 1);
+  assert.equal(s.deckBuilderValidatePicks({ response: "not json" }, SHORTLIST, DECK), null);
+  assert.equal(s.deckBuilderValidatePicks({ response: { nope: 1 } }, SHORTLIST, DECK), null);
+  assert.equal(s.deckBuilderValidatePicks({ response: { picks: [] } }, SHORTLIST, DECK).length, 0);
+});
+
+// The whole route, with the trading app, Scryfall and the AI faked.
+function picksSandbox({ ai, search, scryfall }) {
+  const calls = { search: null, scryfall: null, ai: null };
+  const s = sandbox(async (url, init) => {
+    if (url.includes("/api/internal/collection-search")) {
+      calls.search = JSON.parse(init.body);
+      return json(200, search);
+    }
+    if (url.includes("/cards/collection")) {
+      calls.scryfall = JSON.parse(init.body);
+      return json(200, scryfall);
+    }
+    // deckBuilderTags' Tagger searches: no mass land denial / extra turns.
+    return json(200, { has_more: false, data: [] });
+  });
+  s.SCRYFALL_THROTTLE.backoffUntil = 0;
+  s.env.COLLECTION_BRIDGE_KEY = "test-key";
+  if (ai) s.env.AI = { run: async (model, input) => { calls.ai = { model, input }; return ai(); } };
+  return { s, calls };
+}
+const scryCard = (n, name, extra = {}) => ({
+  id: `print-${n}`, oracle_id: OID(n), name, type_line: extra.type_line || "Enchantment", cmc: 3,
+  color_identity: extra.color_identity || ["B"], legalities: { commander: extra.legal === false ? "banned" : "legal" },
+  prices: { usd: "1.50" }, game_changer: !!extra.game_changer, oracle_text: extra.oracle_text || "Draw a card.",
+});
+const picksRequest = (more = {}) => ({
+  json: async () => ({
+    request: "more card draw", commanders: ["Atraxa, Praetors' Voice"], colorIdentity: "WUBG", bracket: 3,
+    roles: ["draw"], deck: DECK, exclude: [OID(20)], ...more,
+  }),
+});
+
+test("the route: search the collection, let the AI pick, check every pick with Scryfall", async () => {
+  const { s, calls } = picksSandbox({
+    search: { connected: true, cards: SHORTLIST },
+    ai: async () => ({ response: { picks: [
+      { name: "Phyrexian Arena", why: "Steady draw.", replace: "Divination" },
+      { name: "Mulldrifter", why: "Draws two.", replace: "" },
+      { name: "Night's Whisper", why: "Cheap draw.", replace: "" },
+    ] } }),
+    scryfall: { data: [
+      scryCard(1, "Phyrexian Arena", { oracle_text: "At the beginning of your upkeep, you draw a card and you lose 1 life." }),
+      scryCard(2, "Mulldrifter", { type_line: "Creature — Elemental", color_identity: ["U"], oracle_text: "When this creature enters, draw two cards." }),
+      scryCard(3, "Night's Whisper", { legal: false }),
+    ] },
+  });
+  const res = await s.handleDeckBuilderCollectionPicks(picksRequest(), s.env, s.ctx, { discordUserId: "123456789012" });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.checked, true);
+  assert.equal(res.body.source, "ai");
+  assert.equal(res.body.model, "@cf/meta/llama-3.3-70b-instruct-fp8-fast");
+  // The search asked for the signed-in player only, in the commander's colours, without the deck's cards.
+  assert.equal(calls.search.discordId, "123456789012");
+  assert.equal(calls.search.colorIdentity, "WUBG");
+  assert.deepEqual(calls.search.tags, ["draw", "card advantage"]);
+  assert.ok(calls.search.exclude.includes(OID(10)) && calls.search.exclude.includes(OID(20)));
+  assert.equal(calls.ai.input.response_format.type, "json_schema");
+  // Night's Whisper isn't Commander-legal (in this fake), so it's dropped.
+  assert.deepEqual([...res.body.picks.map(p => p.name)], ["Phyrexian Arena", "Mulldrifter"]);
+  const arena = res.body.picks[0];
+  assert.equal(arena.type, "enchantment");
+  assert.equal(arena.price, 1.5);
+  assert.ok(arena.roles.includes("draw"));
+  assert.deepEqual({ ...arena.replace }, { oracleId: OID(10), name: "Divination" });
+  assert.equal(res.body.picks[1].type, "creature");
+});
+
+test("a pick outside the commander's colours is dropped", async () => {
+  const { s } = picksSandbox({
+    search: { connected: true, cards: SHORTLIST.slice(0, 1) },
+    ai: async () => ({ response: { picks: [{ name: "Phyrexian Arena", why: "x" }] } }),
+    scryfall: { data: [scryCard(1, "Phyrexian Arena", { color_identity: ["R"] })] },
+  });
+  const res = await s.handleDeckBuilderCollectionPicks(picksRequest(), s.env, s.ctx, { discordUserId: "123456789012" });
+  assert.equal(res.body.picks.length, 0);
+});
+
+test("without the AI (failed or unreadable) the best tag matches come back, labelled", async () => {
+  for (const ai of [async () => { throw new Error("daily allocation used up"); }, async () => ({ response: "garbled" }), null]) {
+    const { s } = picksSandbox({
+      search: { connected: true, cards: SHORTLIST },
+      ai,
+      scryfall: { data: [scryCard(1, "Phyrexian Arena"), scryCard(2, "Mulldrifter", { color_identity: ["U"] }), scryCard(3, "Night's Whisper")] },
+    });
+    const res = await s.handleDeckBuilderCollectionPicks(picksRequest(), s.env, s.ctx, { discordUserId: "123456789012" });
+    assert.equal(res.body.source, "tags");
+    assert.equal(res.body.model, null);
+    assert.equal(res.body.picks.length, 3);
+    assert.match(res.body.picks[0].why, /Archidekt tags it draw, card advantage/);
+    assert.equal(res.body.picks[0].replace, null);
+  }
+});
+
+test("an AI that finds nothing suitable is believed, not overridden", async () => {
+  const { s } = picksSandbox({
+    search: { connected: true, cards: SHORTLIST },
+    ai: async () => ({ response: { picks: [] } }),
+    scryfall: { data: [] },
+  });
+  const res = await s.handleDeckBuilderCollectionPicks(picksRequest(), s.env, s.ctx, { discordUserId: "123456789012" });
+  assert.equal(res.body.source, "ai");
+  assert.equal(res.body.picks.length, 0);
+});
+
+test("no linked collection, nothing to search, or a bad request get a plain answer", async () => {
+  let { s } = picksSandbox({ search: { connected: false, reason: "no-archidekt" }, ai: null, scryfall: {} });
+  let res = await s.handleDeckBuilderCollectionPicks(picksRequest(), s.env, s.ctx, { discordUserId: "123456789012" });
+  assert.deepEqual([res.body.checked, res.body.reason], [false, "no-archidekt"]);
+  ({ s } = picksSandbox({ search: {}, ai: null, scryfall: {} }));
+  res = await s.handleDeckBuilderCollectionPicks(picksRequest({ request: "more cards please", roles: [] }), s.env, s.ctx, { discordUserId: "1" });
+  assert.equal(res.body.reason, "nothing-to-search");
+  res = await s.handleDeckBuilderCollectionPicks(picksRequest({ bracket: 9 }), s.env, s.ctx, { discordUserId: "1" });
+  assert.equal(res.status, 400);
+});
+
+test("the relay has its Workers AI binding", () => {
+  const toml = fs.readFileSync(path.join(__dirname, "..", "cloudflare-worker", "wrangler.toml"), "utf8");
+  assert.match(toml, /\[ai\]\s*\nbinding = "AI"/);
 });

@@ -11177,6 +11177,12 @@ const deckBuilderUi = {
   // undefined while the request is out (the row reads "checking").
   combos: null,
   comboTimer: null,
+  // Picks from the player's own collection for the request box (POST
+  // /deck-builder/collection-picks): { key, answer } -- answer undefined
+  // while the request is out -- and the picks the player added, by oracle
+  // id. One search per request + commander + bracket: an AI call each.
+  picks: null,
+  picksAdded: new Map(),
   view: "role",     // "role" | "type": how the card list is grouped
   // The player's swaps, as buildDeck's opts.pinned / opts.excluded (oracle
   // ids). Kept across budget and toggle changes; cleared by a new build or
@@ -11235,6 +11241,152 @@ function updateDeckBuilderRequestReadback() {
       ? `Not understood: ${quoted}. Try words like “more removal”, “less draw”, “cards I own”, “under $50”, or one of the themes above.`
       : `Not read yet: ${quoted}. If it's one of the commander's EDHREC themes, Build will pick it up.`));
   }
+}
+
+// ---- Picks from the player's own collection ----
+// After a build with something in the request box, the relay searches the
+// player's Archidekt collection for it (cards EDHREC doesn't list), lets
+// Cloudflare Workers AI pick the ones that suit the commander, and checks
+// them (handleDeckBuilderCollectionPicks in relay.js). Each is offered with
+// its reason and the card it would replace; "Add to deck" makes it a swap.
+const DECK_BUILDER_PICKS_URL = RELAY_BASE_URL + "/deck-builder/collection-picks";
+
+// One search per request + commander(s) + bracket.
+function deckBuilderPicksKey() {
+  const data = deckBuilderUi.data;
+  const text = (document.getElementById("db-request") || {}).value || "";
+  if (!data || !text.trim()) return null;
+  return JSON.stringify([text.trim(), deckCommanders(data).map(c => c.name), data.bracket]);
+}
+
+async function requestCollectionPicks() {
+  const data = deckBuilderUi.data;
+  const key = deckBuilderPicksKey();
+  const build = deckBuilderUi.lastBuild;
+  if (!data || !key || !build) return;
+  if (deckBuilderUi.picks && deckBuilderUi.picks.key === key) return;
+  deckBuilderUi.picks = { key, answer: undefined };
+  renderDeckBuild();
+  const req = deckBuilderRequest();
+  // Only roles the request asked MORE of are worth searching for.
+  const roles = Object.keys(req.roleMinimums).filter(r => req.roleMinimums[r] > (ROLE_MINIMUMS[r] || 0));
+  let answer;
+  try {
+    const res = await fetch(DECK_BUILDER_PICKS_URL, {
+      method: "POST",
+      cache: "no-store",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: document.getElementById("db-request").value.trim(),
+        commanders: deckCommanders(data).map(c => c.name),
+        colorIdentity: combinedIdentity(deckCommanders(data)),
+        bracket: data.bracket,
+        roles,
+        deck: build.cards.map(c => ({ oracleId: c.oracleId, name: c.name, roles: c.roles || [] })),
+        exclude: (data.candidates || []).map(c => c.oracleId).filter(Boolean).slice(0, 1000),
+      }),
+    });
+    answer = res.ok ? await res.json() : { checked: false, reason: `HTTP ${res.status}` };
+  } catch (err) {
+    answer = { checked: false, reason: "unreachable" };
+  }
+  if (!deckBuilderUi.picks || deckBuilderUi.picks.key !== key) return;
+  deckBuilderUi.picks.answer = answer;
+  renderDeckBuild();
+}
+
+function deckBuilderPicksSection(build) {
+  const text = ((document.getElementById("db-request") || {}).value || "").trim();
+  if (!text) return null;
+  const section = makeEl("section", "db-picks");
+  section.setAttribute("aria-labelledby", "db-picks-title");
+  const title = makeEl("h4", "db-group-title", "From your collection");
+  title.id = "db-picks-title";
+  section.append(title);
+  const state = deckBuilderUi.picks;
+  const key = deckBuilderPicksKey();
+  const searchButton = label => {
+    const b = makeEl("button", "db-picks-search", label);
+    b.type = "button";
+    b.addEventListener("click", () => {
+      deckBuilderUi.picks = null;
+      requestCollectionPicks();
+    });
+    return b;
+  };
+
+  if (!state || state.key !== key) {
+    section.append(makeEl("p", "hint db-picks-note", "Look through your Archidekt collection for what you asked, including cards EDHREC doesn't suggest for this commander."), searchButton("Search my collection"));
+    return section;
+  }
+  const answer = state.answer;
+  if (answer === undefined) {
+    const p = makeEl("p", "hint db-picks-note", "Looking through your collection…");
+    p.setAttribute("aria-live", "polite");
+    section.append(p);
+    return section;
+  }
+  if (!answer.checked) {
+    const why = {
+      "no-account": "Link your Archidekt account in the Archidekt Trading App to search your collection.",
+      "no-archidekt": "Link your Archidekt account in the Archidekt Trading App to search your collection.",
+      "nothing-to-search": "Nothing in your request to search your collection for. Try words like “more card draw”, “removal” or “tokens”.",
+    }[answer.reason] || "Your collection couldn't be searched just now.";
+    section.append(makeEl("p", "hint db-picks-note", why));
+    if (!["no-account", "no-archidekt", "nothing-to-search"].includes(answer.reason)) section.append(searchButton("Try again"));
+    return section;
+  }
+  const picks = answer.picks || [];
+  if (!picks.length) {
+    const searched = (answer.searched || []).slice(0, 4).join(", ");
+    section.append(makeEl("p", "hint db-picks-note", `Nothing else in your collection fits “${text}”${searched ? ` (searched for ${searched})` : ""}.`));
+    return section;
+  }
+  section.append(makeEl("p", "hint db-picks-note", answer.source === "ai"
+    ? "From your Archidekt collection, picked for this commander by Cloudflare Workers AI. These aren't on EDHREC's list for it."
+    : "From your Archidekt collection, matched by Archidekt's tags (the AI couldn't answer this time)."));
+  const inDeck = new Map(build.cards.map(c => [c.oracleId, c]));
+  const list = makeEl("ul", "db-pick-list");
+  for (const pick of picks) {
+    const li = makeEl("li", "db-pick");
+    const main = makeEl("div", "db-row-main");
+    main.append(deckBuilderName(pick), makeEl("span", "db-row-why", pick.why || ""));
+    const replaceCard = pick.replace && inDeck.get(pick.replace.oracleId);
+    if (replaceCard) main.append(makeEl("span", "db-row-why", `Replaces ${replaceCard.name}`));
+    const qty = Number(pick.qty) || 1;
+    const decks = pick.decks || [];
+    const chip = decks.length >= qty
+      ? makeEl("span", "db-chip db-chip-deck", `In ${decks[0]}${decks.length > 1 ? ` +${decks.length - 1}` : ""}`)
+      : makeEl("span", "db-chip db-chip-own", "Binder");
+    const head = makeEl("div", "db-pick-head");
+    head.append(main, chip);
+    li.append(head);
+    const added = inDeck.has(pick.oracleId);
+    const blocked = added ? null : pickBlockReason(build, pick, replaceCard || null);
+    const btn = makeEl("button", "db-pick-add", added ? "In the deck" : "Add to deck");
+    btn.type = "button";
+    btn.dataset.focusKey = `pick|${pick.oracleId}`;
+    if (added) btn.disabled = true;
+    else if (blocked) {
+      btn.disabled = true;
+      const note = makeEl("span", "db-swap-note db-swap-blocked", `Not allowed: ${blocked}.`);
+      note.id = `db-pick-note-${pick.oracleId}`;
+      btn.setAttribute("aria-describedby", note.id);
+      li.append(note);
+    } else {
+      btn.addEventListener("click", () => {
+        deckBuilderUi.picksAdded.set(pick.oracleId, pick);
+        deckBuilderUi.swaps = applySwap(deckBuilderUi.swaps, replaceCard ? replaceCard.oracleId : null, pick.oracleId);
+        deckBuilderUi.focusKey = `pick|${pick.oracleId}`;
+        setDeckBuilderStatus(`Added ${pick.name}${replaceCard ? ` in place of ${replaceCard.name}` : ""}.`);
+        renderDeckBuild();
+      });
+    }
+    li.append(btn);
+    list.append(li);
+  }
+  section.append(list);
+  return section;
 }
 
 // ---- Theme picker ----
@@ -11525,6 +11677,8 @@ async function runDeckBuild(opts = {}) {
     deckBuilderUi.combos = null;
     deckBuilderUi.swaps = { pinned: [], excluded: [] };
     deckBuilderUi.openSwap = null;
+    deckBuilderUi.picks = null;
+    deckBuilderUi.picksAdded = new Map();
     setDeckBuilderStatus("");
     renderDeckBuild();
     updateDeckBuilderRequestReadback();
@@ -11539,6 +11693,8 @@ async function runDeckBuild(opts = {}) {
         return;
       }
     }
+    // The request box: look through the player's own collection for it.
+    requestCollectionPicks();
   } catch (err) {
     setDeckBuilderStatus(`Couldn't build the deck (${err.message}). Try again in a moment.`, "error");
   } finally {
@@ -11812,7 +11968,8 @@ function deckBuilderRoleGroups(build, ctx) {
 }
 
 function renderDeckBuild() {
-  const data = deckBuilderUi.data;
+  // Picks the player added from their collection join the pool, owned.
+  const data = deckBuilderUi.data ? mergeCollectionPicks(deckBuilderUi.data, [...deckBuilderUi.picksAdded.values()]) : null;
   const result = document.getElementById("db-result");
   if (!data || !result) return;
   // Every render replaces the rows -- including the ones nobody asked for,
@@ -11833,6 +11990,8 @@ function renderDeckBuild() {
     weights: request.weights,
   };
   const build = buildDeck(data, buildOpts);
+  // The deck the collection search compares against (requestCollectionPicks).
+  deckBuilderUi.lastBuild = build;
 
   const head = makeEl("div", "db-head");
   const commanders = deckCommanders(data);
@@ -11988,6 +12147,7 @@ function renderDeckBuild() {
   }
 
   const roleSummary = deckBuilderRoleSummary(build);
+  const picksSection = deckBuilderPicksSection(build);
   const viewToggle = document.getElementById("db-view-toggle");
   if (viewToggle) viewToggle.hidden = false;
   // What a swap panel needs to list alternatives without a request.
@@ -12028,6 +12188,7 @@ function renderDeckBuild() {
     reset.type = "button";
     reset.addEventListener("click", () => {
       deckBuilderUi.swaps = { pinned: [], excluded: [] };
+      deckBuilderUi.picksAdded = new Map();
       deckBuilderUi.openSwap = null;
       setDeckBuilderStatus("Swaps cleared: back to the builder's picks.");
       renderDeckBuild();
@@ -12051,6 +12212,7 @@ function renderDeckBuild() {
     checks,
     ...(comboNote ? [comboNote] : []),
     roleSummary,
+    ...(picksSection ? [picksSection] : []),
     ...(viewToggle ? [viewToggle] : []),
     groups,
     actions,

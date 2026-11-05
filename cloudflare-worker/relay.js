@@ -3049,6 +3049,253 @@ async function handleDeckBuilderCombos(request) {
   return jsonResponse(answer, 200, { "Cache-Control": "no-store" });
 }
 
+// ---------- POST /deck-builder/collection-picks ("What are you looking for?") ----------
+// The player asked for something -- "more card draw", "tokens" -- and this
+// looks past EDHREC's list into their own Archidekt collection for it:
+//   1. the request becomes Archidekt tags (deckBuilderSearchTags);
+//   2. archidekt-trading-app's POST /api/internal/collection-search returns
+//      the player's own cards in the commander's colours with those tags,
+//      leaving out what the builder already has;
+//   3. Cloudflare Workers AI (DECK_BUILDER_AI_MODEL, JSON mode) picks the
+//      few that suit this commander, with a reason and the deck card each
+//      would replace;
+//   4. every pick is checked: it must be one of the cards the search
+//      returned, its replacement one of the deck's cards, and Scryfall must
+//      confirm it's Commander-legal and inside the colour identity. The
+//      bracket's own rules are applied in the page, as for every card.
+// When the AI can't answer (the free daily allocation used up, a timeout,
+// an answer that doesn't fit the schema), the best tag matches come back
+// instead, labelled source "tags", so the box still does something.
+//
+// Model: Llama 3.3 70B is on Workers AI's JSON-mode list and is the
+// strongest model there (checked on developers.cloudflare.com, Nov 2026).
+// At ~5k tokens in and ~600 out a call is ~260 neurons, so the free 10,000
+// a day covers ~35-40 AI-assisted builds.
+const DECK_BUILDER_AI_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+const COLLECTION_PICKS_MAX = 6;
+const COLLECTION_PICKS_SHORTLIST = 60;
+// Build a Deck's roles as Archidekt tags (Rhystic Study: "draw", "card
+// advantage"; Cultivate: "ramp"; Wrath of God: oTags "sweeper"; Lightning
+// Greaves: "protection" -- checked on archidekt.com/api/cards/v2).
+const DECK_BUILDER_ROLE_ARCHIDEKT_TAGS = {
+  ramp: ["ramp"],
+  draw: ["draw", "card advantage"],
+  removal: ["removal"],
+  wipe: ["sweeper", "board wipe", "wrath"],
+  protection: ["protection"],
+};
+// Words in a request that are never themselves a tag worth searching.
+const DECK_BUILDER_REQUEST_STOPWORDS = new Set(("more less lots plenty some want need with without that this have from into focus cards card deck decks good great play make more much many really very also maybe like only just please under over dollars bucks cheap cheaper budget mostly own owned collection binder stuff things thing help helps every each other what which when where them they their there these those would could should about around little extra heavy light fewer most least lean on in of to the and for my me it is be can not no").split(" "));
+
+// The tags to search the collection for: each role's Archidekt tags, plus
+// any other plain word from the request ("tokens", "lifegain", "mill") as
+// a tag of its own -- Archidekt tags are mostly such words, and one that
+// matches nothing just finds nothing.
+function deckBuilderSearchTags(roles, requestText) {
+  const tags = [];
+  for (const role of roles || []) for (const t of DECK_BUILDER_ROLE_ARCHIDEKT_TAGS[role] || []) tags.push(t);
+  const roleWords = new Set(["ramp", "draw", "removal", "wipe", "wipes", "board", "protection", "interaction", "sweepers", "wraths", "rocks", "dorks", "advantage", "answers", "hexproof", "indestructible", "acceleration"]);
+  for (const w of String(requestText || "").toLowerCase().match(/[a-z][a-z'-]{3,}/g) || []) {
+    if (DECK_BUILDER_REQUEST_STOPWORDS.has(w) || roleWords.has(w)) continue;
+    tags.push(w);
+    // "tokens" is tagged "token" on some cards and "tokens" on others.
+    if (w.endsWith("s") && w.length > 4) tags.push(w.slice(0, -1));
+  }
+  return [...new Set(tags)].slice(0, 20);
+}
+
+// The messages for the AI: who the deck is for, what was asked, the deck as
+// it stands, and the shortlist to choose from -- names it must copy exactly.
+function deckBuilderPicksPrompt({ commanders, bracket, requestText, deck, shortlist, max }) {
+  const deckLines = deck.map(c => `${c.name}${c.roles && c.roles.length ? ` [${c.roles.join(", ")}]` : ""}`).join("\n");
+  const ownedLines = shortlist.map(c => `${c.name} | ${c.typeLine || "?"} | mv ${c.cmc ?? "?"} | tags: ${(c.tags || []).slice(0, 6).join(", ")} | ${c.text || ""}`).join("\n");
+  return [
+    {
+      role: "system",
+      content: `You help build Magic: The Gathering Commander decks. The player owns the cards under OWNED. Choose at most ${max} of them that best serve what the player asked for, in a deck for this commander at this bracket. Prefer cards that work with the commander's plan. For each pick give: "name" copied exactly from OWNED, "why" in under 20 words, and "replace" copied exactly from DECK -- the weakest deck card it should replace, ideally one doing a similar job -- or "" if none fits. Only choose from OWNED. If nothing in OWNED suits the request, return an empty list.`,
+    },
+    {
+      role: "user",
+      content: `Commander: ${commanders.join(" + ")}\nBracket: ${bracket}\nThe player asked: ${requestText}\n\nDECK (current picks):\n${deckLines}\n\nOWNED (choose from these):\n${ownedLines}`,
+    },
+  ];
+}
+
+const DECK_BUILDER_PICKS_SCHEMA = {
+  type: "object",
+  properties: {
+    picks: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: { name: { type: "string" }, why: { type: "string" }, replace: { type: "string" } },
+        required: ["name", "why"],
+      },
+    },
+  },
+  required: ["picks"],
+};
+
+// The AI's answer -> picks we can trust: names that are really on the
+// shortlist (case-insensitive), each once, at most `max`; a replacement only
+// if it's really in the deck. Workers AI's JSON mode returns the object on
+// `response`, but a string is parsed too. null means the answer couldn't be
+// read at all (the caller falls back to tag matches); [] means the AI read
+// the list and found nothing that suits.
+function deckBuilderValidatePicks(answer, shortlist, deck, max = COLLECTION_PICKS_MAX) {
+  let body = answer && typeof answer === "object" && "response" in answer ? answer.response : answer;
+  if (typeof body === "string") {
+    try { body = JSON.parse(body); } catch { return null; }
+  }
+  if (!body || !Array.isArray(body.picks)) return null;
+  const list = body.picks;
+  const byName = new Map(shortlist.map(c => [String(c.name).toLowerCase(), c]));
+  const deckByName = new Map(deck.map(c => [String(c.name).toLowerCase(), c]));
+  const out = [];
+  const seen = new Set();
+  const replaced = new Set();
+  for (const p of list) {
+    const card = p && byName.get(String(p.name || "").trim().toLowerCase());
+    if (!card || seen.has(card.oracleId)) continue;
+    seen.add(card.oracleId);
+    const rep = deckByName.get(String(p.replace || "").trim().toLowerCase());
+    const replace = rep && !replaced.has(rep.oracleId) ? { oracleId: rep.oracleId, name: rep.name } : null;
+    if (replace) replaced.add(replace.oracleId);
+    out.push({ ...card, why: String(p.why || "").trim().slice(0, 160), replace });
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+// Without the AI: the cards that matched the most tags, best EDHREC rank
+// first (the trading app's own order), each with the tags it matched.
+function deckBuilderFallbackPicks(shortlist, max = COLLECTION_PICKS_MAX) {
+  return shortlist.slice(0, max).map(c => ({
+    ...c,
+    why: `Archidekt tags it ${(c.matched || []).slice(0, 3).join(", ") || "as a match"}.`,
+    replace: null,
+  }));
+}
+
+async function handleDeckBuilderCollectionPicks(request, env, ctx, session) {
+  const body = await request.json().catch(() => null);
+  const clean = (v, n = 200) => (typeof v === "string" ? v.trim().slice(0, n) : "");
+  const requestText = clean(body && body.request, 300);
+  const commanders = (Array.isArray(body && body.commanders) ? body.commanders : []).map(v => clean(v)).filter(Boolean).slice(0, 2);
+  const identity = String((body && body.colorIdentity) || "").toUpperCase();
+  const bracket = Number(body && body.bracket);
+  const roles = (Array.isArray(body && body.roles) ? body.roles : []).filter(r => r in DECK_BUILDER_ROLE_ARCHIDEKT_TAGS);
+  const uidOk = v => typeof v === "string" && /^[0-9a-f-]{36}$/i.test(v);
+  const deck = (Array.isArray(body && body.deck) ? body.deck : []).slice(0, 100)
+    .filter(c => c && uidOk(c.oracleId) && clean(c.name))
+    .map(c => ({ oracleId: c.oracleId.toLowerCase(), name: clean(c.name), roles: (Array.isArray(c.roles) ? c.roles : []).filter(r => r in DECK_BUILDER_ROLE_ARCHIDEKT_TAGS) }));
+  const exclude = (Array.isArray(body && body.exclude) ? body.exclude : []).filter(uidOk).slice(0, 1000);
+  if (!requestText || !commanders.length || !/^[WUBRG]{0,5}$/.test(identity) || !DECK_BUILDER_BRACKET_SLUGS[bracket]) {
+    return jsonResponse({ error: "Send the request, the commander(s), their colour identity and the bracket." }, 400);
+  }
+  const tags = deckBuilderSearchTags(roles, requestText);
+  if (!tags.length) return jsonResponse({ checked: false, reason: "nothing-to-search" }, 200, { "Cache-Control": "no-store" });
+  if (!env.COLLECTION_BRIDGE_KEY) return jsonResponse({ checked: false, reason: "bridge-off" }, 200, { "Cache-Control": "no-store" });
+
+  // 2. The player's own matching cards.
+  let found;
+  try {
+    const res = await fetch(`${ARCHIDEKT_TRADING_APP_BASE_URL}/api/internal/collection-search`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Collection-Bridge-Key": env.COLLECTION_BRIDGE_KEY },
+      body: JSON.stringify({
+        discordId: String(session.discordUserId || ""),
+        colorIdentity: identity,
+        tags,
+        exclude: [...new Set([...exclude, ...deck.map(c => c.oracleId)])],
+        limit: COLLECTION_PICKS_SHORTLIST,
+      }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    found = await res.json();
+  } catch (err) {
+    console.error(`collection search failed: ${err.message}`);
+    return jsonResponse({ checked: false, reason: "unavailable", searched: tags }, 200, { "Cache-Control": "no-store" });
+  }
+  if (!found || found.connected === false) return jsonResponse({ checked: false, reason: (found && found.reason) || "no-account", searched: tags }, 200, { "Cache-Control": "no-store" });
+  const shortlist = (found.cards || []).filter(c => c && uidOk(c.oracleId) && c.name).slice(0, COLLECTION_PICKS_SHORTLIST);
+  if (!shortlist.length) return jsonResponse({ checked: true, source: "tags", searched: tags, picks: [] }, 200, { "Cache-Control": "no-store" });
+
+  // 3. The AI's picks, or the best tag matches without it.
+  let picks = [];
+  let source = "tags";
+  if (env.AI) {
+    try {
+      const answer = await env.AI.run(DECK_BUILDER_AI_MODEL, {
+        messages: deckBuilderPicksPrompt({ commanders, bracket, requestText, deck, shortlist, max: COLLECTION_PICKS_MAX }),
+        response_format: { type: "json_schema", json_schema: DECK_BUILDER_PICKS_SCHEMA },
+        max_tokens: 900,
+      });
+      const valid = deckBuilderValidatePicks(answer, shortlist, deck);
+      if (valid) {
+        picks = valid;
+        source = "ai";
+      } else {
+        console.error("Workers AI picks: answer didn't fit the schema");
+      }
+    } catch (err) {
+      console.error(`Workers AI picks failed: ${err.message}`);
+    }
+  }
+  if (source !== "ai") picks = deckBuilderFallbackPicks(shortlist);
+
+  // 4. Scryfall's word on each pick: legal, in colours, and its card facts
+  // (type, mana value, price, Game Changer, roles) for the builder.
+  if (picks.length) {
+    let scry = null;
+    try {
+      const res = await scryfallFetch(`${SCRYFALL_API_BASE}/cards/collection`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ identifiers: picks.map(p => ({ oracle_id: p.oracleId })) }),
+      }, { essential: true });
+      if (res.ok) scry = await res.json();
+    } catch (err) {
+      console.error(`Scryfall lookup for picks failed: ${err.message}`);
+    }
+    const tagsSets = await deckBuilderTags(env, ctx);
+    const byOracle = new Map((scry && scry.data || []).map(c => [String(c.oracle_id || c.card_faces?.[0]?.oracle_id || "").toLowerCase(), c]));
+    const num = v => (v != null && Number.isFinite(Number(v)) ? Number(v) : null);
+    picks = picks.flatMap(p => {
+      const c = byOracle.get(p.oracleId);
+      if (!c) return [];
+      if (c.legalities && c.legalities.commander !== "legal") return [];
+      if ((c.color_identity || []).some(l => !identity.includes(l))) return [];
+      const typeLine = c.type_line || c.card_faces?.[0]?.type_line || "";
+      const faces = c.card_faces && c.card_faces.length
+        ? c.card_faces.map(f => ({ text: f.oracle_text || "", typeLine: f.type_line || "" }))
+        : [{ text: c.oracle_text || "", typeLine }];
+      const roles = new Set(deckBuilderKeywordRoles(faces));
+      for (const [role, roleTags] of Object.entries(DECK_BUILDER_ROLE_ARCHIDEKT_TAGS)) {
+        if ((p.matched || []).some(t => roleTags.includes(t))) roles.add(role);
+      }
+      return [{
+        oracleId: p.oracleId,
+        uid: c.id,
+        name: c.name,
+        type: deckBuilderPrimaryType(typeLine),
+        cmc: num(c.cmc),
+        price: num(c.prices?.usd) ?? num(c.prices?.usd_foil) ?? num(c.prices?.usd_etched),
+        gameChanger: !!c.game_changer,
+        massLandDenial: tagsSets ? tagsSets.massLandDenial.has(p.oracleId) : null,
+        extraTurn: tagsSets ? tagsSets.extraTurn.has(p.oracleId) : null,
+        roles: [...roles],
+        why: p.why,
+        replace: p.replace,
+        qty: p.qty ?? null,
+        decks: Array.isArray(p.decks) ? p.decks : [],
+        matched: p.matched || [],
+      }];
+    });
+  }
+  return jsonResponse({ checked: true, source, model: source === "ai" ? DECK_BUILDER_AI_MODEL : null, searched: tags, picks }, 200, { "Cache-Control": "no-store" });
+}
+
 async function handleDeckWinRates(env) {
   let data;
   try {
@@ -5035,6 +5282,10 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/deck-builder/combos") {
       return handleDeckBuilderCombos(request);
+    }
+
+    if (request.method === "POST" && url.pathname === "/deck-builder/collection-picks") {
+      return handleDeckBuilderCollectionPicks(request, env, ctx, session);
     }
 
     if (request.method === "GET" && url.pathname === "/playgroup-games") {

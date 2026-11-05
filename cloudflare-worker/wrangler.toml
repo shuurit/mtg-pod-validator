@@ -11,3 +11,8 @@ id = "77b23dc700d94ad59b05dbc2712dfe63"
 binding = "DB"
 database_name = "mtg-pod-validator-db"
 database_id = "033e3773-25f9-4f6a-ba86-9cb8bbcc5b8e"
+
+# Workers AI -- Build a Deck's "What are you looking for?" picks from the
+# player's own collection (handleDeckBuilderCollectionPicks in relay.js).
+[ai]
+binding = "AI"

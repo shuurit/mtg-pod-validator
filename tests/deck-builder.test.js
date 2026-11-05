@@ -6,6 +6,7 @@ const {
   bracketChecks, comboRequest, comboManaCost, swapOptions, applySwap,
   deckSize, combinedIdentity, pairingOf, secondCommanderKind, canPair, pairOrder,
   humanizeThemeSlug, themeName, themeOptions, parseDeckRequest, requestedMinimum,
+  pickBlockReason, mergeCollectionPicks,
 } = require("../deck-builder.js");
 
 let n = 0;
@@ -818,4 +819,50 @@ test("buildDeck honours a request's minimums, maximums and weights", () => {
   const pinnedWipe = extra.find(c => c.name === "wipe 0");
   const kept = buildDeck(d, { roleMaximums: { wipe: 0 }, pinned: [pinnedWipe.oracleId] });
   assert.ok(kept.cards.some(c => c.name === "wipe 0"));
+});
+
+// ---- Picks from the player's collection ----
+const collectionPick = (name, extra = {}) => ({
+  oracleId: oid(), uid: oid(), name, type: "enchantment", cmc: 3, price: 2, gameChanger: false,
+  massLandDenial: false, extraTurn: false, roles: ["draw"], qty: 1, decks: [], why: "Steady draw.", replace: null, ...extra,
+});
+
+test("an added collection pick joins the pool as an owned card and goes in the deck", () => {
+  const cands = pool({ each: 30 });
+  const d = data(cands, owning(cands));
+  const arena = collectionPick("Phyrexian Arena");
+  const merged = mergeCollectionPicks(d, [arena]);
+  assert.equal(merged.candidates.length, cands.length + 1);
+  assert.equal(d.candidates.length, cands.length, "the relay's answer isn't changed");
+  assert.deepEqual(merged.collection.cards[arena.oracleId], { qty: 1, decks: [] });
+  const target = buildDeck(merged).cards.find(c => c.type === "enchantment" && c.oracleId !== arena.oracleId);
+  const b = buildDeck(merged, { pinned: [arena.oracleId], excluded: [target.oracleId] });
+  const inDeck = b.cards.find(c => c.oracleId === arena.oracleId);
+  assert.ok(inDeck, "in the deck");
+  assert.equal(inDeck.status, "free", "owned, spare copy");
+  assert.equal(inDeck.pinned, true);
+  assert.ok(!b.cards.some(c => c.oracleId === target.oracleId), "the card it replaced is out");
+  assert.equal(b.size, 99);
+  // A pick already among EDHREC's candidates isn't added twice.
+  assert.equal(mergeCollectionPicks(d, [{ ...arena, oracleId: cands[0].oracleId }]).candidates.length, cands.length);
+});
+
+test("a collection pick the bracket won't take says why", () => {
+  const cands = pool({ each: 30 });
+  const b2 = buildDeck(data(cands, owning(cands), 2, { tagsChecked: true }));
+  assert.equal(pickBlockReason(b2, collectionPick("Smothering Tithe", { gameChanger: true }), null), "Bracket 2 allows no Game Changers");
+  assert.equal(pickBlockReason(b2, collectionPick("Armageddon", { massLandDenial: true }), null), "Bracket 2 allows no mass land denial");
+  assert.equal(pickBlockReason(b2, collectionPick("Divination"), null), null);
+  const b1 = buildDeck(data(cands, owning(cands), 1, { tagsChecked: true }));
+  assert.equal(pickBlockReason(b1, collectionPick("Time Warp", { extraTurn: true }), null), "Bracket 1 allows no extra turns");
+  // Replacing a Game Changer with another keeps the count: allowed.
+  const gcs = Array.from({ length: 3 }, (_, i) => card(`GC ${i}`, { type: "instant", synergy: 90, gameChanger: true }));
+  const b3 = buildDeck(data([...gcs, ...cands], owning([...gcs, ...cands]), 3));
+  const gcInDeck = b3.cards.find(c => c.gameChanger);
+  assert.match(pickBlockReason(b3, collectionPick("Rhystic Study", { gameChanger: true }), null), /allows 3 Game Changers, and the deck has 3/);
+  assert.equal(pickBlockReason(b3, collectionPick("Rhystic Study", { gameChanger: true }), gcInDeck), null);
+});
+
+test("applySwap with nothing to replace just adds the pick", () => {
+  assert.deepEqual(applySwap({ pinned: ["a"], excluded: ["b"] }, null, "c"), { pinned: ["a", "c"], excluded: ["b"] });
 });
