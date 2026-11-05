@@ -7369,6 +7369,54 @@ button.db-swap-btn:disabled {
 .db-swap-blocked { color: var(--bad); }
 .db-swap-hint { margin: 0; }
 
+/* "From your collection" (deckBuilderPicksSection in app.js): owned cards
+   the request box found beyond EDHREC's list, each with its reason and an
+   "Add to deck" button. An inset well like the swap panel. */
+.db-picks {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-radius: var(--radius-md);
+  background: var(--bg-accent);
+  border: 1px solid var(--border-soft);
+}
+.db-picks .db-group-title { margin: 0; }
+.db-picks-note { margin: 0; }
+.db-pick-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.db-pick {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+}
+.db-pick-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.db-pick-head .db-row-main { flex: 1 1 0; }
+/* 44px tap targets; a disabled one ("In the deck", or blocked by the
+   bracket with the reason beside it) is dashed so it doesn't rest on colour. */
+.db-pick-add, .db-picks-search {
+  min-height: 44px;
+  justify-self: start;
+}
+.db-pick-add:disabled {
+  cursor: default;
+  color: var(--muted);
+  border-style: dashed;
+  transform: none;
+}
+
 .db-chip {
   flex: 0 0 auto;
   max-width: 48%;

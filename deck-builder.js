@@ -787,30 +787,38 @@ const SWAP_OPTION_COUNT = 5;
 // sharing a role with it when it has one. Each says whether the bracket
 // allows it in place of `card` (blocked: a reason, or null) and which role
 // minimum the trade would drop below (roleNote), which doesn't block it.
-function swapOptions(data, build, card, opts = {}) {
+// Why the bracket won't take `incoming` into `build` in place of `outgoing`
+// (a card leaving the deck, or null when nothing specific goes), or null if
+// it will: the Game Changer cap, mass land denial, the extra-turn limit.
+// Used by swaps and by picks from the player's collection.
+function pickBlockReason(build, incoming, outgoing) {
   const rules = BRACKET_RULES[build.bracket] || BRACKET_RULES[3];
+  const n = build.bracket;
+  const gc = build.cards.filter(c => c.gameChanger).length;
+  const turns = build.cards.filter(c => c.extraTurn).length;
+  if (incoming.gameChanger && !(outgoing && outgoing.gameChanger) && gc >= rules.gameChangers) {
+    return rules.gameChangers === 0
+      ? `Bracket ${n} allows no Game Changers`
+      : `Bracket ${n} allows ${rules.gameChangers} Game Changers, and the deck has ${gc}`;
+  }
+  if (incoming.massLandDenial && !rules.massLandDenial) return `Bracket ${n} allows no mass land denial`;
+  if (incoming.extraTurn && !(outgoing && outgoing.extraTurn) && turns >= rules.extraTurns) {
+    return rules.extraTurns === 0
+      ? `Bracket ${n} allows no extra turns`
+      : `Bracket ${n} allows one extra-turn card (no chaining)`;
+  }
+  return null;
+}
+
+function swapOptions(data, build, card, opts = {}) {
   const inDeck = new Set(build.cards.map(c => c.oracleId));
   const cardRoles = card.roles || [];
   const options = candidatePool(data, opts)
     .filter(c => c.type === card.type && !c.basic && !inDeck.has(c.oracleId) && c.oracleId !== card.oracleId)
     .filter(c => !cardRoles.length || cardRoles.some(r => hasRole(c, r)))
     .slice(0, SWAP_OPTION_COUNT);
-  const n = build.bracket;
-  const gc = build.cards.filter(c => c.gameChanger).length;
-  const turns = build.cards.filter(c => c.extraTurn).length;
   return options.map(c => {
-    let blocked = null;
-    if (c.gameChanger && !card.gameChanger && gc >= rules.gameChangers) {
-      blocked = rules.gameChangers === 0
-        ? `Bracket ${n} allows no Game Changers`
-        : `Bracket ${n} allows ${rules.gameChangers} Game Changers, and the deck has ${gc}`;
-    } else if (c.massLandDenial && !rules.massLandDenial) {
-      blocked = `Bracket ${n} allows no mass land denial`;
-    } else if (c.extraTurn && !card.extraTurn && turns >= rules.extraTurns) {
-      blocked = rules.extraTurns === 0
-        ? `Bracket ${n} allows no extra turns`
-        : `Bracket ${n} allows one extra-turn card (no chaining)`;
-    }
+    const blocked = pickBlockReason(build, c, card);
     const drops = cardRoles.filter(r => !hasRole(c, r) && build.roles && build.roles[r] && build.roles[r].count - 1 < build.roles[r].min);
     const roleNote = drops.length
       ? drops.map(r => `${build.roles[r].label} would drop to ${build.roles[r].count - 1} of ${build.roles[r].min}`).join("; ")
@@ -821,15 +829,54 @@ function swapOptions(data, build, card, opts = {}) {
 
 // One swap applied to the pinned/excluded lists (plain arrays of oracle
 // ids). Swapping out a card the player had pinned unpins it; swapping a
-// card back in un-excludes it.
+// card back in un-excludes it. outId null just adds inId (a collection pick
+// with no particular card to replace: the builder drops its weakest).
 function applySwap(swaps, outId, inId) {
   const pinned = new Set(swaps.pinned || []);
   const excluded = new Set(swaps.excluded || []);
-  pinned.delete(outId);
-  excluded.add(outId);
+  if (outId) {
+    pinned.delete(outId);
+    excluded.add(outId);
+  }
   excluded.delete(inId);
   pinned.add(inId);
   return { pinned: [...pinned], excluded: [...excluded] };
+}
+
+// ---- Picks from the player's collection ----
+// The relay's POST /deck-builder/collection-picks returns owned cards that
+// aren't in EDHREC's list. The ones the player adds join the candidate pool
+// here, owned, so buildDeck, swaps and the bracket checks treat them like
+// any other card. Returns new data; the relay's answer is left untouched.
+function mergeCollectionPicks(data, picks) {
+  const known = new Set((data.candidates || []).map(c => c.oracleId));
+  const extra = (picks || []).filter(p => p && p.oracleId && !known.has(p.oracleId)).map(p => ({
+    uid: p.uid || null,
+    name: p.name,
+    oracleId: p.oracleId,
+    type: p.type || "other",
+    cmc: p.cmc ?? null,
+    price: p.price ?? null,
+    gameChanger: !!p.gameChanger,
+    massLandDenial: !!p.massLandDenial,
+    extraTurn: !!p.extraTurn,
+    roles: p.roles || [],
+    basic: false,
+    synergy: null,
+    inclusion: null,
+    inAverageDeck: false,
+    fromCollection: true,
+  }));
+  if (!extra.length) return data;
+  const cards = { ...((data.collection && data.collection.cards) || {}) };
+  for (const p of picks) {
+    if (p && p.oracleId && !cards[p.oracleId]) cards[p.oracleId] = { qty: Math.max(1, Number(p.qty) || 1), decks: p.decks || [] };
+  }
+  return {
+    ...data,
+    candidates: [...(data.candidates || []), ...extra],
+    collection: { ...(data.collection || {}), cards },
+  };
 }
 
 // Plain "1 Card Name" lines, commander(s) first: the format Archidekt's (and
@@ -853,6 +900,7 @@ function typeOrder(type) {
 if (typeof module !== "undefined") {
   module.exports = {
     DECK_BUILDER_DECK_SIZE, parseDeckRequest, requestedMinimum, humanizeThemeSlug, themeName, themeOptions, deckBuilderSlug, deckCommanders, deckSize, combinedIdentity, pairingOf, secondCommanderKind, canPair, pairOrder,
+    pickBlockReason, mergeCollectionPicks,
     BRACKET_RULES, DEFAULT_WEIGHTS, ROLE_MINIMUMS, ROLE_LABELS, roleCounts, cardStatus, scoreCard, deckTemplate, splitBasics,
     buildDeck, candidatePool, swapOptions, applySwap, SWAP_OPTION_COUNT, bracketChecks, combosCheck, comboManaCost, comboRequest, tagsChecked, deckToText, typeOrder,
   };

@@ -256,6 +256,34 @@ works without one.
 
   A cold build now makes at most ~14 Scryfall requests (~19 subrequests
   in all).
+- `POST /deck-builder/collection-picks` — Build a Deck's "What are you
+  looking for?" box looking past EDHREC's list into the signed-in player's
+  own collection. Body: `{request, commanders, colorIdentity, bracket, roles,
+  deck: [{oracleId, name, roles}], exclude: [oracleIds]}`.
+  1. **Search tags:** the roles become Archidekt tags (draw → `draw`,
+     `card advantage`; wipes → `sweeper`, …), and other words in the
+     request ("tokens", "lifegain") are tried as tags too.
+  2. **Collection search:** archidekt-trading-app's
+     `POST /api/internal/collection-search` (same `COLLECTION_BRIDGE_KEY`)
+     returns the player's matching cards in the commander's colours, up to
+     60, leaving out the deck and EDHREC's candidates.
+  3. **AI picks:** **Workers AI** (`env.AI`, the `[ai]` binding in
+     `wrangler.toml`; model `@cf/meta/llama-3.3-70b-instruct-fp8-fast` in
+     JSON mode) picks up to 6, with a reason and a deck card to replace.
+  4. **Validation:** every pick must be on the shortlist, every replacement
+     in the deck. Scryfall confirms legality and colour identity, and
+     supplies type, price, Game Changer and roles. The bracket rules are
+     applied in the page.
+
+  The answer is `{checked: true, source: "ai" | "tags", picks: [...]}`.
+  Without the AI (an error, or an answer that doesn't fit the schema), the
+  best tag matches come back with `source: "tags"`. Not linked, nothing to
+  search, or the trading app down give `{checked: false, reason}`.
+
+  **Cost:** a call is ~5k tokens in and ~600 out, about 260 neurons. Workers
+  AI's free 10,000 neurons a day covers ~35–40 such builds. On the Workers
+  Free plan, calls past that fail (and fall back to tags) rather than being
+  billed.
 - **Themes:** every answer carries `themes`, the commander's EDHREC themes
   at that bracket from the page's `tag_counts`. That's at most 10, most
   decks first, each seen in at least 5 decks (`deckBuilderThemes`).
