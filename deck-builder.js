@@ -18,21 +18,38 @@
 //   4. Basic lands fill out the land count, split the way the average deck
 //      splits them.
 // A card is skipped when it would break the bracket (Game Changers over the
-// cap) or push spending past the budget. Only if the deck still isn't full
+// cap, mass land denial where it's banned, extra turns past the bracket's
+// count) or push spending past the budget. Only if the deck still isn't full
 // does it take over-budget cards, and it says so (overBudget).
 
 const DECK_BUILDER_DECK_SIZE = 99;
 
-// Wizards' Commander Brackets. gameChangers is the most a deck may run.
-// Mass land denial, extra turns and two-card combos aren't checked yet --
-// see bracketChecks.
+// Wizards' Commander Brackets.
+//   gameChangers   the most Game Changers a deck may run.
+//   massLandDenial whether any mass land denial is allowed.
+//   extraTurns     the most extra-turn cards. Bracket 1 bans extra turns;
+//                  2 and 3 ban *chaining* them, which a deck can't do with
+//                  only one, so they get 1.
+//   twoCardCombos  "banned" (any two-card combo fails), "early" (only
+//                  early-game infinite ones are banned -- the player judges
+//                  "early", so found combos are a warning), or "allowed".
+// The card flags (gameChanger, massLandDenial, extraTurn) come from the
+// relay; two-card combos are found after the build by Commander Spellbook,
+// through the relay's POST /deck-builder/combos.
 const BRACKET_RULES = {
-  1: { name: "Exhibition", gameChangers: 0 },
-  2: { name: "Core", gameChangers: 0 },
-  3: { name: "Upgraded", gameChangers: 3 },
-  4: { name: "Optimized", gameChangers: Infinity },
-  5: { name: "cEDH", gameChangers: Infinity },
+  1: { name: "Exhibition", gameChangers: 0, massLandDenial: false, extraTurns: 0, twoCardCombos: "banned" },
+  2: { name: "Core", gameChangers: 0, massLandDenial: false, extraTurns: 1, twoCardCombos: "banned" },
+  3: { name: "Upgraded", gameChangers: 3, massLandDenial: false, extraTurns: 1, twoCardCombos: "early" },
+  4: { name: "Optimized", gameChangers: Infinity, massLandDenial: true, extraTurns: Infinity, twoCardCombos: "allowed" },
+  5: { name: "cEDH", gameChangers: Infinity, massLandDenial: true, extraTurns: Infinity, twoCardCombos: "allowed" },
 };
+
+// Whether the relay's candidates carry the mass land denial / extra turn
+// flags. It sends tagsChecked: true only when both Scryfall Tagger lists
+// loaded; otherwise those two rules can't be enforced or checked.
+function tagsChecked(data) {
+  return !!(data && data.tagsChecked === true);
+}
 
 // Starting weights. synergy runs about -100..+100 and inclusion 0..100.
 const DEFAULT_WEIGHTS = {
@@ -141,13 +158,18 @@ function buildDeck(data, opts = {}) {
   const taken = new Set();
   const typeCount = {};
   let gameChangers = 0;
+  let extraTurns = 0;
   let spent = 0;
+  // A card the bracket forbids outright, whatever's already in the deck.
+  const forbidden = card => !!card.massLandDenial && !rules.massLandDenial;
   let overBudget = false;
 
   // allowOverBudget: the last-resort pass, used only if the deck is short.
   const tryTake = (card, allowOverBudget) => {
     if (taken.has(card.oracleId)) return false;
     if (card.gameChanger && gameChangers >= rules.gameChangers) return false;
+    if (forbidden(card)) return false;
+    if (card.extraTurn && extraTurns >= rules.extraTurns) return false;
     if (card.status === "missing") {
       // An unknown price never fits a budget; it can still come in last.
       const cost = card.price;
@@ -160,6 +182,7 @@ function buildDeck(data, opts = {}) {
     picked.push(card);
     typeCount[card.type] = (typeCount[card.type] || 0) + 1;
     if (card.gameChanger) gameChangers++;
+    if (card.extraTurn) extraTurns++;
     return true;
   };
 
@@ -205,7 +228,7 @@ function buildDeck(data, opts = {}) {
   if (budget > 0 && !overBudget) {
     const quality = card => scoreCard(card, "missing", { ...weights, pricePerDollar: 0 });
     const upgrades = pool
-      .filter(c => c.status === "missing" && !taken.has(c.oracleId) && c.price != null && c.type !== "other")
+      .filter(c => c.status === "missing" && !taken.has(c.oracleId) && c.price != null && c.type !== "other" && !forbidden(c))
       .sort((a, b) => quality(b) - quality(a));
     for (const card of upgrades) {
       if (spent + card.price > budget + 1e-9) continue;
@@ -213,6 +236,7 @@ function buildDeck(data, opts = {}) {
       for (const p of picked) {
         if (p.type !== card.type || p.status === "missing") continue;
         if (card.gameChanger && !p.gameChanger && gameChangers >= rules.gameChangers) continue;
+        if (card.extraTurn && !p.extraTurn && extraTurns >= rules.extraTurns) continue;
         if (!weakest || quality(p) < quality(weakest)) weakest = p;
       }
       if (!weakest || quality(card) - quality(weakest) < UPGRADE_MARGIN) continue;
@@ -221,6 +245,8 @@ function buildDeck(data, opts = {}) {
       taken.add(card.oracleId);
       if (weakest.gameChanger) gameChangers--;
       if (card.gameChanger) gameChangers++;
+      if (weakest.extraTurn) extraTurns--;
+      if (card.extraTurn) extraTurns++;
       spent += card.price;
     }
   }
@@ -252,22 +278,66 @@ function buildDeck(data, opts = {}) {
     budget,
     overBudget,
     shortBy,
-    checks: bracketChecks(picked, bracket),
+    tagsChecked: tagsChecked(data),
+    checks: bracketChecks(picked, bracket, { tagsChecked: tagsChecked(data) }),
     size: picked.length + basicCount,
   };
 }
 
-// The finished deck against its bracket. Only Game Changers can be checked
-// so far; the other three rules come back as "unchecked" so the page never
-// presents them as passing.
-function bracketChecks(cards, bracket) {
+// The finished deck against its bracket. Every check has a status:
+//   "pass" / "fail"  checked, and ok is true / false
+//   "warn"           found something the player has to judge (Bracket 3's
+//                    "early-game" combos); ok is null
+//   "unchecked"      couldn't be checked (Tagger lists or Spellbook
+//                    unavailable); ok is null, never shown as passing
+//   "pending"        two-card combos only: Spellbook hasn't answered yet
+// opts.tagsChecked: the candidates carry mass land denial / extra turn
+// flags. opts.combos: the relay's POST /deck-builder/combos answer --
+// { checked: true, combos: [{ cards: [names], ... }] } or
+// { checked: false, reason }; leave it out while the call is in flight.
+function bracketChecks(cards, bracket, opts = {}) {
   const rules = BRACKET_RULES[bracket] || BRACKET_RULES[3];
+  const names = list => list.map(c => c.name);
+  const verdict = ok => ({ status: ok ? "pass" : "fail", ok });
+
   const gc = cards.filter(c => c.gameChanger);
+  const checks = {
+    gameChangers: { count: gc.length, cap: rules.gameChangers, ...verdict(gc.length <= rules.gameChangers), cards: names(gc) },
+  };
+
+  if (opts.tagsChecked) {
+    const mld = cards.filter(c => c.massLandDenial);
+    const turns = cards.filter(c => c.extraTurn);
+    checks.massLandDenial = { count: mld.length, allowed: rules.massLandDenial, ...verdict(rules.massLandDenial || mld.length === 0), cards: names(mld) };
+    checks.extraTurns = { count: turns.length, cap: rules.extraTurns, ...verdict(turns.length <= rules.extraTurns), cards: names(turns) };
+  } else {
+    checks.massLandDenial = { status: "unchecked", ok: null, cards: [] };
+    checks.extraTurns = { status: "unchecked", ok: null, cards: [] };
+  }
+
+  checks.twoCardCombos = combosCheck(opts.combos, rules.twoCardCombos);
+  return checks;
+}
+
+function combosCheck(answer, rule) {
+  if (answer === undefined) return { status: "pending", ok: null, rule, combos: [] };
+  if (!answer || answer.checked !== true || !Array.isArray(answer.combos)) {
+    return { status: "unchecked", ok: null, rule, combos: [], reason: answer && answer.reason };
+  }
+  const combos = answer.combos.filter(c => c && Array.isArray(c.cards) && c.cards.length === 2);
+  const base = { rule, combos, count: combos.length };
+  if (!combos.length || rule === "allowed") return { ...base, status: "pass", ok: true };
+  if (rule === "early") return { ...base, status: "warn", ok: null };
+  return { ...base, status: "fail", ok: false };
+}
+
+// The finished 99 plus the commander, as the relay's POST
+// /deck-builder/combos takes it: names only, basics left out (no combo
+// needs them, and it keeps the request small).
+function comboRequest(build) {
   return {
-    gameChangers: { count: gc.length, cap: rules.gameChangers, ok: gc.length <= rules.gameChangers, cards: gc.map(c => c.name) },
-    massLandDenial: { ok: null },
-    extraTurns: { ok: null },
-    twoCardCombos: { ok: null },
+    commander: build.commander && build.commander.name ? build.commander.name : null,
+    cards: build.cards.map(c => c.name),
   };
 }
 
@@ -291,6 +361,6 @@ function typeOrder(type) {
 if (typeof module !== "undefined") {
   module.exports = {
     BRACKET_RULES, DEFAULT_WEIGHTS, cardStatus, scoreCard, deckTemplate, splitBasics,
-    buildDeck, bracketChecks, deckToText, typeOrder,
+    buildDeck, bracketChecks, combosCheck, comboRequest, tagsChecked, deckToText, typeOrder,
   };
 }

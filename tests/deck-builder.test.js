@@ -3,6 +3,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const {
   BRACKET_RULES, cardStatus, scoreCard, deckTemplate, splitBasics, buildDeck, deckToText,
+  bracketChecks, comboRequest,
 } = require("../deck-builder.js");
 
 let n = 0;
@@ -119,11 +120,146 @@ test("Game Changers are capped at the bracket's limit", () => {
   assert.equal(BRACKET_RULES[3].gameChangers, 3);
 });
 
-test("the checks it can't run yet are reported as unchecked, never as passing", () => {
+test("without the Tagger flags, land denial and extra turns are unchecked, never passing", () => {
   const b = buildDeck(data(pool(), { connected: false }));
-  assert.equal(b.checks.massLandDenial.ok, null);
-  assert.equal(b.checks.extraTurns.ok, null);
+  assert.equal(b.tagsChecked, false);
+  for (const key of ["massLandDenial", "extraTurns"]) {
+    assert.equal(b.checks[key].ok, null, key);
+    assert.equal(b.checks[key].status, "unchecked", key);
+  }
+  // ...and combos are "pending" until Spellbook answers.
+  assert.equal(b.checks.twoCardCombos.status, "pending");
   assert.equal(b.checks.twoCardCombos.ok, null);
+});
+
+// ---- Mass land denial and extra turns ----
+const BRACKETS = [1, 2, 3, 4, 5];
+const flagged = (cards) => data(cards, owning(cards), 3, { tagsChecked: true });
+const withBracket = (d, bracket) => ({ ...d, bracket });
+
+test("mass land denial is left out in brackets 1-3 and allowed in 4-5", () => {
+  const mld = Array.from({ length: 3 }, (_, i) => card(`Armageddon ${i}`, { type: "sorcery", synergy: 95, massLandDenial: true }));
+  const cands = [...mld, ...pool()];
+  const d = flagged(cands);
+  for (const bracket of BRACKETS) {
+    const b = buildDeck(withBracket(d, bracket));
+    const inDeck = b.cards.filter(c => c.massLandDenial).length;
+    const check = b.checks.massLandDenial;
+    assert.equal(b.size, 99, `bracket ${bracket}`);
+    assert.equal(check.ok, true, `bracket ${bracket}`);
+    assert.equal(check.status, "pass", `bracket ${bracket}`);
+    if (bracket <= 3) {
+      assert.equal(inDeck, 0, `bracket ${bracket} skips it`);
+      assert.equal(check.allowed, false);
+    } else {
+      assert.equal(inDeck, 3, `bracket ${bracket} keeps it`);
+      assert.equal(check.allowed, true);
+      assert.equal(check.count, 3);
+    }
+  }
+});
+
+test("extra turns: none in bracket 1, one (no chaining) in 2-3, any number in 4-5", () => {
+  const turns = Array.from({ length: 4 }, (_, i) => card(`Time Warp ${i}`, { type: "sorcery", synergy: 95, extraTurn: true }));
+  const d = flagged([...turns, ...pool()]);
+  for (const [bracket, expected] of [[1, 0], [2, 1], [3, 1], [4, 4], [5, 4]]) {
+    const b = buildDeck(withBracket(d, bracket));
+    assert.equal(b.cards.filter(c => c.extraTurn).length, expected, `bracket ${bracket}`);
+    assert.equal(b.checks.extraTurns.count, expected, `bracket ${bracket}`);
+    assert.equal(b.checks.extraTurns.ok, true, `bracket ${bracket}`);
+    assert.equal(b.size, 99);
+  }
+  assert.deepEqual([1, 2, 3].map(n => BRACKET_RULES[n].extraTurns), [0, 1, 1]);
+});
+
+test("a budget's upgrades never bring in mass land denial or a second extra turn", () => {
+  const cands = pool({ each: 30 }).map(c => ({ ...c, synergy: c.synergy - 40 }));
+  const bad = [
+    card("Ravages of War", { type: "sorcery", synergy: 95, inclusion: 90, price: 2, massLandDenial: true }),
+    card("Temporal Mastery", { type: "sorcery", synergy: 95, inclusion: 90, price: 2, extraTurn: true }),
+    card("Nexus of Fate", { type: "instant", synergy: 95, inclusion: 90, price: 2, extraTurn: true }),
+  ];
+  for (const bracket of [1, 2, 3]) {
+    const b = buildDeck(withBracket(data([...bad, ...cands], owning(cands), bracket, { tagsChecked: true }), bracket), { budget: 100 });
+    assert.equal(b.checks.massLandDenial.count, 0, `bracket ${bracket}`);
+    assert.equal(b.checks.extraTurns.count, BRACKET_RULES[bracket].extraTurns, `bracket ${bracket}`);
+    assert.ok(b.checks.extraTurns.ok);
+  }
+});
+
+test("the checks fail and name the cards when a list breaks the bracket", () => {
+  const list = [
+    card("Armageddon", { massLandDenial: true }),
+    card("Time Warp", { extraTurn: true }),
+    card("Temporal Manipulation", { extraTurn: true }),
+    card("Llanowar Elves"),
+  ];
+  for (const bracket of [1, 2, 3]) {
+    const c = bracketChecks(list, bracket, { tagsChecked: true });
+    assert.equal(c.massLandDenial.ok, false, `bracket ${bracket}`);
+    assert.equal(c.massLandDenial.status, "fail");
+    assert.deepEqual(c.massLandDenial.cards, ["Armageddon"]);
+    assert.equal(c.extraTurns.ok, false, `bracket ${bracket}`);
+    assert.deepEqual(c.extraTurns.cards, ["Time Warp", "Temporal Manipulation"]);
+  }
+  // One extra turn is fine in 2-3 (nothing to chain), not in 1.
+  const one = [card("Time Warp", { extraTurn: true })];
+  assert.equal(bracketChecks(one, 1, { tagsChecked: true }).extraTurns.ok, false);
+  assert.equal(bracketChecks(one, 2, { tagsChecked: true }).extraTurns.ok, true);
+  assert.equal(bracketChecks(one, 3, { tagsChecked: true }).extraTurns.ok, true);
+  for (const bracket of [4, 5]) {
+    const c = bracketChecks(list, bracket, { tagsChecked: true });
+    assert.equal(c.massLandDenial.ok, true, `bracket ${bracket}`);
+    assert.equal(c.extraTurns.ok, true, `bracket ${bracket}`);
+  }
+});
+
+// ---- Two-card combos (Commander Spellbook, through the relay) ----
+const combo = (a, b) => ({ id: `${a}-${b}`, cards: [a, b], produces: ["Infinite mana"], manaValueNeeded: 4 });
+const found = { checked: true, combos: [combo("Dramatic Reversal", "Isochron Scepter")] };
+
+test("two-card combos fail brackets 1-2, warn in 3, pass in 4-5", () => {
+  const expected = { 1: ["fail", false], 2: ["fail", false], 3: ["warn", null], 4: ["pass", true], 5: ["pass", true] };
+  for (const bracket of BRACKETS) {
+    const c = bracketChecks([], bracket, { combos: found }).twoCardCombos;
+    assert.deepEqual([c.status, c.ok], expected[bracket], `bracket ${bracket}`);
+    assert.deepEqual(c.combos.map(x => x.cards), [["Dramatic Reversal", "Isochron Scepter"]]);
+  }
+});
+
+test("no combos found passes every bracket", () => {
+  for (const bracket of BRACKETS) {
+    const c = bracketChecks([], bracket, { combos: { checked: true, combos: [] } }).twoCardCombos;
+    assert.equal(c.ok, true, `bracket ${bracket}`);
+    assert.equal(c.status, "pass");
+  }
+});
+
+test("if Spellbook can't be reached the combo check stays unchecked, never passing", () => {
+  for (const answer of [{ checked: false, reason: "unavailable" }, null, {}, { checked: true }, { checked: "yes", combos: [] }]) {
+    for (const bracket of BRACKETS) {
+      const c = bracketChecks([], bracket, { combos: answer }).twoCardCombos;
+      assert.equal(c.ok, null, `${JSON.stringify(answer)} bracket ${bracket}`);
+      assert.equal(c.status, "unchecked");
+    }
+  }
+  assert.equal(bracketChecks([], 1, {}).twoCardCombos.status, "pending");
+});
+
+test("only two-card combos count", () => {
+  const answer = { checked: true, combos: [{ id: "x", cards: ["A", "B", "C"] }, { id: "y", cards: ["A"] }] };
+  const c = bracketChecks([], 1, { combos: answer }).twoCardCombos;
+  assert.equal(c.ok, true);
+  assert.equal(c.count, 0);
+});
+
+test("the combo request is the commander plus every nonbasic in the 99", () => {
+  const cands = pool();
+  const b = buildDeck(data(cands, owning(cands)));
+  const req = comboRequest(b);
+  assert.equal(req.commander, "Atraxa, Praetors' Voice");
+  assert.equal(req.cards.length, b.cards.length);
+  assert.ok(!req.cards.some(n => /^(Forest|Island|Plains|Swamp)$/.test(n)));
 });
 
 test("a short pool still makes 99, padded with basics, and says how short", () => {

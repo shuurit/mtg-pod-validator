@@ -7143,6 +7143,26 @@ button.uta-bracket-btn[aria-pressed="true"] {
 /* "Not checked yet" reads as muted text, never green -- an unchecked rule
    must not look like a passing one. */
 .db-unchecked { color: var(--muted); font-style: italic; font-weight: 500; }
+/* Something the player has to judge (Bracket 3's "early-game" combos):
+   neither a pass nor a fail. */
+.db-warn { color: var(--warn); }
+/* A failing row names its cards, so the value can run long: the label
+   keeps its width and the names wrap under each other on a phone. */
+.db-checks .db-check > span:first-child { flex-shrink: 0; }
+.db-check-val { min-width: 0; overflow-wrap: anywhere; }
+
+.db-combos {
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-soft);
+  background: var(--bg-accent);
+  font-size: 0.88rem;
+}
+.db-combos-warn { background: var(--warn-bg); border-color: var(--warn-border); }
+.db-combos-bad { border-color: var(--bad); }
+.db-combos p { margin: 0 0 4px; }
+.db-combos ul { margin: 0; padding-left: 18px; display: grid; gap: 2px; }
+.db-combos a { color: var(--accent); }
 
 .db-groups {
   display: grid;

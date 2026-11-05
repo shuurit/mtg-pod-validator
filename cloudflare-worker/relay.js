@@ -113,6 +113,8 @@
  *              wrangler secret put POD_BRIDGE_KEY   (shared with archidekt-trading-app: GET /internal/player-decks)
  *              wrangler secret put COLLECTION_BRIDGE_KEY   (shared with archidekt-trading-app: its
  *                POST /api/internal/collection-match, called by GET /deck-builder/candidates)
+ * Outside APIs, no keys: EDHREC + Scryfall (GET /deck-builder/candidates),
+ *              Commander Spellbook (POST /deck-builder/combos)
  * Bindings:    KV namespace bound as DECK_CACHE
  *              D1 database bound as DB
  */
@@ -2288,11 +2290,22 @@ async function handleInternalPlayerDecks(request, env, url) {
 // nowhere near the daily write budget. A commander EDHREC doesn't know is
 // NOT cached, so a typo can't spend a write. Ownership is never cached:
 // it's read fresh on every build.
+//
+// Each candidate also carries massLandDenial and extraTurn, from two
+// Scryfall Tagger searches (otag:mass-land-denial, otag:extra-turn) that
+// are the same for every commander, so they're run once and kept in KV
+// under their own key for a week. If either search fails the candidates go
+// out with tagsChecked: false and are NOT cached, so the next build retries
+// instead of serving unflagged cards for a week -- and the page shows
+// those two checks as "not checked", never as passing.
 const DECK_BUILDER_BRACKET_SLUGS = { 1: "exhibition", 2: "core", 3: "upgraded", 4: "optimized", 5: "cedh" };
 const DECK_BUILDER_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60;
 const DECK_BUILDER_USER_AGENT = "mtg-pod-validator-relay (+small playgroup app)";
 const EDHREC_JSON_BASE = "https://json.edhrec.com/pages";
 const SCRYFALL_API_BASE = "https://api.scryfall.com";
+const DECK_BUILDER_CACHE_VERSION = "v2"; // v2: candidates carry massLandDenial/extraTurn
+const DECK_BUILDER_TAGS_CACHE_KEY = "deckbuilder:tags:v1";
+const DECK_BUILDER_TAGS = { massLandDenial: "mass-land-denial", extraTurn: "extra-turn" };
 const DECK_BUILDER_TEMPLATE_KEYS = ["creature", "instant", "sorcery", "artifact", "enchantment", "planeswalker", "battle", "land", "basic", "nonbasic"];
 
 // EDHREC's page slug for a commander: "Atraxa, Praetors' Voice" ->
@@ -2352,7 +2365,49 @@ async function scryfallCollection(uids) {
   return byId;
 }
 
-async function buildDeckBuilderCandidates(slug, bracket) {
+// Every oracle id a Scryfall search matches, all pages. Scryfall answers a
+// search with no results as a 404 error object, which is an empty list
+// here, not a failure.
+async function scryfallSearchOracleIds(query) {
+  const ids = new Set();
+  let url = `${SCRYFALL_API_BASE}/cards/search?q=${encodeURIComponent(query)}&unique=cards`;
+  for (let page = 0; url && page < 10; page++) {
+    if (page) await new Promise(r => setTimeout(r, 100));
+    const res = await fetch(url, { headers: { "User-Agent": DECK_BUILDER_USER_AGENT, Accept: "application/json" } });
+    if (res.status === 404) break;
+    if (!res.ok) throw new Error(`Scryfall search didn't answer (HTTP ${res.status})`);
+    const data = await res.json();
+    for (const c of data.data || []) {
+      for (const id of [c.oracle_id, ...(c.card_faces || []).map(f => f.oracle_id)]) if (id) ids.add(id.toLowerCase());
+    }
+    url = data.has_more ? data.next_page : null;
+  }
+  return ids;
+}
+
+// { massLandDenial: Set, extraTurn: Set } of oracle ids, or null if Scryfall
+// couldn't be read. Cached in KV for a week once both searches succeed.
+async function deckBuilderTags(env, ctx) {
+  const cached = await kvGetJson(env, DECK_BUILDER_TAGS_CACHE_KEY, null);
+  if (cached && Array.isArray(cached.massLandDenial) && Array.isArray(cached.extraTurn)) {
+    return { massLandDenial: new Set(cached.massLandDenial), extraTurn: new Set(cached.extraTurn) };
+  }
+  try {
+    const out = {};
+    for (const [flag, tag] of Object.entries(DECK_BUILDER_TAGS)) out[flag] = await scryfallSearchOracleIds(`otag:${tag}`);
+    const stored = Object.fromEntries(Object.entries(out).map(([k, v]) => [k, [...v]]));
+    ctx.waitUntil(
+      env.DECK_CACHE.put(DECK_BUILDER_TAGS_CACHE_KEY, JSON.stringify({ ...stored, fetchedAt: new Date().toISOString() }), { expirationTtl: DECK_BUILDER_CACHE_TTL_SECONDS })
+        .catch(err => console.error(`deck builder tags cache write failed: ${err.message}`))
+    );
+    return out;
+  } catch (err) {
+    console.error(`deck builder tags failed: ${err.message}`);
+    return null;
+  }
+}
+
+async function buildDeckBuilderCandidates(slug, bracket, tags) {
   const bracketSlug = DECK_BUILDER_BRACKET_SLUGS[bracket];
   const [page, average] = await Promise.all([
     edhrecJson(`commanders/${slug}/${bracketSlug}.json`),
@@ -2410,6 +2465,8 @@ async function buildDeckBuilderCandidates(slug, bracket) {
       basic: /\bBasic\b/.test(typeLine) && /\bLand\b/.test(typeLine),
       cmc: num(c.cmc),
       gameChanger: !!c.game_changer,
+      massLandDenial: tags ? tags.massLandDenial.has(oracleId.toLowerCase()) : null,
+      extraTurn: tags ? tags.extraTurn.has(oracleId.toLowerCase()) : null,
       price: num(c.prices?.usd) ?? num(c.prices?.usd_foil) ?? num(c.prices?.usd_etched),
       inAverageDeck: averageUids.has(p.uid),
     });
@@ -2429,6 +2486,7 @@ async function buildDeckBuilderCandidates(slug, bracket) {
     edhrecUrl: `https://edhrec.com/commanders/${slug}/${bracketSlug}`,
     template,
     averageBasics,
+    tagsChecked: !!tags,
     candidates,
     builtAt: new Date().toISOString(),
   };
@@ -2461,23 +2519,110 @@ async function handleDeckBuilderCandidates(env, ctx, session, url) {
   const slug = edhrecSlug(commander);
   if (!slug) return jsonResponse({ error: "Which commander?" }, 400);
 
-  const cacheKey = `deckbuilder:v1:${slug}:${bracket}`;
+  const cacheKey = `deckbuilder:${DECK_BUILDER_CACHE_VERSION}:${slug}:${bracket}`;
   let data = await kvGetJson(env, cacheKey, null);
   if (!data) {
     try {
-      data = await buildDeckBuilderCandidates(slug, bracket);
+      data = await buildDeckBuilderCandidates(slug, bracket, await deckBuilderTags(env, ctx));
     } catch (err) {
       return jsonResponse({ error: err.message }, 502);
     }
     if (!data) return jsonResponse({ slug, bracket, reason: "no-edhrec" }, 200, { "Cache-Control": "no-store" });
-    ctx.waitUntil(
-      env.DECK_CACHE.put(cacheKey, JSON.stringify(data), { expirationTtl: DECK_BUILDER_CACHE_TTL_SECONDS })
-        .catch(err => console.error(`deck builder cache write failed: ${err.message}`))
-    );
+    // Without the Tagger flags, don't cache: the next build retries them.
+    if (data.tagsChecked) {
+      ctx.waitUntil(
+        env.DECK_CACHE.put(cacheKey, JSON.stringify(data), { expirationTtl: DECK_BUILDER_CACHE_TTL_SECONDS })
+          .catch(err => console.error(`deck builder cache write failed: ${err.message}`))
+      );
+    }
   }
 
   const collection = await matchCollection(env, session.discordUserId, data.candidates.map(c => c.oracleId));
   return jsonResponse({ ...data, collection }, 200, { "Cache-Control": "no-store" });
+}
+
+// ---------- POST /deck-builder/combos (Build a Deck's two-card combo check) ----------
+// The browser sends the finished deck ({ commander, cards: [names] }) once
+// it's built; this asks Commander Spellbook's find-my-combos which combos
+// the list holds and answers with the two-card ones. Not cached: the list
+// changes with every budget/toggle move, and it's one subrequest.
+//
+// Spellbook's API, read from its source (SpaceCowMedia/commander-spellbook-
+// backend, spellbook/views/find_my_combos.py, Nov 2026): POST
+// /find-my-combos with JSON { main: [{ card, quantity }], commanders:
+// [{ card, quantity }] } -- card is a name. It answers camelCase (DRF's
+// camel-case renderer), paginated: { next, previous, results: { identity,
+// included: [variant], almostIncluded: [...], ... } }, a variant being
+// { id, uses: [{ card: { name, oracleId }, quantity, mustBeCommander }],
+// requires: [templates like "a sacrifice outlet"], produces: [{ feature:
+// { name } }], manaValueNeeded, bracketTag }. snake_case is accepted too
+// in case the renderer ever changes.
+//
+// Never answers "no combos" unless Spellbook actually said so: anything
+// unreachable or unrecognisable comes back { checked: false, reason }, and
+// the page keeps the check "not checked".
+const SPELLBOOK_API_BASE = "https://backend.commanderspellbook.com";
+const SPELLBOOK_SITE_BASE = "https://commanderspellbook.com";
+const DECK_BUILDER_COMBO_MAX_CARDS = 120;
+const DECK_BUILDER_COMBO_TIMEOUT_MS = 15000;
+
+// A Spellbook find-my-combos answer -> { checked, combos } with only the
+// two-card combos in the deck: exactly two cards, one copy each, and no
+// template ("requires") -- a combo that also needs "any sacrifice outlet"
+// is a three-piece combo. Pure, so tests/deck-builder-combos.test.js can
+// run it straight out of this file.
+function parseSpellbookCombos(body) {
+  const results = body && typeof body === "object" ? (body.results && typeof body.results === "object" ? body.results : body) : null;
+  const included = results ? results.included : undefined;
+  if (!Array.isArray(included)) return { checked: false, reason: "unexpected-response" };
+  const combos = [];
+  for (const v of included) {
+    const uses = Array.isArray(v && v.uses) ? v.uses : [];
+    const requires = Array.isArray(v && v.requires) ? v.requires : [];
+    const pieces = uses.reduce((n, u) => n + (Number(u && u.quantity) || 1), 0);
+    if (uses.length !== 2 || pieces !== 2 || requires.length) continue;
+    const cards = uses.map(u => u && u.card && u.card.name).filter(n => typeof n === "string");
+    if (cards.length !== 2) continue;
+    const manaValue = v.manaValueNeeded ?? v.mana_value_needed;
+    combos.push({
+      id: String(v.id),
+      cards,
+      produces: (Array.isArray(v.produces) ? v.produces : []).map(f => f && f.feature && f.feature.name).filter(Boolean),
+      manaValueNeeded: Number.isFinite(Number(manaValue)) && manaValue !== null ? Number(manaValue) : null,
+      bracketTag: v.bracketTag ?? v.bracket_tag ?? null,
+      url: `${SPELLBOOK_SITE_BASE}/combo/${encodeURIComponent(String(v.id))}/`,
+    });
+  }
+  return { checked: true, combos };
+}
+
+async function handleDeckBuilderCombos(request) {
+  const body = await request.json().catch(() => null);
+  const clean = v => (typeof v === "string" ? v.trim().slice(0, 200) : "");
+  const commander = clean(body && body.commander);
+  const cards = Array.isArray(body && body.cards) ? [...new Set(body.cards.map(clean).filter(Boolean))] : null;
+  if (!cards || !cards.length) return jsonResponse({ error: "Send the deck's card names." }, 400);
+  if (cards.length > DECK_BUILDER_COMBO_MAX_CARDS) return jsonResponse({ error: `At most ${DECK_BUILDER_COMBO_MAX_CARDS} cards.` }, 400);
+
+  let answer;
+  try {
+    const res = await fetch(`${SPELLBOOK_API_BASE}/find-my-combos`, {
+      method: "POST",
+      headers: { "User-Agent": DECK_BUILDER_USER_AGENT, Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        main: cards.map(card => ({ card, quantity: 1 })),
+        commanders: commander ? [{ card: commander, quantity: 1 }] : [],
+      }),
+      signal: AbortSignal.timeout(DECK_BUILDER_COMBO_TIMEOUT_MS),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    answer = parseSpellbookCombos(await res.json());
+    if (!answer.checked) console.error("Spellbook find-my-combos: unrecognised response shape");
+  } catch (err) {
+    console.error(`Spellbook find-my-combos failed: ${err.message}`);
+    answer = { checked: false, reason: "unavailable" };
+  }
+  return jsonResponse(answer, 200, { "Cache-Control": "no-store" });
 }
 
 async function handleDeckWinRates(env) {
@@ -4462,6 +4607,10 @@ export default {
 
     if (request.method === "GET" && url.pathname === "/deck-builder/candidates") {
       return handleDeckBuilderCandidates(env, ctx, session, url);
+    }
+
+    if (request.method === "POST" && url.pathname === "/deck-builder/combos") {
+      return handleDeckBuilderCombos(request);
     }
 
     if (request.method === "GET" && url.pathname === "/playgroup-games") {
