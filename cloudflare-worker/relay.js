@@ -2322,7 +2322,12 @@ const DECK_BUILDER_TAGS = { massLandDenial: "mass-land-denial", extraTurn: "extr
 // for a week, so most builds spend no requests on roles at all.
 const DECK_BUILDER_ROLE_TAGS = { ramp: "ramp", draw: "draw", removal: "removal", wipe: "board-wipe", protection: "protection" };
 const DECK_BUILDER_ROLE_PAGES = 4;
-const DECK_BUILDER_ROLES_CACHE_PREFIX = "deckbuilder:roles:v1";
+// At most this many role pages per build: two whole roles. Each role is
+// cached on its own, so a color identity's five roles fill in over about
+// three builds instead of one burst of 20 requests (see scryfallFetch for
+// why that burst broke builds). Roles not fetched yet come from keywords.
+const DECK_BUILDER_ROLE_PAGE_BUDGET = 8;
+const DECK_BUILDER_ROLES_CACHE_PREFIX = "deckbuilder:roles:v2";
 const DECK_BUILDER_TEMPLATE_KEYS = ["creature", "instant", "sorcery", "artifact", "enchantment", "planeswalker", "battle", "land", "basic", "nonbasic"];
 
 // EDHREC's page slug for a commander: "Atraxa, Praetors' Voice" ->
@@ -2366,23 +2371,63 @@ function deckBuilderPrimaryType(typeLine) {
 }
 
 // Every Scryfall request goes through here. Scryfall asks for 50-100 ms
-// between requests and answers 429 to clients that don't leave it; a cold
-// Build a Deck makes ~25 in a row (role searches, tag searches, collection
-// lookups), so the spacing is kept across all of them, not just between
-// pages of one search. A 429 is retried once, after Retry-After (or 1 s).
-const SCRYFALL_THROTTLE = { last: 0, gapMs: 100 };
+// between requests and answers 429 to clients that send too many; the
+// relay's requests all leave from Cloudflare, so the spacing is kept across
+// every call in an invocation, not just between pages of one search.
+//
+// Learned the hard way (2026-11-05): with role tagging, a cold build sent
+// ~25 Scryfall requests in a row, Scryfall answered 429, and the card
+// lookup every build needs failed -- and since a failed build caches
+// nothing, every retry sent the same burst again. So:
+//   - essential: true (the card lookup) retries twice, patiently;
+//     everything else retries once.
+//   - a 429 that survives its retries starts a backoff
+//     (SCRYFALL_BACKOFF_MS): optional searches (bracket tags, roles) are
+//     skipped until it ends, here and -- via a KV marker, see
+//     scryfallBackingOff -- in every other isolate.
+const SCRYFALL_THROTTLE = { last: 0, gapMs: 100, backoffUntil: 0 };
+const SCRYFALL_BACKOFF_MS = 2 * 60 * 1000;
+const SCRYFALL_BACKOFF_KEY = "deckbuilder:scryfall-backoff";
 
-async function scryfallFetch(url, init = {}) {
+async function scryfallFetch(url, init = {}, { essential = false } = {}) {
   const headers = { "User-Agent": DECK_BUILDER_USER_AGENT, Accept: "application/json", ...(init.headers || {}) };
+  const retries = essential ? 2 : 1;
   for (let attempt = 0; ; attempt++) {
     const wait = SCRYFALL_THROTTLE.last + SCRYFALL_THROTTLE.gapMs - Date.now();
     if (wait > 0) await new Promise(r => setTimeout(r, wait));
     SCRYFALL_THROTTLE.last = Date.now();
     const res = await fetch(url, { ...init, headers });
-    if (res.status !== 429 || attempt >= 1) return res;
+    if (res.status !== 429) return res;
+    if (attempt >= retries) {
+      SCRYFALL_THROTTLE.backoffUntil = Date.now() + SCRYFALL_BACKOFF_MS;
+      return res;
+    }
     const retryAfter = Number(res.headers && res.headers.get && res.headers.get("Retry-After"));
-    await new Promise(r => setTimeout(r, Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter, 5) * 1000 : 1000));
+    const backoff = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter, 5) * 1000 : 1000 * (attempt + 1);
+    await new Promise(r => setTimeout(r, backoff));
   }
+}
+
+// Whether optional Scryfall searches should wait: a 429 in this isolate,
+// or one another isolate recorded in KV (KV's shortest TTL is 60 s, so the
+// marker outlives SCRYFALL_BACKOFF_MS a little at worst).
+async function scryfallBackingOff(env) {
+  if (Date.now() < SCRYFALL_THROTTLE.backoffUntil) return true;
+  try {
+    return !!(await env.DECK_CACHE.get(SCRYFALL_BACKOFF_KEY));
+  } catch {
+    return false;
+  }
+}
+
+// After an optional search failed: if it was Scryfall's rate limit, tell
+// the other isolates too.
+function recordScryfallBackoff(env, ctx) {
+  if (Date.now() >= SCRYFALL_THROTTLE.backoffUntil) return;
+  ctx.waitUntil(
+    env.DECK_CACHE.put(SCRYFALL_BACKOFF_KEY, "1", { expirationTtl: Math.max(60, Math.round(SCRYFALL_BACKOFF_MS / 1000)) })
+      .catch(err => console.error(`scryfall backoff write failed: ${err.message}`))
+  );
 }
 
 async function scryfallCollection(uids) {
@@ -2393,7 +2438,7 @@ async function scryfallCollection(uids) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ identifiers: uids.slice(i, i + 75).map(id => ({ id })) }),
-    });
+    }, { essential: true });
     if (!res.ok) throw new Error(`Scryfall didn't answer (HTTP ${res.status})`);
     const data = await res.json();
     for (const c of data.data || []) byId.set(c.id, c);
@@ -2427,6 +2472,7 @@ async function deckBuilderTags(env, ctx) {
   if (cached && Array.isArray(cached.massLandDenial) && Array.isArray(cached.extraTurn)) {
     return { massLandDenial: new Set(cached.massLandDenial), extraTurn: new Set(cached.extraTurn) };
   }
+  if (await scryfallBackingOff(env)) return null;
   try {
     const out = {};
     for (const [flag, tag] of Object.entries(DECK_BUILDER_TAGS)) out[flag] = await scryfallSearchOracleIds(`otag:${tag}`);
@@ -2438,6 +2484,7 @@ async function deckBuilderTags(env, ctx) {
     return out;
   } catch (err) {
     console.error(`deck builder tags failed: ${err.message}`);
+    recordScryfallBackoff(env, ctx);
     return null;
   }
 }
@@ -2452,7 +2499,9 @@ async function scryfallRoleSearch(query, maxPages) {
   let url = `${SCRYFALL_API_BASE}/cards/search?q=${encodeURIComponent(query)}&order=edhrec&unique=cards`;
   let throughRank = 0;
   let complete = false;
+  let pages = 0;
   for (let page = 0; page < maxPages; page++) {
+    pages++;
     const res = await scryfallFetch(url);
     if (res.status === 404) { complete = true; break; }
     if (!res.ok) throw new Error(`Scryfall search didn't answer (HTTP ${res.status})`);
@@ -2466,7 +2515,7 @@ async function scryfallRoleSearch(query, maxPages) {
     if (!data.has_more) { complete = true; break; }
     url = data.next_page;
   }
-  return { ids, throughRank, complete };
+  return { ids, throughRank, complete, pages };
 }
 
 // "WUBG" -> "wubg"; colorless -> "c". Scryfall's id<= wants the letters.
@@ -2475,35 +2524,46 @@ function deckBuilderIdentityKey(colorIdentity) {
   return letters ? letters.toLowerCase() : "c";
 }
 
-// Every role's Tagger answer for one color identity, or null if Scryfall
-// couldn't be searched (the roles then all come from keyword rules, and the
-// candidates aren't cached, so the next build retries).
+// Each role's Tagger answer for one color identity: { roles: { role: answer
+// or null }, complete }. A role is null until it's been fetched -- its
+// candidates then get that role from keyword rules -- and complete is true
+// once all five are in. Cached per role; fetches at most
+// DECK_BUILDER_ROLE_PAGE_BUDGET pages per call, stops at the first failure,
+// and fetches nothing while Scryfall is rate-limiting the relay.
 async function deckBuilderRoleTags(env, ctx, colorIdentity) {
   const id = deckBuilderIdentityKey(colorIdentity);
-  const key = `${DECK_BUILDER_ROLES_CACHE_PREFIX}:${id}`;
-  const cached = await kvGetJson(env, key, null);
-  const revive = obj => Object.fromEntries(Object.entries(obj).map(([role, t]) => [role, {
-    ids: new Set(t.ids), throughRank: t.throughRank == null ? Infinity : t.throughRank, complete: !!t.complete,
-  }]));
-  if (cached && cached.roles && Object.keys(DECK_BUILDER_ROLE_TAGS).every(r => cached.roles[r])) return revive(cached.roles);
-  try {
-    const out = {};
-    for (const [role, tag] of Object.entries(DECK_BUILDER_ROLE_TAGS)) {
-      out[role] = await scryfallRoleSearch(`otag:${tag} id<=${id} f:commander`, DECK_BUILDER_ROLE_PAGES);
-    }
-    // JSON has no Infinity: null stands for "every ranked card seen".
-    const stored = Object.fromEntries(Object.entries(out).map(([role, t]) => [role, {
-      ids: [...t.ids], throughRank: Number.isFinite(t.throughRank) ? t.throughRank : null, complete: t.complete,
-    }]));
-    ctx.waitUntil(
-      env.DECK_CACHE.put(key, JSON.stringify({ roles: stored, fetchedAt: new Date().toISOString() }), { expirationTtl: DECK_BUILDER_CACHE_TTL_SECONDS })
-        .catch(err => console.error(`deck builder roles cache write failed: ${err.message}`))
-    );
-    return out;
-  } catch (err) {
-    console.error(`deck builder roles failed: ${err.message}`);
-    return null;
+  const roles = {};
+  const keyFor = role => `${DECK_BUILDER_ROLES_CACHE_PREFIX}:${id}:${role}`;
+  for (const role of Object.keys(DECK_BUILDER_ROLE_TAGS)) {
+    const t = await kvGetJson(env, keyFor(role), null);
+    roles[role] = t && Array.isArray(t.ids)
+      ? { ids: new Set(t.ids), throughRank: t.throughRank == null ? Infinity : t.throughRank, complete: !!t.complete }
+      : null;
   }
+  const missing = Object.keys(DECK_BUILDER_ROLE_TAGS).filter(r => !roles[r]);
+  if (missing.length && !(await scryfallBackingOff(env))) {
+    let budget = DECK_BUILDER_ROLE_PAGE_BUDGET;
+    for (const role of missing) {
+      if (budget < DECK_BUILDER_ROLE_PAGES) break;
+      let t;
+      try {
+        t = await scryfallRoleSearch(`otag:${DECK_BUILDER_ROLE_TAGS[role]} id<=${id} f:commander`, DECK_BUILDER_ROLE_PAGES);
+      } catch (err) {
+        console.error(`deck builder role ${role} failed: ${err.message}`);
+        recordScryfallBackoff(env, ctx);
+        break;
+      }
+      budget -= t.pages;
+      roles[role] = t;
+      // JSON has no Infinity: null stands for "every ranked card seen".
+      const stored = { ids: [...t.ids], throughRank: Number.isFinite(t.throughRank) ? t.throughRank : null, complete: t.complete, fetchedAt: new Date().toISOString() };
+      ctx.waitUntil(
+        env.DECK_CACHE.put(keyFor(role), JSON.stringify(stored), { expirationTtl: DECK_BUILDER_CACHE_TTL_SECONDS })
+          .catch(err => console.error(`deck builder role cache write failed: ${err.message}`))
+      );
+    }
+  }
+  return { roles, complete: Object.values(roles).every(Boolean) };
 }
 
 // Keyword rules for when Tagger can't answer for a card (ranked past what
@@ -2602,7 +2662,11 @@ function deckBuilderCardRoles(oracleId, edhrecRank, faces, roleTags) {
   return { roles, fromKeywords };
 }
 
-async function buildDeckBuilderCandidates(slug, bracket, tags, roleTagsFor = async () => null) {
+// tagsFor / roleTagsFor: the optional lookups (bracket tags, roles), run
+// only after the card lookup a build can't do without -- so a rate-limited
+// Scryfall degrades them instead of failing the build. tagsFor may also be
+// the tags themselves.
+async function buildDeckBuilderCandidates(slug, bracket, tagsFor = null, roleTagsFor = async () => null) {
   const bracketSlug = DECK_BUILDER_BRACKET_SLUGS[bracket];
   const [page, average] = await Promise.all([
     edhrecJson(`commanders/${slug}/${bracketSlug}.json`),
@@ -2643,9 +2707,11 @@ async function buildDeckBuilderCandidates(slug, bracket, tags, roleTagsFor = asy
   }
 
   const commanderUid = dict.card?.id || null;
-  const roleTags = await roleTagsFor((dict.card?.color_identity || []).join(""));
-  const roleStats = { tagger: 0, keywords: 0 };
   const scry = await scryfallCollection([...picks.keys(), ...(commanderUid ? [commanderUid] : [])]);
+  const tags = typeof tagsFor === "function" ? await tagsFor() : tagsFor;
+  const roleInfo = await roleTagsFor((dict.card?.color_identity || []).join(""));
+  const roleTags = roleInfo ? roleInfo.roles : null;
+  const roleStats = { tagger: 0, keywords: 0 };
   const num = v => (v != null && Number.isFinite(Number(v)) ? Number(v) : null);
 
   const candidates = [];
@@ -2694,10 +2760,11 @@ async function buildDeckBuilderCandidates(slug, bracket, tags, roleTagsFor = asy
     template,
     averageBasics,
     tagsChecked: !!tags,
-    // rolesFromTagger: Tagger answered (where it covers a card); false means
-    // Scryfall couldn't be searched and every role came from keyword rules.
+    // rolesFromTagger: all five roles' Tagger answers were in (used wherever
+    // they cover a card); false means at least one role came wholly from
+    // keyword rules this time, so the candidates aren't cached.
     // roleStats counts card-role answers by source.
-    rolesFromTagger: !!roleTags,
+    rolesFromTagger: !!(roleInfo && roleInfo.complete),
     roleStats,
     candidates,
     builtAt: new Date().toISOString(),
@@ -2735,7 +2802,7 @@ async function handleDeckBuilderCandidates(env, ctx, session, url) {
   let data = await kvGetJson(env, cacheKey, null);
   if (!data) {
     try {
-      data = await buildDeckBuilderCandidates(slug, bracket, await deckBuilderTags(env, ctx),
+      data = await buildDeckBuilderCandidates(slug, bracket, () => deckBuilderTags(env, ctx),
         identity => deckBuilderRoleTags(env, ctx, identity));
     } catch (err) {
       return jsonResponse({ error: err.message }, 502);
