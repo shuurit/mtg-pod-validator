@@ -256,6 +256,26 @@ works without one.
 
   A cold build now makes at most ~14 Scryfall requests (~19 subrequests
   in all).
+- **Themes:** every answer carries `themes`, the commander's EDHREC themes
+  at that bracket from the page's `tag_counts`. That's at most 10, most
+  decks first, each seen in at least 5 decks (`deckBuilderThemes`).
+  - **Building toward one:** pass `theme=<slug>`. Checked on json.edhrec.com
+    (Nov 2026) for five commanders, a pair and a Background pair, in every
+    bracket, the theme page is `commanders/<slug>/<bracket>/<theme>.json`
+    (bracket before theme; the other way round is 403), with the matching
+    `average-decks/<slug>/<bracket>/<theme>.json`.
+  - **Empty bracket pages:** where no deck at that bracket has the theme,
+    the page still answers 200 but with no card lists (e.g. Wilson + Raised
+    by Giants, cEDH, Voltron). Then the all-brackets theme page
+    `commanders/<slug>/<theme>.json` is used, with `theme.source:
+    "all-brackets"`. The page warns about this, and `deck-builder.js` still
+    applies the bracket's rules.
+  - **No such theme:** if neither page has cards, the answer is
+    `{reason: "no-edhrec-theme"}`.
+  - **Cache key:** a theme gets its own key (`…:<bracket>:theme=<slug>`).
+    The key without a theme is unchanged; answers cached before themes
+    existed get their `themes` from one extra EDHREC request, with no
+    Scryfall requests, rather than a cache version bump.
 - **Commander pairs:** `GET /deck-builder/candidates` also takes
   `commander2` (Partner, Partner with, the `Partner—…` groups, a Background,
   a Doctor and companion).

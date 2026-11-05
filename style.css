@@ -6996,6 +6996,17 @@ button.uta-bracket-btn[aria-pressed="true"] {
    updateSecondCommanderField uses. */
 .db-field[hidden] { display: none; }
 .db-commander2-hint { margin: 0; }
+/* Full width and 44px like the commander fields; 16px text stops iOS
+   zooming in when the native picker opens. */
+#db-theme {
+  width: 100%;
+  min-height: 44px;
+  font-size: 1rem;
+}
+.db-theme-hint { margin: 0; }
+/* The chosen theme in the result header (renderDeckBuild), in ink so it
+   reads as part of what was built, not as the muted metadata around it. */
+.db-sub-theme { color: var(--ink); font-weight: 600; }
 /* "Build from <first>'s own page" sits on its own line under the status
    message that offers it (setDeckBuilderStatus's action). */
 .db-status-action {

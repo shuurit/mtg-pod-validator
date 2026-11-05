@@ -2696,12 +2696,73 @@ function deckBuilderCardRoles(oracleId, edhrecRank, faces, roleTags) {
 // commander's when EDHREC has no page for the pair. Both commanders are
 // looked up by name in the same Scryfall request as the candidates, both
 // are left out of the candidates, and the answer carries both.
+// ---- Themes ----
+// Every EDHREC commander page carries tag_counts: the themes its decks are
+// tagged with, most decks first ({ slug, value, count }). A theme's own
+// page, checked on json.edhrec.com (Nov 2026) for five commanders, a pair
+// and a Background pair, in every bracket:
+//   commanders/<slug>/<bracket>/<theme>.json      -- "Core Infect"
+//   average-decks/<slug>/<bracket>/<theme>.json
+// (theme before bracket answers 403). Where no deck at that bracket has
+// the theme, the page still answers 200 but with no card lists; then the
+// all-brackets theme page is used instead:
+//   commanders/<slug>/<theme>.json, average-decks/<slug>/<theme>.json
+// and deck-builder.js applies the bracket's rules to it as always.
+const DECK_BUILDER_THEME_LIMIT = 10;
+// Themes from fewer decks than this make thin pages (2 decks still get one).
+const DECK_BUILDER_THEME_MIN_DECKS = 5;
+const DECK_BUILDER_THEME_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+// A page's tag_counts -> the themes to offer: most decks first, at least
+// DECK_BUILDER_THEME_MIN_DECKS decks, at most DECK_BUILDER_THEME_LIMIT.
+function deckBuilderThemes(tagCounts) {
+  return (Array.isArray(tagCounts) ? tagCounts : [])
+    .filter(t => t && typeof t.slug === "string" && DECK_BUILDER_THEME_RE.test(t.slug) && Number(t.count) >= DECK_BUILDER_THEME_MIN_DECKS)
+    .sort((a, b) => Number(b.count) - Number(a.count))
+    .slice(0, DECK_BUILDER_THEME_LIMIT)
+    .map(t => ({ slug: t.slug, name: String(t.value || t.slug), count: Number(t.count) }));
+}
+
+// Whether an EDHREC page has any cards (an empty theme page has none).
+function hasCardlists(page) {
+  const lists = page?.container?.json_dict?.cardlists;
+  return Array.isArray(lists) && lists.some(l => (l.cardviews || []).length);
+}
+
+// The commander page (and its average deck) for a bracket, or for a theme
+// at that bracket -- falling back to the all-brackets theme page when that
+// bracket has no decks with the theme. themeSource says which was used.
+async function deckBuilderPages(slug, bracketSlug, theme) {
+  if (!theme) {
+    const [page, average] = await Promise.all([
+      edhrecJson(`commanders/${slug}/${bracketSlug}.json`),
+      edhrecJson(`average-decks/${slug}/${bracketSlug}.json`).catch(() => null),
+    ]);
+    return { page, average, themeSource: null };
+  }
+  let [page, average] = await Promise.all([
+    edhrecJson(`commanders/${slug}/${bracketSlug}/${theme}.json`),
+    edhrecJson(`average-decks/${slug}/${bracketSlug}/${theme}.json`).catch(() => null),
+  ]);
+  let themeSource = "bracket";
+  if (!hasCardlists(page)) {
+    [page, average] = await Promise.all([
+      edhrecJson(`commanders/${slug}/${theme}.json`),
+      edhrecJson(`average-decks/${slug}/${theme}.json`).catch(() => null),
+    ]);
+    themeSource = "all-brackets";
+  } else if (!hasCardlists(average)) {
+    average = await edhrecJson(`average-decks/${slug}/${theme}.json`).catch(() => null);
+  }
+  return { page, average, themeSource };
+}
+
+// opts.theme: an EDHREC theme slug (from the answer's `themes`) to build
+// toward; see deckBuilderPages for which page that reads.
 async function buildDeckBuilderCandidates(slug, bracket, tagsFor = null, roleTagsFor = async () => null, opts = {}) {
   const bracketSlug = DECK_BUILDER_BRACKET_SLUGS[bracket];
-  const [page, average] = await Promise.all([
-    edhrecJson(`commanders/${slug}/${bracketSlug}.json`),
-    edhrecJson(`average-decks/${slug}/${bracketSlug}.json`).catch(() => null),
-  ]);
+  const theme = opts.theme || null;
+  const { page, average, themeSource } = await deckBuilderPages(slug, bracketSlug, theme);
   const dict = page?.container?.json_dict;
   if (!dict || !Array.isArray(dict.cardlists)) return null;
 
@@ -2801,7 +2862,13 @@ async function buildDeckBuilderCandidates(slug, bracket, tagsFor = null, roleTag
     commander: commanders[0],
     commanders,
     pairSource: pairNames ? (opts.pairSource || "pair") : null,
-    edhrecUrl: `https://edhrec.com/commanders/${slug}/${bracketSlug}`,
+    edhrecUrl: theme
+      ? `https://edhrec.com/commanders/${slug}/${themeSource === "bracket" ? `${bracketSlug}/` : ""}${theme}`
+      : `https://edhrec.com/commanders/${slug}/${bracketSlug}`,
+    // The commander's themes at this bracket (the theme picker), and the
+    // one this answer is built toward, if any.
+    themes: deckBuilderThemes(page.tag_counts),
+    theme: theme ? { slug: theme, name: (deckBuilderThemes(page.tag_counts).find(t => t.slug === theme) || {}).name || null, source: themeSource } : null,
     template,
     averageBasics,
     tagsChecked: !!tags,
@@ -2848,6 +2915,9 @@ async function handleDeckBuilderCandidates(env, ctx, session, url) {
   // pairFallback=1: EDHREC has no page for the pair, and the player chose to
   // build from the first commander's own page anyway.
   const pairFallback = !!slug2 && url.searchParams.get("pairFallback") === "1";
+  // theme=<EDHREC theme slug>: build toward that theme (deckBuilderPages).
+  const theme = String(url.searchParams.get("theme") || "").trim().toLowerCase();
+  if (theme && (theme.length > 60 || !DECK_BUILDER_THEME_RE.test(theme))) return jsonResponse({ error: "That isn't an EDHREC theme." }, 400);
 
   // A pair's page is named "<first>-<second>" in EDHREC's order, which the
   // page sends in (pairOrder in deck-builder.js); edhrecJson follows the
@@ -2855,18 +2925,19 @@ async function handleDeckBuilderCandidates(env, ctx, session, url) {
   // sorted, so either order finds it; a fallback build has its own.
   const pageSlug = slug2 && !pairFallback ? `${slug}-${slug2}` : slug;
   const keySlug = slug2 ? [slug, slug2].sort().join("+") + (pairFallback ? "~first" : "") : slug;
-  const cacheKey = `deckbuilder:${DECK_BUILDER_CACHE_VERSION}:${keySlug}:${bracket}`;
+  // No theme keeps the key it always had; a theme gets its own.
+  const cacheKey = `deckbuilder:${DECK_BUILDER_CACHE_VERSION}:${keySlug}:${bracket}${theme ? `:theme=${theme}` : ""}`;
   let data = await kvGetJson(env, cacheKey, null);
   if (!data) {
     try {
       data = await buildDeckBuilderCandidates(pageSlug, bracket, () => deckBuilderTags(env, ctx),
         identity => deckBuilderRoleTags(env, ctx, identity),
-        slug2 ? { commanderNames: [commander, commander2], pairSource: pairFallback ? "first-commander" : "pair" } : {});
+        { ...(slug2 ? { commanderNames: [commander, commander2], pairSource: pairFallback ? "first-commander" : "pair" } : {}), theme: theme || null });
     } catch (err) {
       return jsonResponse({ error: err.message }, 502);
     }
     if (!data) {
-      const reason = slug2 && !pairFallback ? "no-edhrec-pair" : "no-edhrec";
+      const reason = theme ? "no-edhrec-theme" : slug2 && !pairFallback ? "no-edhrec-pair" : "no-edhrec";
       return jsonResponse({ slug: pageSlug, bracket, reason, commander, commander2: commander2 || null }, 200, { "Cache-Control": "no-store" });
     }
     if (data.reason) return jsonResponse({ ...data, bracket, commander, commander2 }, 200, { "Cache-Control": "no-store" });
@@ -2877,6 +2948,14 @@ async function handleDeckBuilderCandidates(env, ctx, session, url) {
           .catch(err => console.error(`deck builder cache write failed: ${err.message}`))
       );
     }
+  }
+
+  // Answers cached before themes existed (same key, up to a week old) get
+  // their theme list from the commander page -- one EDHREC request, no
+  // Scryfall -- rather than a new cache version rebuilding every commander.
+  if (!Array.isArray(data.themes)) {
+    const page = await edhrecJson(`commanders/${pageSlug}/${DECK_BUILDER_BRACKET_SLUGS[bracket]}.json`).catch(() => null);
+    data = { ...data, themes: deckBuilderThemes(page && page.tag_counts), theme: null };
   }
 
   const collection = await matchCollection(env, session.discordUserId, data.candidates.map(c => c.oracleId));
