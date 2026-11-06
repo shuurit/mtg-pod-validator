@@ -17,7 +17,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="style.css?v=95">
+<link rel="stylesheet" href="style.css?v=96">
 
 <!-- Home-screen icon (iOS "Add to Home Screen" + Android/Chrome install).
      Generated from icon-source.png via scripts/generate_icons.py -- rerun
@@ -291,6 +291,13 @@
       </button>
       <h2>Build a Deck</h2>
       <p class="hint">Pick a commander and a bracket. The deck comes from what decks at that bracket run on EDHREC, using cards from your Archidekt collection first.</p>
+      <!-- Your saved results (loadSavedBuilds / renderSavedBuilds in app.js);
+           hidden until there's one. -->
+      <section class="db-saved" id="db-saved" aria-labelledby="db-saved-title" hidden>
+        <h3 class="db-group-title" id="db-saved-title">Saved builds</h3>
+        <ul class="db-saved-list" id="db-saved-list"></ul>
+        <p class="hint db-saved-note" id="db-saved-note" hidden></p>
+      </section>
       <form id="db-form" class="db-form" novalidate>
         <label class="db-field" for="db-commander">
           <span class="db-label">Commander</span>
@@ -574,7 +581,7 @@
 </div>
 
 <script src="deck-tally.js?v=2"></script>
-<script src="deck-builder.js?v=11"></script>
-<script src="app.js?v=105"></script>
+<script src="deck-builder.js?v=12"></script>
+<script src="app.js?v=106"></script>
 </body>
 </html>

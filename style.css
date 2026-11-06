@@ -7495,3 +7495,74 @@ a.db-wants-link {
   a.db-wants-link:hover { border-color: var(--accent); color: var(--accent); }
 }
 a.db-wants-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Build a Deck: saved builds above the form (renderSavedBuilds). Each is a
+   row of two real buttons: the build itself (opens it) and Delete, both
+   44px tall for a thumb. The open one is tinted like an open deck row. */
+.db-saved { margin: 4px 0 14px; }
+.db-saved[hidden] { display: none; }
+.db-saved-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.db-saved-item {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+button.db-saved-open {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 12px;
+  text-align: left;
+  background: var(--bg-accent);
+  border-color: var(--border-soft);
+  transform: none;
+}
+.db-saved-item.is-open button.db-saved-open { background: var(--accent-soft); border-color: var(--accent); }
+.db-saved-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.db-saved-meta {
+  font-size: 0.76rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+button.db-saved-delete {
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 8px 12px;
+  color: var(--bad);
+  border-color: var(--bad-border);
+  background: var(--bad-bg);
+}
+@media (hover: hover) and (pointer: fine) {
+  button.db-saved-delete:hover { color: var(--bad); border-color: var(--bad); }
+}
+.db-saved-note { margin: 6px 0 0; }
+.db-saved-note[hidden] { display: none; }
+
+/* A saved build on show (renderSavedBuildView): its save date, said in
+   words and set apart, so a months-old list isn't mistaken for today's. */
+.db-saved-stamp {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 0.88rem;
+  color: var(--ink);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+}
+.db-saved-stamp b { font-weight: 600; }
+/* The deck's own actions (Copy, Save, Rebuild, Close) get a thumb-sized
+   target like the rest of Build a Deck's controls. */
+#db-result .db-actions button { min-height: 44px; }

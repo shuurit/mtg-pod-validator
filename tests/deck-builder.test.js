@@ -961,3 +961,51 @@ test("applySwap with nothing to replace just adds the pick", () => {
     assert.equal(db.wantsHandoffUrl({ bracket: 3, cards: [card(2, "free")] }, [{ name: "X" }]), null);
   });
 }
+
+// ---- Saved builds ----
+{
+  const db = require("../deck-builder.js");
+  const OID = n => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+  const build = {
+    commanders: [{ name: "Tymna the Weaver" }, { name: "Kraum, Ludevic's Opus" }],
+    bracket: 3,
+    theme: { slug: "group-hug", name: "Group Hug" },
+    cards: [
+      { name: "Sol Ring", oracleId: OID(1), status: "free", price: 1.5, type: "artifact", synergy: 3, roles: ["ramp"] },
+      { name: "Brainstorm", oracleId: OID(2), status: "missing", price: 2, type: "instant" },
+      { name: "Arcane Signet", oracleId: OID(3), status: "deck", price: null, type: "artifact" },
+    ],
+    basics: [{ name: "Plains", count: 9 }, { name: "Swamp", count: 8 }],
+    tally: { free: 1, deck: 1, missing: 1, missingCost: 2, unknownPrices: 0, extra: 5 },
+  };
+
+  test("a saved build keeps the settings it ran with and the list as it was, nothing else", () => {
+    const pick = { oracleId: OID(9), uid: OID(19), name: "Mulldrifter", type: "creature", cmc: 5, price: 0.3, roles: ["draw"], qty: 2, decks: ["Old"], why: "not kept" };
+    const saved = db.snapshotBuild(build, { budget: 50, excludeDeckCards: true, pinned: [OID(2), OID(2)], excluded: [OID(7)], request: "  more draw ", pairFallback: false, picks: [pick, { name: "no id" }] });
+    assert.deepEqual(saved.commanders, ["Tymna the Weaver", "Kraum, Ludevic's Opus"]);
+    assert.equal(saved.bracket, 3);
+    assert.deepEqual(saved.options, {
+      budget: 50, excludeDeckCards: true, pinned: [OID(2)], excluded: [OID(7)], theme: "group-hug", request: "more draw", pairFallback: false,
+      picks: [{ oracleId: OID(9), uid: OID(19), name: "Mulldrifter", type: "creature", cmc: 5, price: 0.3, gameChanger: false, massLandDenial: false, extraTurn: false, roles: ["draw"], qty: 2, decks: ["Old"] }],
+    });
+    assert.deepEqual(saved.cards[0], { name: "Sol Ring", oracleId: OID(1), status: "free", price: 1.5, type: "artifact" });
+    assert.equal(saved.cards[2].price, null);
+    assert.deepEqual(saved.basics, build.basics);
+    assert.deepEqual(saved.tally, { free: 1, deck: 1, missing: 1, missingCost: 2, unknownPrices: 0 });
+  });
+
+  test("the theme picked on the form wins over the build's own; none is null", () => {
+    assert.equal(db.snapshotBuild(build, { theme: "voltron" }).options.theme, "voltron");
+    assert.equal(db.snapshotBuild({ ...build, theme: null }, {}).options.theme, null);
+    assert.equal(db.snapshotBuildOptions({}).budget, 0);
+  });
+
+  test("a saved list reads back grouped by type, and as Archidekt text", () => {
+    const saved = db.snapshotBuild(build, {});
+    assert.equal(db.savedBuildTitle(saved), "Tymna the Weaver / Kraum, Ludevic's Opus");
+    assert.deepEqual(db.savedBuildGroups(saved).map(g => [g.type, g.cards.map(c => c.name)]), [["instant", ["Brainstorm"]], ["artifact", ["Arcane Signet", "Sol Ring"]]]);
+    assert.equal(db.savedBuildToText(saved), [
+      "1 Tymna the Weaver", "1 Kraum, Ludevic's Opus", "1 Brainstorm", "1 Arcane Signet", "1 Sol Ring", "9 Plains", "8 Swamp",
+    ].join("\n"));
+  });
+}

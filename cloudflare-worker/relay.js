@@ -209,7 +209,7 @@ const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
 function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
     // Authorization added alongside Content-Type once write requests
     // started carrying a session bearer token (see requireSession) -- a
     // browser's CORS preflight rejects any request header not explicitly
@@ -3497,6 +3497,158 @@ async function handleDeckBuilderOwners(request, env, session) {
   return jsonResponse({ checked: true, owners }, 200, noStore);
 }
 
+// ---------- /deck-builder/builds: saved Build a Deck results ----------
+// GET    /deck-builder/builds          the caller's saved builds, newest
+//                                      first, as summaries (no card lists)
+// GET    /deck-builder/builds?id=N     one of them in full
+// POST   /deck-builder/builds          save one ({ id } to overwrite one)
+// DELETE /deck-builder/builds?id=N     remove one
+// Every query is scoped to session.playerId: a player can only ever see,
+// change or delete their own. What's saved is what the page sends
+// (snapshotBuild in deck-builder.js), checked and bounded by
+// deckBuilderCleanBuild below; the relay never trusts it beyond that.
+const DECK_BUILDS_PER_PLAYER = 25;
+const DECK_BUILD_STATUSES = new Set(["free", "deck", "missing"]);
+const DECK_BUILD_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// The page's save body -> exactly what gets stored, or { error }.
+function deckBuilderCleanBuild(body) {
+  if (!body || typeof body !== "object") return { error: "Send the build." };
+  const text = (v, n) => (typeof v === "string" ? v.replace(/\s+/g, " ").trim().slice(0, n) : "");
+  const num = (v, lo, hi) => (typeof v === "number" && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : null);
+  const id = v => (typeof v === "string" && DECK_BUILD_UUID_RE.test(v) ? v.toLowerCase() : null);
+  const ids = (v, max) => [...new Set((Array.isArray(v) ? v : []).map(id).filter(Boolean))].slice(0, max);
+
+  const commanders = (Array.isArray(body.commanders) ? body.commanders : []).map(v => text(v, 150)).filter(Boolean).slice(0, 2);
+  const bracket = Number(body.bracket);
+  if (!commanders.length || !DECK_BUILDER_BRACKET_SLUGS[bracket]) return { error: "Send the commander(s) and the bracket." };
+
+  const o = body.options && typeof body.options === "object" ? body.options : {};
+  const options = {
+    budget: Math.round(num(o.budget, 0, 10000) ?? 0),
+    excludeDeckCards: !!o.excludeDeckCards,
+    pinned: ids(o.pinned, 200),
+    excluded: ids(o.excluded, 200),
+    theme: typeof o.theme === "string" && /^[a-z0-9-]{1,60}$/.test(o.theme) ? o.theme : null,
+    request: text(o.request, 300),
+    pairFallback: !!o.pairFallback,
+    picks: (Array.isArray(o.picks) ? o.picks : []).filter(p => p && id(p.oracleId) && text(p.name, 150)).slice(0, 20).map(p => ({
+      oracleId: id(p.oracleId),
+      uid: id(p.uid),
+      name: text(p.name, 150),
+      type: text(p.type, 20) || "other",
+      cmc: num(p.cmc, 0, 100),
+      price: num(p.price, 0, 100000),
+      gameChanger: !!p.gameChanger,
+      massLandDenial: !!p.massLandDenial,
+      extraTurn: !!p.extraTurn,
+      roles: (Array.isArray(p.roles) ? p.roles : []).map(r => text(r, 20)).filter(Boolean).slice(0, 6),
+      qty: Math.round(num(p.qty, 1, 999) ?? 1),
+      decks: (Array.isArray(p.decks) ? p.decks : []).map(d => text(d, 80)).filter(Boolean).slice(0, 10),
+    })),
+  };
+
+  const cards = (Array.isArray(body.cards) ? body.cards : []).filter(c => c && text(c.name, 150) && DECK_BUILD_STATUSES.has(c.status)).slice(0, 110).map(c => ({
+    name: text(c.name, 150),
+    oracleId: id(c.oracleId),
+    status: c.status,
+    price: num(c.price, 0, 100000),
+    type: text(c.type, 20) || "other",
+  }));
+  if (!cards.length) return { error: "The build has no cards." };
+  const basics = (Array.isArray(body.basics) ? body.basics : []).filter(b => b && text(b.name, 40)).slice(0, 10).map(b => ({
+    name: text(b.name, 40),
+    count: Math.round(num(b.count, 0, 99) ?? 0),
+  }));
+  const t = body.tally && typeof body.tally === "object" ? body.tally : {};
+  const tally = {};
+  for (const k of ["free", "deck", "missing", "unknownPrices"]) tally[k] = Math.round(num(t[k], 0, 200) ?? 0);
+  tally.missingCost = Math.round((num(t.missingCost, 0, 1000000) ?? 0) * 100) / 100;
+
+  return {
+    id: Number.isInteger(body.id) && body.id > 0 ? body.id : null,
+    commander: commanders[0],
+    commander2: commanders[1] || null,
+    bracket,
+    options,
+    list: { cards, basics, tally },
+  };
+}
+
+// A stored row -> what the page gets. Summaries leave the card list out.
+function deckBuilderBuildOut(row, full) {
+  let options = {};
+  let list = { cards: [], basics: [], tally: {} };
+  try { options = JSON.parse(row.options_json) || {}; } catch { /* keep {} */ }
+  try { list = JSON.parse(row.cards_json) || list; } catch { /* keep empty */ }
+  const out = {
+    id: row.id,
+    commanders: [row.commander, row.commander2].filter(Boolean),
+    bracket: row.bracket,
+    theme: options.theme || null,
+    tally: list.tally || {},
+    cardCount: (list.cards || []).length + (list.basics || []).reduce((n, b) => n + (b.count || 0), 0),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+  if (full) Object.assign(out, { options, cards: list.cards || [], basics: list.basics || [] });
+  return out;
+}
+
+async function handleDeckBuilderBuilds(request, env, session, url) {
+  const playerId = session && session.playerId;
+  if (!playerId) return jsonResponse({ error: "Sign in required" }, 401);
+  const noStore = { "Cache-Control": "no-store" };
+  const idParam = url.searchParams.get("id");
+  const wantId = idParam != null ? Number(idParam) : null;
+  if (idParam != null && !(Number.isInteger(wantId) && wantId > 0)) return jsonResponse({ error: "Bad id." }, 400);
+
+  if (request.method === "GET") {
+    if (wantId) {
+      const row = await env.DB.prepare("SELECT * FROM deck_builds WHERE id = ? AND player_id = ?").bind(wantId, playerId).first();
+      if (!row) return jsonResponse({ error: "No such saved build." }, 404);
+      return jsonResponse({ build: deckBuilderBuildOut(row, true) }, 200, noStore);
+    }
+    const { results } = await env.DB.prepare(
+      "SELECT * FROM deck_builds WHERE player_id = ? ORDER BY updated_at DESC, id DESC"
+    ).bind(playerId).all();
+    return jsonResponse({ builds: results.map(r => deckBuilderBuildOut(r, false)), max: DECK_BUILDS_PER_PLAYER }, 200, noStore);
+  }
+
+  if (request.method === "DELETE") {
+    if (!wantId) return jsonResponse({ error: "Say which build." }, 400);
+    const res = await env.DB.prepare("DELETE FROM deck_builds WHERE id = ? AND player_id = ?").bind(wantId, playerId).run();
+    if (!res.meta || !res.meta.changes) return jsonResponse({ error: "No such saved build." }, 404);
+    return jsonResponse({ ok: true }, 200, noStore);
+  }
+
+  // POST: save, or overwrite one of the caller's own.
+  const clean = deckBuilderCleanBuild(await request.json().catch(() => null));
+  if (clean.error) return jsonResponse({ error: clean.error }, 400);
+  const optionsJson = JSON.stringify(clean.options);
+  const cardsJson = JSON.stringify(clean.list);
+  if (optionsJson.length > 40000 || cardsJson.length > 60000) return jsonResponse({ error: "That build is too big to save." }, 413);
+  let id = clean.id;
+  if (id) {
+    const res = await env.DB.prepare(
+      `UPDATE deck_builds SET commander = ?, commander2 = ?, bracket = ?, options_json = ?, cards_json = ?, updated_at = datetime('now')
+       WHERE id = ? AND player_id = ?`
+    ).bind(clean.commander, clean.commander2, clean.bracket, optionsJson, cardsJson, id, playerId).run();
+    if (!res.meta || !res.meta.changes) return jsonResponse({ error: "No such saved build." }, 404);
+  } else {
+    const count = await env.DB.prepare("SELECT COUNT(*) AS n FROM deck_builds WHERE player_id = ?").bind(playerId).first();
+    if ((count && count.n) >= DECK_BUILDS_PER_PLAYER) {
+      return jsonResponse({ error: `You have ${DECK_BUILDS_PER_PLAYER} saved builds, the most there's room for. Delete one to save this.`, reason: "full" }, 409);
+    }
+    const res = await env.DB.prepare(
+      "INSERT INTO deck_builds (player_id, commander, commander2, bracket, options_json, cards_json) VALUES (?, ?, ?, ?, ?, ?)"
+    ).bind(playerId, clean.commander, clean.commander2, clean.bracket, optionsJson, cardsJson).run();
+    id = res.meta && res.meta.last_row_id;
+  }
+  const row = await env.DB.prepare("SELECT * FROM deck_builds WHERE id = ? AND player_id = ?").bind(id, playerId).first();
+  return jsonResponse({ build: deckBuilderBuildOut(row, true) }, 200, noStore);
+}
+
 async function handleDeckWinRates(env) {
   let data;
   try {
@@ -5487,6 +5639,10 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/deck-builder/read-request") {
       return handleDeckBuilderReadRequest(request, env, ctx);
+    }
+
+    if (url.pathname === "/deck-builder/builds" && ["GET", "POST", "DELETE"].includes(request.method)) {
+      return handleDeckBuilderBuilds(request, env, session, url);
     }
 
     if (request.method === "POST" && url.pathname === "/deck-builder/owners") {
