@@ -928,3 +928,36 @@ test("applySwap with nothing to replace just adds the pick", () => {
     assert.deepEqual(m.searchTags, []);
   });
 }
+
+// ---- Missing cards -> a want folder in the Archidekt Trading App ----
+{
+  const db = require("../deck-builder.js");
+  const OID = n => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+  const UID = n => `11111111-0000-4000-8000-${String(n).padStart(12, "0")}`;
+  const card = (n, status, extra = {}) => ({ name: `Card ${n}`, oracleId: OID(n), uid: UID(n), status, ...extra });
+
+  test("the want folder is named after the commander(s) and bracket", () => {
+    assert.equal(db.wantsFolderName([{ name: "Atraxa, Praetors' Voice" }], 3), "Build: Atraxa, Praetors' Voice (Bracket 3)");
+    assert.equal(db.wantsFolderName([{ name: "Tymna the Weaver" }, { name: "Kraum, Ludevic's Opus" }], 4), "Build: Tymna the Weaver / Kraum, Ludevic's Opus (Bracket 4)");
+    assert.ok(db.wantsFolderName([{ name: "x".repeat(200) }], 2).length <= 80);
+  });
+
+  test("only the cards to get go, once each, with their print and oracle ids", () => {
+    const build = { bracket: 2, cards: [card(1, "missing"), card(2, "free"), card(3, "deck"), card(1, "missing"), card(4, "missing", { uid: null }), { name: "Forest", status: "missing" }] };
+    assert.deepEqual(db.missingCardsForWants(build), [
+      { n: "Card 1", u: UID(1), o: OID(1) },
+      { n: "Card 4", o: OID(4) },
+      { n: "Forest" },
+    ]);
+  });
+
+  test("the hand-off address opens the trading app's Wants import, with the list in the fragment", () => {
+    const build = { bracket: 3, cards: [card(1, "missing"), card(2, "free")] };
+    const url = db.wantsHandoffUrl(build, [{ name: "Atraxa, Praetors' Voice" }]);
+    assert.ok(url.startsWith("https://archidekt-trading-app.pages.dev/#import-wants="));
+    const payload = JSON.parse(decodeURIComponent(url.split("#import-wants=")[1]));
+    assert.deepEqual(payload, { v: 1, folder: "Build: Atraxa, Praetors' Voice (Bracket 3)", cards: [{ n: "Card 1", u: UID(1), o: OID(1) }] });
+    assert.ok(!url.split("#")[0].includes("Card"), "nothing about the cards outside the fragment");
+    assert.equal(db.wantsHandoffUrl({ bracket: 3, cards: [card(2, "free")] }, [{ name: "X" }]), null);
+  });
+}

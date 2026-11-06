@@ -12396,6 +12396,7 @@ function renderDeckBuild() {
   const copyBtn = makeEl("button", "primary", "Copy for Archidekt");
   copyBtn.type = "button";
   const copyNote = makeEl("p", "hint db-copy-note");
+  copyNote.id = "db-copy-note";
   copyNote.setAttribute("aria-live", "polite");
   copyNote.hidden = true;
   const fallback = makeEl("textarea", "db-copy-fallback");
@@ -12419,6 +12420,26 @@ function renderDeckBuild() {
     copyNote.hidden = false;
   });
   actions.append(copyBtn);
+  // The cards to get, into a want folder in the Archidekt Trading App: a
+  // link that opens its Wants import with them (wantsHandoffUrl). The
+  // player checks the list there, signed in, and presses Add; nothing is
+  // written from here.
+  const wantsUrl = wantsHandoffUrl(build, commanders);
+  if (wantsUrl) {
+    const missingCount = missingCardsForWants(build).length;
+    const folderName = wantsFolderName(commanders, build.bracket);
+    const wantsLink = makeEl("a", "db-wants-link", "Missing → want folder");
+    wantsLink.href = wantsUrl;
+    wantsLink.target = "_blank";
+    wantsLink.rel = "noopener";
+    wantsLink.setAttribute("aria-describedby", "db-copy-note");
+    wantsLink.addEventListener("click", () => {
+      copyNote.textContent = `Opened the Archidekt Trading App with your ${missingCount} missing card${missingCount === 1 ? "" : "s"}. Check the list there and press Add to put ${missingCount === 1 ? "it" : "them"} in “${folderName}”. Nothing is added until you do.`;
+      copyNote.hidden = false;
+      fallback.hidden = true;
+    });
+    actions.append(wantsLink);
+  }
   const swapCount = deckBuilderUi.swaps.pinned.length;
   if (swapCount || deckBuilderUi.swaps.excluded.length) {
     const reset = makeEl("button", "db-reset-swaps", `Reset swaps${swapCount ? ` (${swapCount})` : ""}`);
