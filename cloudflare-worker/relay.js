@@ -3328,6 +3328,55 @@ async function handleDeckBuilderReadRequest(request, env, ctx) {
   return jsonResponse({ read: true, cached: false, model: DECK_BUILDER_AI_MODEL, reading }, 200, noStore);
 }
 
+// Scryfall's word on cards from the player's own collection (collection
+// picks, binder gems): one /cards/collection call for up to 75 oracle ids.
+// Keeps only cards that are Commander-legal and inside `identity` today,
+// with the facts the builder needs: print id, name, type, mana value, price,
+// Game Changer, mass land denial / extra turn (the Tagger lists), and the
+// roles its rules text reads as. Returns Map(oracle id -> facts); empty if
+// Scryfall can't be reached, so nothing unchecked is ever offered.
+async function deckBuilderCheckOwnedCards(env, ctx, oracleIds, identity, label = "cards") {
+  const out = new Map();
+  const ids = [...new Set(oracleIds)].slice(0, 75);
+  if (!ids.length) return out;
+  let scry = null;
+  try {
+    const res = await scryfallFetch(`${SCRYFALL_API_BASE}/cards/collection`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identifiers: ids.map(id => ({ oracle_id: id })) }),
+    }, { essential: true });
+    if (res.ok) scry = await res.json();
+  } catch (err) {
+    console.error(`Scryfall lookup for ${label} failed: ${err.message}`);
+  }
+  const tagsSets = await deckBuilderTags(env, ctx);
+  const num = v => (v != null && Number.isFinite(Number(v)) ? Number(v) : null);
+  for (const c of (scry && scry.data) || []) {
+    const oracleId = String(c.oracle_id || c.card_faces?.[0]?.oracle_id || "").toLowerCase();
+    if (!oracleId || !ids.includes(oracleId)) continue;
+    if (c.legalities && c.legalities.commander !== "legal") continue;
+    if ((c.color_identity || []).some(l => !identity.includes(l))) continue;
+    const typeLine = c.type_line || c.card_faces?.[0]?.type_line || "";
+    const faces = c.card_faces && c.card_faces.length
+      ? c.card_faces.map(f => ({ text: f.oracle_text || "", typeLine: f.type_line || "" }))
+      : [{ text: c.oracle_text || "", typeLine }];
+    out.set(oracleId, {
+      oracleId,
+      uid: c.id,
+      name: c.name,
+      type: deckBuilderPrimaryType(typeLine),
+      cmc: num(c.cmc),
+      price: num(c.prices?.usd) ?? num(c.prices?.usd_foil) ?? num(c.prices?.usd_etched),
+      gameChanger: !!c.game_changer,
+      massLandDenial: tagsSets ? tagsSets.massLandDenial.has(oracleId) : null,
+      extraTurn: tagsSets ? tagsSets.extraTurn.has(oracleId) : null,
+      roles: deckBuilderKeywordRoles(faces),
+    });
+  }
+  return out;
+}
+
 async function handleDeckBuilderCollectionPicks(request, env, ctx, session) {
   const body = await request.json().catch(() => null);
   const clean = (v, n = 200) => (typeof v === "string" ? v.trim().slice(0, n) : "");
@@ -3399,43 +3448,16 @@ async function handleDeckBuilderCollectionPicks(request, env, ctx, session) {
   // 4. Scryfall's word on each pick: legal, in colours, and its card facts
   // (type, mana value, price, Game Changer, roles) for the builder.
   if (picks.length) {
-    let scry = null;
-    try {
-      const res = await scryfallFetch(`${SCRYFALL_API_BASE}/cards/collection`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ identifiers: picks.map(p => ({ oracle_id: p.oracleId })) }),
-      }, { essential: true });
-      if (res.ok) scry = await res.json();
-    } catch (err) {
-      console.error(`Scryfall lookup for picks failed: ${err.message}`);
-    }
-    const tagsSets = await deckBuilderTags(env, ctx);
-    const byOracle = new Map((scry && scry.data || []).map(c => [String(c.oracle_id || c.card_faces?.[0]?.oracle_id || "").toLowerCase(), c]));
-    const num = v => (v != null && Number.isFinite(Number(v)) ? Number(v) : null);
+    const facts = await deckBuilderCheckOwnedCards(env, ctx, picks.map(p => p.oracleId), identity, "picks");
     picks = picks.flatMap(p => {
-      const c = byOracle.get(p.oracleId);
-      if (!c) return [];
-      if (c.legalities && c.legalities.commander !== "legal") return [];
-      if ((c.color_identity || []).some(l => !identity.includes(l))) return [];
-      const typeLine = c.type_line || c.card_faces?.[0]?.type_line || "";
-      const faces = c.card_faces && c.card_faces.length
-        ? c.card_faces.map(f => ({ text: f.oracle_text || "", typeLine: f.type_line || "" }))
-        : [{ text: c.oracle_text || "", typeLine }];
-      const roles = new Set(deckBuilderKeywordRoles(faces));
+      const f = facts.get(p.oracleId);
+      if (!f) return [];
+      const roles = new Set(f.roles);
       for (const [role, roleTags] of Object.entries(DECK_BUILDER_ROLE_ARCHIDEKT_TAGS)) {
         if ((p.matched || []).some(t => roleTags.includes(t))) roles.add(role);
       }
       return [{
-        oracleId: p.oracleId,
-        uid: c.id,
-        name: c.name,
-        type: deckBuilderPrimaryType(typeLine),
-        cmc: num(c.cmc),
-        price: num(c.prices?.usd) ?? num(c.prices?.usd_foil) ?? num(c.prices?.usd_etched),
-        gameChanger: !!c.game_changer,
-        massLandDenial: tagsSets ? tagsSets.massLandDenial.has(p.oracleId) : null,
-        extraTurn: tagsSets ? tagsSets.extraTurn.has(p.oracleId) : null,
+        ...f,
         roles: [...roles],
         why: p.why,
         replace: p.replace,
@@ -3446,6 +3468,64 @@ async function handleDeckBuilderCollectionPicks(request, env, ctx, session) {
     });
   }
   return jsonResponse({ checked: true, source, model: source === "ai" ? DECK_BUILDER_AI_MODEL : null, searched: tags, picks }, 200, { "Cache-Control": "no-store" });
+}
+
+// ---------- POST /deck-builder/gems ("From your binder") ----------
+// The player's own cards that fit the commander but that EDHREC's list
+// doesn't suggest: archidekt-trading-app's POST
+// /api/internal/collection-gems (owned, Commander-legal, inside the colour
+// identity, not a basic, not in `exclude`, best EDHREC rank first), each
+// then re-checked with Scryfall (deckBuilderCheckOwnedCards), since the
+// trading app's facts are as of the player's last sync. Its own request,
+// after GET /deck-builder/candidates: those answers are cached per
+// commander and bracket, these are per player and never cached, and the
+// candidates route already spends most of its subrequest budget on a cold
+// build. Always for the signed-in player (session.discordUserId).
+const DECK_BUILDER_GEMS_MAX = 40;
+
+async function handleDeckBuilderGems(request, env, ctx, session) {
+  const body = await request.json().catch(() => null);
+  const identity = String((body && body.colorIdentity) || "").toUpperCase();
+  const uidOk = v => typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+  const exclude = [...new Set((Array.isArray(body && body.exclude) ? body.exclude : []).filter(uidOk).map(v => v.toLowerCase()))].slice(0, 2000);
+  if (!/^[WUBRG]{0,5}$/.test(identity)) return jsonResponse({ error: "Send the colour identity." }, 400);
+  const noStore = { "Cache-Control": "no-store" };
+  if (!env.COLLECTION_BRIDGE_KEY) return jsonResponse({ checked: false, reason: "bridge-off" }, 200, noStore);
+
+  let found;
+  try {
+    const res = await fetch(`${ARCHIDEKT_TRADING_APP_BASE_URL}/api/internal/collection-gems`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Collection-Bridge-Key": env.COLLECTION_BRIDGE_KEY },
+      body: JSON.stringify({ discordId: String(session.discordUserId || ""), colorIdentity: identity, excludeOracleIds: exclude, limit: DECK_BUILDER_GEMS_MAX }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    found = await res.json();
+  } catch (err) {
+    console.error(`collection gems lookup failed: ${err.message}`);
+    return jsonResponse({ checked: false, reason: "unavailable" }, 200, noStore);
+  }
+  if (!found || found.connected === false) return jsonResponse({ checked: false, reason: (found && found.reason) || "no-account" }, 200, noStore);
+  const owned = (found.cards || []).filter(c => c && uidOk(c.oracleId) && c.name).slice(0, DECK_BUILDER_GEMS_MAX);
+  if (!owned.length) return jsonResponse({ checked: true, gems: [] }, 200, noStore);
+
+  const facts = await deckBuilderCheckOwnedCards(env, ctx, owned.map(c => c.oracleId.toLowerCase()), identity, "gems");
+  if (!facts.size) return jsonResponse({ checked: false, reason: "unchecked" }, 200, noStore);
+  const gems = owned.flatMap(c => {
+    const f = facts.get(c.oracleId.toLowerCase());
+    if (!f) return [];
+    return [{
+      ...f,
+      // The Tagger lists decide mass land denial / extra turns; Archidekt's
+      // own flags only stand in when those lists couldn't be read.
+      massLandDenial: f.massLandDenial ?? !!c.massLandDenial,
+      extraTurn: f.extraTurn ?? !!c.extraTurns,
+      edhrecRank: Number.isFinite(Number(c.edhrecRank)) ? Number(c.edhrecRank) : null,
+      qty: Math.max(1, Number(c.qty) || 1),
+      decks: Array.isArray(c.decks) ? c.decks.map(String).slice(0, 10) : [],
+    }];
+  });
+  return jsonResponse({ checked: true, gems }, 200, noStore);
 }
 
 // ---------- POST /deck-builder/owners ----------
@@ -5736,6 +5816,10 @@ export default {
 
     if (url.pathname === "/deck-builder/builds" && ["GET", "POST", "DELETE"].includes(request.method)) {
       return handleDeckBuilderBuilds(request, env, session, url);
+    }
+
+    if (request.method === "POST" && url.pathname === "/deck-builder/gems") {
+      return handleDeckBuilderGems(request, env, ctx, session);
     }
 
     if (request.method === "POST" && url.pathname === "/deck-builder/owners") {
