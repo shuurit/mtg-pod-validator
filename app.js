@@ -11183,6 +11183,8 @@ const deckBuilderUi = {
   // id. One search per request + commander + bracket: an AI call each.
   picks: null,
   picksAdded: new Map(),
+  // Friends who own the cards to get (freshDeckBuilderOwners), per build.
+  owners: null,
   // Workers AI's reading of the request box (POST /deck-builder/read-request),
   // once per request text + deck: { key, answer, pending } -- answer
   // undefined while the request is out.
@@ -11770,6 +11772,7 @@ async function runDeckBuild(opts = {}) {
     deckBuilderUi.openSwap = null;
     deckBuilderUi.picks = null;
     deckBuilderUi.picksAdded = new Map();
+    deckBuilderUi.owners = freshDeckBuilderOwners();
     setDeckBuilderStatus("");
     renderDeckBuild();
     updateDeckBuilderRequestReadback();
@@ -11853,6 +11856,120 @@ function deckBuilderChip(card) {
   return makeEl("span", "db-chip db-chip-buy", card.price != null ? `Get · ${formatDollars(card.price)}` : "Get");
 }
 
+// ---- Friends who own the cards to get ----
+// For every card the player would have to get (status "missing"), who else
+// in the circle owns one and would part with it: the relay asks the
+// Archidekt Trading App (POST /deck-builder/owners -> its
+// /api/internal/card-owners), which applies its own trade locks and answers
+// Discord usernames only. Trading itself stays in the trading app: the page
+// only says who has what and links there.
+const DECK_BUILDER_OWNERS_URL = RELAY_BASE_URL + "/deck-builder/owners";
+const TRADING_APP_URL = "https://archidekt-trading-app.pages.dev/";
+// Browse shows any friend's collection, so that's where a trade starts.
+const TRADING_APP_BROWSE_URL = TRADING_APP_URL + "#/browse";
+const DECK_BUILDER_OWNERS_MAX = 100;
+
+// byId: oracle id -> owners ([] = nobody), for every card asked about so
+// far this build; pending: ids out on a request; stopped: why it stopped
+// asking ("no-account", "unavailable", ...), so a failure isn't retried on
+// every render.
+function freshDeckBuilderOwners() {
+  return { byId: new Map(), pending: new Set(), stopped: null };
+}
+
+function deckBuilderMissingIds(build) {
+  return [...new Set(build.cards.filter(c => c.status === "missing" && c.oracleId).map(c => c.oracleId))];
+}
+
+// Ask about the missing cards not asked about yet. Each render calls this;
+// a swap that brings in a new card to get asks about that one card only.
+function requestDeckBuilderOwners(build) {
+  const state = deckBuilderUi.owners;
+  if (!state || state.stopped) return;
+  const ids = deckBuilderMissingIds(build).filter(id => !state.byId.has(id) && !state.pending.has(id)).slice(0, DECK_BUILDER_OWNERS_MAX);
+  if (!ids.length) return;
+  for (const id of ids) state.pending.add(id);
+  (async () => {
+    let answer;
+    try {
+      const res = await fetch(DECK_BUILDER_OWNERS_URL, {
+        method: "POST",
+        cache: "no-store",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ oracleIds: ids }),
+      });
+      answer = res.ok ? await res.json() : { checked: false, reason: "unavailable" };
+    } catch {
+      answer = { checked: false, reason: "unavailable" };
+    }
+    if (deckBuilderUi.owners !== state) return; // a new build started meanwhile
+    for (const id of ids) state.pending.delete(id);
+    if (answer && answer.checked) {
+      for (const id of ids) state.byId.set(id, Array.isArray(answer.owners && answer.owners[id]) ? answer.owners[id] : []);
+    } else {
+      state.stopped = (answer && answer.reason) || "unavailable";
+    }
+    renderDeckBuild();
+  })();
+}
+
+// "Mateo has one", "Mateo and Ana have one", "Mateo and 2 others have one";
+// whoever put it up for trade comes first (the trading app sorts them so).
+function deckBuilderOwnersText(owners) {
+  if (!owners || !owners.length) return "";
+  const [first, second] = owners;
+  const who = owners.length === 1 ? first.name
+    : owners.length === 2 ? `${first.name} and ${second.name}`
+    : `${first.name} and ${owners.length - 1} others`;
+  return `${who} ${owners.length === 1 ? "has" : "have"} one${first.upForTrade ? " · up for trade" : ""}`;
+}
+
+function deckBuilderCardOwners(card) {
+  if (card.status !== "missing") return null;
+  const owners = deckBuilderUi.owners && deckBuilderUi.owners.byId.get(card.oracleId);
+  return owners && owners.length ? owners : null;
+}
+
+// The line above the card list: how many of the cards to get are in the
+// circle, linking to the trading app to propose trades.
+function deckBuilderOwnersNote(build) {
+  const missing = deckBuilderMissingIds(build);
+  const state = deckBuilderUi.owners;
+  if (!missing.length || !state) return null;
+  const tradingLink = (text, href = TRADING_APP_BROWSE_URL) => {
+    const a = makeEl("a", null, text);
+    a.href = href;
+    a.target = "_blank";
+    a.rel = "noopener";
+    return a;
+  };
+  const p = makeEl("p", "db-note db-owners-note");
+  if (state.stopped === "no-account") {
+    p.append(`Join the `, tradingLink("Archidekt Trading App", TRADING_APP_URL), ` to see which friends own the cards you'd get.`);
+    return p;
+  }
+  if (state.stopped) {
+    p.append("Couldn't check friends' collections just now.");
+    return p;
+  }
+  if (missing.some(id => !state.byId.has(id))) {
+    p.setAttribute("aria-live", "polite");
+    p.append("Checking which friends own the cards you'd get…");
+    return p;
+  }
+  const inCircle = missing.filter(id => state.byId.get(id).length).length;
+  const n = missing.length;
+  if (!inCircle) {
+    p.append(n === 1 ? "Nobody in the circle has the card you'd get." : `None of your ${n} missing cards are in the circle.`);
+    return p;
+  }
+  p.append(
+    n === 1 ? "Your missing card is in the circle. " : `${inCircle} of your ${n} missing cards ${inCircle === 1 ? "is" : "are"} in the circle. `,
+    tradingLink("Propose a trade in the Archidekt Trading App"),
+  );
+  return p;
+}
+
 // The line under a card's name: how often EDHREC decks run it, synergy,
 // and anything the builder did with it.
 function deckBuilderWhy(card) {
@@ -11891,7 +12008,15 @@ function deckBuilderRow(card, section, ctx) {
   btn.setAttribute("aria-controls", panelId);
   const main = makeEl("span", "db-row-main");
   main.append(deckBuilderName(card), makeEl("span", "db-row-why", deckBuilderWhy(card)));
-  btn.append(main, deckBuilderChip(card));
+  const owners = deckBuilderCardOwners(card);
+  if (owners) {
+    // The price, and under it who in the circle has one.
+    const side = makeEl("span", "db-row-side");
+    side.append(deckBuilderChip(card), makeEl("span", "db-row-friends", deckBuilderOwnersText(owners)));
+    btn.append(main, side);
+  } else {
+    btn.append(main, deckBuilderChip(card));
+  }
   btn.addEventListener("click", () => {
     deckBuilderUi.openSwap = open ? null : key;
     deckBuilderUi.focusKey = key;
@@ -11911,6 +12036,18 @@ function deckBuilderSwapPanel(card, panelId, key, ctx) {
   const typeLabel = (DECK_BUILDER_TYPE_LABELS[card.type] || card.type).toLowerCase();
   const roles = (card.roles || []).map(r => (ctx.build.roles[r] && ctx.build.roles[r].label || r).toLowerCase());
   panel.append(makeEl("p", "db-swap-title", `Swap ${card.name} for`));
+  // A card to get that a friend has: say so where the player decides about
+  // it, with the way to ask for it.
+  const owners = deckBuilderCardOwners(card);
+  if (owners) {
+    const friends = makeEl("p", "db-swap-friends", `${deckBuilderOwnersText(owners)}. `);
+    const a = makeEl("a", null, "Propose a trade in the Archidekt Trading App");
+    a.href = TRADING_APP_BROWSE_URL;
+    a.target = "_blank";
+    a.rel = "noopener";
+    friends.append(a);
+    panel.append(friends);
+  }
   panel.append(makeEl("p", "db-swap-sub", roles.length ? `Other ${typeLabel} that also count as ${roles.join(" or ")}, best first.` : `Other ${typeLabel}, best first.`));
   const options = swapOptions(ctx.data, ctx.build, card, ctx.opts);
   if (!options.length) {
@@ -12247,6 +12384,7 @@ function renderDeckBuild() {
 
   const roleSummary = deckBuilderRoleSummary(build);
   const picksSection = deckBuilderPicksSection(build);
+  const ownersNote = deckBuilderOwnersNote(build);
   const viewToggle = document.getElementById("db-view-toggle");
   if (viewToggle) viewToggle.hidden = false;
   // What a swap panel needs to list alternatives without a request.
@@ -12307,6 +12445,7 @@ function renderDeckBuild() {
     ...(requestNote ? [requestNote] : []),
     tally,
     meter,
+    ...(ownersNote ? [ownersNote] : []),
     ...warnings.map(w => makeEl("p", "db-note db-note-warn", w)),
     checks,
     ...(comboNote ? [comboNote] : []),
@@ -12319,6 +12458,8 @@ function renderDeckBuild() {
     fallback,
   );
   result.hidden = false;
+  // Who in the circle has the cards to get (asks only about new ones).
+  requestDeckBuilderOwners(build);
   // Rendering replaces every row, so put focus back on the row the player
   // just used (or the card they swapped in) instead of dropping it to <body>.
   if (deckBuilderUi.focusKey) {
