@@ -41,13 +41,14 @@ function setup() {
   db.exec(fs.readFileSync(path.join(DIR, "schema.sql"), "utf8"));
   db.prepare("INSERT INTO players (id, name) VALUES (1, 'Me'), (2, 'Mateo')").run();
   const ctx = {
-    URL, Set, Map, Number, Math, String, Array, JSON, Object, Promise,
+    URL, Set, Map, Number, Math, String, Array, JSON, Object, Promise, RegExp,
     jsonResponse: (body, status = 200) => ({ body, status }),
   };
   vm.createContext(ctx);
-  vm.runInContext(["DECK_BUILDS_PER_PLAYER", "DECK_BUILD_STATUSES", "DECK_BUILD_UUID_RE"].map(constant).join("\n"), ctx);
+  vm.runInContext(["DECK_BUILDS_PER_PLAYER", "DECK_BUILD_STATUSES", "DECK_BUILD_UUID_RE", "BUILD_HINTS_MAX_DECKS"].map(constant).join("\n"), ctx);
   vm.runInContext('var DECK_BUILDER_BRACKET_SLUGS = { 1: "exhibition", 2: "core", 3: "upgraded", 4: "optimized", 5: "cedh" };', ctx);
-  vm.runInContext(["deckBuilderCleanBuild", "deckBuilderBuildOut", "handleDeckBuilderBuilds"].map(source).join("\n"), ctx);
+  vm.runInContext(["deckBuilderCleanBuild", "deckBuilderBuildOut", "handleDeckBuilderBuilds",
+    "deckBuilderCommanderNameKey", "deckBuilderCommanderKey", "deckBuilderPickBuildHint", "handleDeckBuilderBuildHints"].map(source).join("\n"), ctx);
   const env = { DB: d1(db) };
   const call = (method, query = "", body, playerId = 1) =>
     ctx.handleDeckBuilderBuilds(
@@ -56,7 +57,9 @@ function setup() {
       { playerId },
       new URL(`https://relay.example/deck-builder/builds${query}`),
     );
-  return { db, call, ctx };
+  const hints = (decks, playerId = 1) =>
+    ctx.handleDeckBuilderBuildHints({ json: async () => ({ decks }) }, env, { playerId });
+  return { db, call, ctx, hints };
 }
 
 const OID = n => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -181,4 +184,64 @@ test("the migration creates the same table schema.sql does", () => {
   migrated.exec(migration); // IF NOT EXISTS: running it twice is harmless
   const cols = d => d.prepare("PRAGMA table_info(deck_builds)").all().map(c => `${c.name}:${c.type}:${c.notnull}:${c.dflt_value}`);
   assert.deepEqual(cols(migrated), cols(fresh));
+});
+
+// ---- POST /deck-builder/build-hints: saved builds -> Update the App ----
+test("commander names match ignoring case, accents, punctuation, a back face and partner order", () => {
+  const { ctx } = setup();
+  const key = ctx.deckBuilderCommanderKey;
+  assert.equal(key("Atraxa, Praetors' Voice"), key(["atraxa praetors voice"]));
+  assert.equal(key("Éowyn, Fearless Knight"), key(["Eowyn, Fearless Knight"]));
+  assert.equal(key("Kraum, Ludevic's Opus/Tymna the Weaver"), key(["Tymna the Weaver", "Kraum, Ludevic's Opus"]));
+  assert.equal(key("Esika, God of the Tree"), key(["Esika, God of the Tree // The Prismatic Bridge"]));
+  assert.equal(key("Esika, God of the Tree // The Prismatic Bridge"), key(["Esika, God of the Tree"]), "a // is one card, not a pair");
+  assert.equal(key("Atraxa, Praetors' Voice (2)"), key(["Atraxa, Praetors' Voice"]));
+  assert.notEqual(key("Tymna the Weaver"), key(["Tymna the Weaver", "Kraum, Ludevic's Opus"]));
+  assert.notEqual(key("Atraxa, Grand Unifier"), key(["Atraxa, Praetors' Voice"]));
+  assert.equal(key(""), "");
+});
+
+test("the hint is the player's most recent matching build: bracket, combo verdict, date", async () => {
+  const s = setup();
+  s.db.prepare("INSERT INTO players (id, name) VALUES (3, 'Ana')").run();
+  const add = (playerId, commander, commander2, bracket, combos, updatedAt) =>
+    s.db.prepare("INSERT INTO deck_builds (player_id, commander, commander2, bracket, options_json, cards_json, updated_at) VALUES (?, ?, ?, ?, '{}', ?, ?)")
+      .run(playerId, commander, commander2, bracket, JSON.stringify({ cards: [], ...(combos ? { combos } : {}) }), updatedAt);
+  add(2, "Atraxa, Praetors' Voice", null, 2, { checked: true, count: 0 }, "2026-09-01 10:00:00");
+  add(2, "Atraxa, Praetors' Voice", null, 3, { checked: true, count: 2 }, "2026-10-12 10:00:00"); // newest: wins
+  add(2, "Tymna the Weaver", "Kraum, Ludevic's Opus", 4, null, "2026-10-01 10:00:00");
+  add(3, "Atraxa, Praetors' Voice", null, 5, { checked: true, count: 0 }, "2026-11-01 10:00:00"); // Ana's, not Mateo's
+  const res = await s.hints([
+    { key: "d1", player: "Mateo", commander: "ATRAXA, PRAETORS’ VOICE" },
+    { key: "d2", player: "Mateo", commander: "Kraum, Ludevic's Opus/Tymna the Weaver" },
+    { key: "d3", player: "Mateo", commander: "Edgar Markov" },
+    { key: "d4", player: "Nobody", commander: "Atraxa, Praetors' Voice" },
+    { key: "d5", player: "Ana", commander: "Atraxa, Praetors' Voice" },
+  ], 2);
+  const hints = JSON.parse(JSON.stringify(res.body.hints));
+  assert.deepEqual(hints.d1, { bracket: 3, combo: true, savedAt: "2026-10-12 10:00:00", owner: "Mateo", mine: true });
+  assert.deepEqual(hints.d2, { bracket: 4, combo: null, savedAt: "2026-10-01 10:00:00", owner: "Mateo", mine: true });
+  assert.equal(hints.d3, undefined, "no matching build, no hint");
+  assert.equal(hints.d4, undefined, "unknown player, no hint");
+  assert.deepEqual(hints.d5, { bracket: 5, combo: false, savedAt: "2026-11-01 10:00:00", owner: "Ana", mine: false });
+  assert.deepEqual(Object.keys(hints).sort(), ["d1", "d2", "d5"], "nothing about decks that don't match");
+});
+
+test("hints answer an empty or junk request with nothing", async () => {
+  const s = setup();
+  assert.deepEqual(JSON.parse(JSON.stringify((await s.hints([])).body)), { hints: {} });
+  assert.deepEqual(JSON.parse(JSON.stringify((await s.hints([{ key: "", player: "Mateo", commander: "X" }, null])).body)), { hints: {} });
+});
+
+test("a save keeps the combo verdict; builds without one stay without", () => {
+  const { ctx } = setup();
+  const withCombos = JSON.parse(JSON.stringify(ctx.deckBuilderCleanBuild(saveBody({ combos: { checked: true, count: 3, extra: 1 } }))));
+  assert.deepEqual(withCombos.list.combos, { checked: true, count: 3 });
+  assert.equal(JSON.parse(JSON.stringify(ctx.deckBuilderCleanBuild(saveBody()))).list.combos, undefined);
+});
+
+test("the hints route sits behind sign-in", () => {
+  const signIn = RELAY.indexOf('url.pathname === "/deck-builder/candidates"');
+  const hintsRoute = RELAY.indexOf('url.pathname === "/deck-builder/build-hints"');
+  assert.ok(signIn > 0 && hintsRoute > signIn);
 });
