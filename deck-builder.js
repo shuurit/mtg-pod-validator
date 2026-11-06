@@ -339,6 +339,84 @@ function wantsHandoffUrl(build, commanders, base = TRADING_APP_BASE_URL) {
   return `${base}#import-wants=${encodeURIComponent(JSON.stringify(payload))}`;
 }
 
+// ---- Saved builds ----
+// What the relay keeps for a saved build (POST /deck-builder/builds) and how
+// the page shows one again. The options are what buildDeck ran with, so
+// "Rebuild with today's data" can run it again on fresh EDHREC numbers; the
+// card list is the deck as it was, prices as at save time.
+
+// The settings a build ran with, in the stored shape. settings: { budget,
+// excludeDeckCards, pinned, excluded, theme, request, pairFallback, picks }.
+function snapshotBuildOptions(settings = {}) {
+  const ids = v => [...new Set((Array.isArray(v) ? v : []).filter(x => typeof x === "string" && x))];
+  return {
+    budget: Math.max(0, Number(settings.budget) || 0),
+    excludeDeckCards: !!settings.excludeDeckCards,
+    pinned: ids(settings.pinned),
+    excluded: ids(settings.excluded),
+    theme: settings.theme || null,
+    request: String(settings.request || "").trim().slice(0, 300),
+    pairFallback: !!settings.pairFallback,
+    // Cards added from the player's own collection (mergeCollectionPicks):
+    // EDHREC's list doesn't have them, so a rebuild needs them back.
+    picks: (settings.picks || []).filter(p => p && p.oracleId && p.name).map(p => ({
+      oracleId: p.oracleId,
+      uid: p.uid || null,
+      name: p.name,
+      type: p.type || "other",
+      cmc: p.cmc ?? null,
+      price: p.price ?? null,
+      gameChanger: !!p.gameChanger,
+      massLandDenial: !!p.massLandDenial,
+      extraTurn: !!p.extraTurn,
+      roles: p.roles || [],
+      qty: p.qty ?? 1,
+      decks: p.decks || [],
+    })),
+  };
+}
+
+// A finished build -> the POST body that saves it.
+function snapshotBuild(build, settings = {}) {
+  const commanders = (build.commanders && build.commanders.length ? build.commanders : [build.commander]).filter(Boolean);
+  const t = build.tally || {};
+  return {
+    commanders: commanders.map(c => c.name),
+    bracket: build.bracket,
+    options: snapshotBuildOptions({ ...settings, theme: settings.theme ?? (build.theme && build.theme.slug) }),
+    cards: build.cards.map(c => ({ name: c.name, oracleId: c.oracleId || null, status: c.status, price: c.price ?? null, type: c.type || "other" })),
+    basics: (build.basics || []).map(b => ({ name: b.name, count: b.count })),
+    tally: { free: t.free || 0, deck: t.deck || 0, missing: t.missing || 0, missingCost: t.missingCost || 0, unknownPrices: t.unknownPrices || 0 },
+  };
+}
+
+// "Atraxa, Praetors' Voice" / "Tymna the Weaver / Kraum, Ludevic's Opus".
+function savedBuildTitle(saved) {
+  return (saved.commanders || []).join(" / ") || "Unnamed deck";
+}
+
+// A saved list grouped by card type, in the deck view's type order, each
+// group by name; basics stay separate ({ name, count }).
+function savedBuildGroups(saved) {
+  const byType = new Map();
+  for (const c of saved.cards || []) {
+    const type = c.type || "other";
+    if (!byType.has(type)) byType.set(type, []);
+    byType.get(type).push(c);
+  }
+  return [...byType.entries()]
+    .sort((a, b) => typeOrder(a[0]) - typeOrder(b[0]))
+    .map(([type, cards]) => ({ type, cards: [...cards].sort((a, b) => a.name.localeCompare(b.name)) }));
+}
+
+// The saved list as Archidekt's import text, like deckToText.
+function savedBuildToText(saved) {
+  const lines = (saved.commanders || []).map(name => `1 ${name}`);
+  for (const group of savedBuildGroups(saved)) for (const c of group.cards) lines.push(`1 ${c.name}`);
+  for (const b of saved.basics || []) if (b.count > 0) lines.push(`${b.count} ${b.name}`);
+  return lines.join("\n");
+}
+
 // ---- Themes ----
 // The relay answers with the commander's EDHREC themes ({ slug, name,
 // count }, most decks first) and, for a themed build, `theme`: { slug,
@@ -1031,6 +1109,7 @@ if (typeof module !== "undefined") {
   module.exports = {
     DECK_BUILDER_DECK_SIZE, parseDeckRequest, readingToRequest, mergeDeckRequests, requestedMinimum, humanizeThemeSlug, themeName, themeOptions, deckBuilderSlug, deckCommanders, deckSize, combinedIdentity, pairingOf, secondCommanderKind, canPair, pairOrder,
     pickBlockReason, mergeCollectionPicks, wantsFolderName, missingCardsForWants, wantsHandoffUrl,
+    snapshotBuildOptions, snapshotBuild, savedBuildTitle, savedBuildGroups, savedBuildToText,
     BRACKET_RULES, DEFAULT_WEIGHTS, ROLE_MINIMUMS, ROLE_LABELS, roleCounts, cardStatus, scoreCard, deckTemplate, splitBasics,
     buildDeck, candidatePool, swapOptions, applySwap, SWAP_OPTION_COUNT, bracketChecks, combosCheck, comboManaCost, comboRequest, tagsChecked, deckToText, typeOrder,
   };

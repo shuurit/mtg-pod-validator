@@ -440,3 +440,28 @@ CREATE TABLE proposal_votes (
   voted_at TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (proposal_id, player_id)
 );
+
+-- Build a Deck's saved results (GET/POST/DELETE /deck-builder/builds in
+-- relay.js), one player's own only: what was built and how, so it can be
+-- shown again as saved or rebuilt from today's EDHREC data.
+--   commander / commander2: the deck's commander name(s), as Scryfall
+--     spells them; commander2 only for a two-commander deck.
+--   options_json: { budget, excludeDeckCards, pinned, excluded, theme,
+--     request, pairFallback, picks } -- the settings buildDeck ran with
+--     (see snapshotBuildOptions in deck-builder.js).
+--   cards_json: { cards: [{ name, oracleId, status, price, type }],
+--     basics: [{ name, count }], tally } -- the list as it was, prices as
+--     at save time.
+-- At most DECK_BUILDS_PER_PLAYER (25) rows per player.
+CREATE TABLE deck_builds (
+  id INTEGER PRIMARY KEY,
+  player_id INTEGER NOT NULL REFERENCES players(id),
+  commander TEXT NOT NULL,
+  commander2 TEXT,
+  bracket INTEGER NOT NULL CHECK (bracket BETWEEN 1 AND 5),
+  options_json TEXT NOT NULL,
+  cards_json TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX idx_deck_builds_player ON deck_builds(player_id, updated_at);

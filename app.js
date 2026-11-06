@@ -7128,6 +7128,7 @@ function activateTab(tabName) {
   if (switching) playTabEnter(panel, previous);
   if (tabName === "pod") pollLiveTable(true);
   if (tabName === "tonight") pollLiveTable(true);
+  if (tabName === "deck-builder" && switching) loadSavedBuilds();
   // Standings always opens on the league; a dossier is somewhere you go
   // from there, not somewhere the tab remembers.
   if (tabName === "winrates" && switching) {
@@ -11185,6 +11186,13 @@ const deckBuilderUi = {
   picksAdded: new Map(),
   // Friends who own the cards to get (freshDeckBuilderOwners), per build.
   owners: null,
+  // Saved builds (GET/POST/DELETE /deck-builder/builds): the list above the
+  // form, { builds, max } once loaded; the saved build being shown, if the
+  // result area holds one (renderDeckBuild then stays out of its way); and
+  // the saved build the shown result was rebuilt from, so Save updates it.
+  saved: null,
+  viewingSaved: null,
+  savedId: null,
   // Workers AI's reading of the request box (POST /deck-builder/read-request),
   // once per request text + deck: { key, answer, pending } -- answer
   // undefined while the request is out.
@@ -11733,9 +11741,9 @@ async function runDeckBuild(opts = {}) {
     if (names[1] && opts.pairFallback) params.set("pairFallback", "1");
     // The picker only shows themes for these commanders at this bracket.
     const themeField = document.getElementById("db-theme-field");
-    const theme = themeField && !themeField.hidden && deckBuilderUi.themesFor === `${names.join("|")}|${bracket}`
+    const theme = opts.theme || (themeField && !themeField.hidden && deckBuilderUi.themesFor === `${names.join("|")}|${bracket}`
       ? document.getElementById("db-theme").value
-      : "";
+      : "");
     if (theme) params.set("theme", theme);
     const res = await fetch(`${DECK_BUILDER_RELAY_URL}?${params}`, {
       cache: "no-store",
@@ -11773,7 +11781,16 @@ async function runDeckBuild(opts = {}) {
     deckBuilderUi.picks = null;
     deckBuilderUi.picksAdded = new Map();
     deckBuilderUi.owners = freshDeckBuilderOwners();
-    setDeckBuilderStatus("");
+    // A rebuild of a saved build takes back its swaps and collection picks;
+    // any other build starts clean (and Save makes a new saved build).
+    deckBuilderUi.viewingSaved = null;
+    deckBuilderUi.savedId = opts.restore ? opts.restore.id : null;
+    if (opts.restore) {
+      const r = opts.restore.options || {};
+      deckBuilderUi.swaps = { pinned: [...(r.pinned || [])], excluded: [...(r.excluded || [])] };
+      deckBuilderUi.picksAdded = new Map((r.picks || []).map(p => [p.oracleId, p]));
+    }
+    setDeckBuilderStatus(opts.restore ? "Rebuilt from today's EDHREC data with your saved settings." : "");
     renderDeckBuild();
     updateDeckBuilderRequestReadback();
     // Whatever the rules couldn't read, the AI reads now; the deck follows.
@@ -12203,7 +12220,268 @@ function deckBuilderRoleGroups(build, ctx) {
   return groups;
 }
 
+// ---- Saved builds ----
+// A result can be saved (Save build) and opened again from "Saved builds"
+// above the form: shown as it was, with its save date, and rebuilt on
+// today's EDHREC data with the same settings on request. The relay keeps
+// them per player (deck_builds in schema.sql), at most 25.
+const DECK_BUILDER_BUILDS_URL = RELAY_BASE_URL + "/deck-builder/builds";
+
+async function deckBuilderBuildsFetch(query = "", init = {}) {
+  const res = await fetch(DECK_BUILDER_BUILDS_URL + query, { cache: "no-store", ...init, headers: { ...authHeaders(), ...(init.headers || {}) } });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(body.error || `HTTP ${res.status}`);
+    err.reason = body.reason;
+    throw err;
+  }
+  return body;
+}
+
+// D1's datetime('now') text is UTC with no zone marker: "6 Nov 2026".
+function formatSavedDate(text) {
+  const d = new Date(/Z$/.test(text || "") ? text : `${String(text || "").replace(" ", "T")}Z`);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+}
+
+async function loadSavedBuilds() {
+  try {
+    deckBuilderUi.saved = await deckBuilderBuildsFetch();
+  } catch (err) {
+    deckBuilderUi.saved = { builds: [], max: 25, error: err.message };
+  }
+  renderSavedBuilds();
+}
+
+function renderSavedBuilds() {
+  const section = document.getElementById("db-saved");
+  const list = document.getElementById("db-saved-list");
+  const note = document.getElementById("db-saved-note");
+  if (!section || !list) return;
+  const saved = deckBuilderUi.saved;
+  const builds = (saved && saved.builds) || [];
+  section.hidden = !builds.length && !(saved && saved.error);
+  note.textContent = saved && saved.error ? `Couldn't load your saved builds (${saved.error}).` : builds.length >= (saved.max || 25) ? `That's all ${saved.max || 25}: delete one to save another.` : "";
+  note.hidden = !note.textContent;
+  list.replaceChildren(...builds.map(b => {
+    const li = makeEl("li", `db-saved-item${deckBuilderUi.viewingSaved && deckBuilderUi.viewingSaved.id === b.id ? " is-open" : ""}`);
+    const open = makeEl("button", "db-saved-open");
+    open.type = "button";
+    const bits = [`Bracket ${b.bracket}`];
+    if (b.theme) bits.push(`${humanizeThemeSlug(b.theme)} theme`);
+    if (b.tally && b.tally.missing) bits.push(`${b.tally.missing} to get`);
+    bits.push(`saved ${formatSavedDate(b.updatedAt)}`);
+    open.append(makeEl("span", "db-saved-name", savedBuildTitle(b)), makeEl("span", "db-saved-meta", bits.join(" · ")));
+    open.addEventListener("click", () => openSavedBuild(b.id));
+    const del = makeEl("button", "db-saved-delete", "Delete");
+    del.type = "button";
+    del.setAttribute("aria-label", `Delete saved build ${savedBuildTitle(b)}, ${bits.join(", ")}`);
+    del.addEventListener("click", () => deleteSavedBuild(b));
+    li.append(open, del);
+    return li;
+  }));
+}
+
+async function openSavedBuild(id) {
+  setDeckBuilderStatus("Opening your saved build…");
+  let saved;
+  try {
+    ({ build: saved } = await deckBuilderBuildsFetch(`?id=${id}`));
+  } catch (err) {
+    setDeckBuilderStatus(`Couldn't open that build (${err.message}).`, "error");
+    return;
+  }
+  setDeckBuilderStatus("");
+  deckBuilderUi.viewingSaved = saved;
+  renderSavedBuildView(saved);
+  renderSavedBuilds();
+  const result = document.getElementById("db-result");
+  if (result) result.scrollIntoView({ behavior: REDUCED_MOTION.matches ? "auto" : "smooth", block: "start" });
+}
+
+async function deleteSavedBuild(b) {
+  if (!window.confirm(`Delete your saved build of ${savedBuildTitle(b)} (Bracket ${b.bracket})?`)) return;
+  try {
+    await deckBuilderBuildsFetch(`?id=${b.id}`, { method: "DELETE" });
+  } catch (err) {
+    setDeckBuilderStatus(`Couldn't delete it (${err.message}).`, "error");
+    return;
+  }
+  if (deckBuilderUi.savedId === b.id) deckBuilderUi.savedId = null;
+  if (deckBuilderUi.viewingSaved && deckBuilderUi.viewingSaved.id === b.id) {
+    deckBuilderUi.viewingSaved = null;
+    const result = document.getElementById("db-result");
+    if (deckBuilderUi.data) renderDeckBuild();
+    else if (result) result.hidden = true;
+  }
+  setDeckBuilderStatus(`Deleted the saved build of ${savedBuildTitle(b)}.`);
+  await loadSavedBuilds();
+}
+
+// One saved card: its name and how it stood at save time.
+function savedBuildChip(card) {
+  if (card.status === "free") return makeEl("span", "db-chip db-chip-own", "Binder");
+  if (card.status === "deck") return makeEl("span", "db-chip db-chip-deck", "In a deck");
+  return makeEl("span", "db-chip db-chip-buy", card.price != null ? `Get · ${formatDollars(card.price)}` : "Get");
+}
+
+// A saved build, as it was: no swaps, no live checks, just the list, its
+// save date and what to do with it.
+function renderSavedBuildView(saved) {
+  const result = document.getElementById("db-result");
+  if (!result) return;
+  const viewToggle = document.getElementById("db-view-toggle");
+  if (viewToggle) viewToggle.hidden = true;
+
+  const head = makeEl("div", "db-head");
+  const titles = makeEl("div", "db-head-titles");
+  titles.append(makeEl("h3", "db-commander", savedBuildTitle(saved)));
+  const theme = saved.options && saved.options.theme;
+  titles.append(makeEl("p", "db-sub", `Bracket ${saved.bracket}${theme ? ` · ${humanizeThemeSlug(theme)} theme` : ""}`));
+  head.append(titles);
+
+  const stamp = makeEl("p", "db-saved-stamp");
+  stamp.append(makeEl("b", null, `Saved ${formatSavedDate(saved.updatedAt)}`), ". This is the list as it was then, prices included. Rebuild it to use today's EDHREC data and prices with the same settings.");
+
+  const t = saved.tally || {};
+  const tally = makeEl("div", "db-tally");
+  const cell = (n, label) => {
+    const c = makeEl("div", "db-tally-cell");
+    c.append(makeEl("b", null, String(n || 0)), makeEl("span", null, label));
+    return c;
+  };
+  tally.append(cell(t.free, "in your binder"), cell(t.deck, "in other decks"), cell(t.missing, `to get${t.missing ? ` · ${formatDollars(t.missingCost || 0)}${t.unknownPrices ? "+" : ""}` : ""}`));
+
+  const groups = makeEl("div", "db-groups");
+  for (const group of savedBuildGroups(saved)) {
+    const rows = group.cards.map(c => {
+      const li = makeEl("li", "db-row");
+      const main = makeEl("div", "db-row-main");
+      main.append(makeEl("div", "db-row-name", c.name));
+      li.append(main, savedBuildChip(c));
+      return li;
+    });
+    let count = group.cards.length;
+    if (group.type === "land") {
+      rows.push(...deckBuilderBasicRows({ basics: saved.basics || [] }));
+      count += (saved.basics || []).reduce((n, b) => n + b.count, 0);
+    }
+    groups.append(deckBuilderGroup(`${DECK_BUILDER_TYPE_LABELS[group.type] || group.type} · ${count}`, rows));
+  }
+  if (!savedBuildGroups(saved).some(g => g.type === "land") && (saved.basics || []).length) {
+    groups.append(deckBuilderGroup(`${DECK_BUILDER_TYPE_LABELS.land} · ${saved.basics.reduce((n, b) => n + b.count, 0)}`, deckBuilderBasicRows({ basics: saved.basics })));
+  }
+
+  const actions = makeEl("div", "row db-actions");
+  const rebuild = makeEl("button", "primary", "Rebuild with today's data");
+  rebuild.type = "button";
+  rebuild.addEventListener("click", () => rebuildSavedBuild(saved));
+  const copy = makeEl("button", null, "Copy for Archidekt");
+  copy.type = "button";
+  const note = makeEl("p", "hint db-copy-note");
+  note.setAttribute("aria-live", "polite");
+  note.hidden = true;
+  const fallback = makeEl("textarea", "db-copy-fallback");
+  fallback.readOnly = true;
+  fallback.rows = 8;
+  fallback.hidden = true;
+  fallback.setAttribute("aria-label", "Deck list");
+  copy.addEventListener("click", async () => {
+    const text = savedBuildToText(saved);
+    try {
+      await navigator.clipboard.writeText(text);
+      note.textContent = "Copied. In Archidekt, use Import on a new deck and paste.";
+      fallback.hidden = true;
+    } catch {
+      fallback.value = text;
+      fallback.hidden = false;
+      fallback.focus();
+      fallback.select();
+      note.textContent = "Couldn't copy automatically. The list is selected below; copy it from there.";
+    }
+    note.hidden = false;
+  });
+  const close = makeEl("button", null, "Close");
+  close.type = "button";
+  close.addEventListener("click", () => {
+    deckBuilderUi.viewingSaved = null;
+    renderSavedBuilds();
+    if (deckBuilderUi.data) renderDeckBuild();
+    else result.hidden = true;
+  });
+  actions.append(rebuild, copy, close);
+
+  // The buttons go above the list: Rebuild is the main thing to do with a
+  // saved build, and the list runs to a hundred rows.
+  result.replaceChildren(head, stamp, tally, actions, note, fallback, groups);
+  result.hidden = false;
+}
+
+// The form set to a saved build's settings, then a fresh build that takes
+// back its swaps and collection picks (runDeckBuild's opts.restore).
+async function rebuildSavedBuild(saved) {
+  const o = saved.options || {};
+  const [first, second] = saved.commanders || [];
+  document.getElementById("db-commander").value = first || "";
+  resetDeckBuilderThemes();
+  await updateSecondCommanderField();
+  const field2 = document.getElementById("db-commander2-field");
+  const input2 = document.getElementById("db-commander2");
+  if (second) {
+    field2.hidden = false;
+    input2.value = second;
+  } else if (input2) {
+    input2.value = "";
+  }
+  const bracketBtn = document.querySelector(`#db-bracket-toggle [data-bracket="${saved.bracket}"]`);
+  if (bracketBtn) bracketBtn.click();
+  document.getElementById("db-request").value = o.request || "";
+  const slider = document.getElementById("db-budget");
+  slider.value = String(Math.min(Number(slider.max) || 200, o.budget || 0));
+  document.getElementById("db-budget-value").textContent = `$${slider.value}`;
+  document.getElementById("db-exclude-decks").checked = !!o.excludeDeckCards;
+  updateDeckBuilderRequestReadback();
+  await runDeckBuild({ pairFallback: !!o.pairFallback, theme: o.theme || "", restore: { id: saved.id, options: o } });
+}
+
+// "Save build" on a live result; "Update saved build" when it was rebuilt
+// from one.
+function deckBuilderSaveButton(build, data) {
+  const btn = makeEl("button", "db-save-btn", deckBuilderUi.savedId ? "Update saved build" : "Save build");
+  btn.type = "button";
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    const body = snapshotBuild(build, {
+      budget: Number(document.getElementById("db-budget").value) || 0,
+      excludeDeckCards: document.getElementById("db-exclude-decks").checked,
+      pinned: deckBuilderUi.swaps.pinned,
+      excluded: deckBuilderUi.swaps.excluded,
+      request: document.getElementById("db-request").value,
+      pairFallback: data.pairSource === "first-commander",
+      picks: [...deckBuilderUi.picksAdded.values()],
+    });
+    if (deckBuilderUi.savedId) body.id = deckBuilderUi.savedId;
+    try {
+      const { build: saved } = await deckBuilderBuildsFetch("", { method: "POST", body: JSON.stringify(body) });
+      const updated = !!deckBuilderUi.savedId;
+      deckBuilderUi.savedId = saved.id;
+      // In the status line, not under the buttons: a late redraw of the
+      // deck (combos, friends' copies) rebuilds the buttons and their note.
+      setDeckBuilderStatus(updated ? `Updated your saved build, ${formatSavedDate(saved.updatedAt)}.` : "Saved. It's under Saved builds, above the form.");
+      btn.textContent = "Update saved build";
+      await loadSavedBuilds();
+    } catch (err) {
+      setDeckBuilderStatus(err.reason === "full" ? err.message : `Couldn't save it (${err.message}).`, "error");
+    }
+    btn.disabled = false;
+  });
+  return btn;
+}
+
 function renderDeckBuild() {
+  // A saved build on show isn't a live result: late answers (combos,
+  // friends' copies) for the last live build mustn't replace it.
+  if (deckBuilderUi.viewingSaved) return;
   // Picks the player added from their collection join the pool, owned.
   const data = deckBuilderUi.data ? mergeCollectionPicks(deckBuilderUi.data, [...deckBuilderUi.picksAdded.values()]) : null;
   const result = document.getElementById("db-result");
@@ -12420,6 +12698,7 @@ function renderDeckBuild() {
     copyNote.hidden = false;
   });
   actions.append(copyBtn);
+  actions.append(deckBuilderSaveButton(build, data));
   // The cards to get, into a want folder in the Archidekt Trading App: a
   // link that opens its Wants import with them (wantsHandoffUrl). The
   // player checks the list there, signed in, and presses Add; nothing is
