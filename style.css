@@ -7566,3 +7566,15 @@ button.db-saved-delete {
 /* The deck's own actions (Copy, Save, Rebuild, Close) get a thumb-sized
    target like the rest of Build a Deck's controls. */
 #db-result .db-actions button { min-height: 44px; }
+
+/* Update the App: a bracket (or Bracket 4 flag) pre-picked from the
+   player's saved Build a Deck build (buildUtaDeckCard /
+   requestRosterBuildHints). Said in words, in the accent, so a pre-picked
+   bracket never passes as one the player chose. */
+.uta-deck-card-hint {
+  margin-top: 4px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--accent-strong);
+}
+.uta-deck-card-hint[hidden] { display: none; }

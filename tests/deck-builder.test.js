@@ -1009,3 +1009,33 @@ test("applySwap with nothing to replace just adds the pick", () => {
     ].join("\n"));
   });
 }
+
+// ---- Saved builds -> Update the App bracket hints ----
+{
+  const db = require("../deck-builder.js");
+
+  test("a saved build records whether Spellbook found a two-card combo, once it answered", () => {
+    const withChecks = status => ({ cards: [], basics: [], bracket: 3, commanders: [{ name: "X" }], checks: { twoCardCombos: { status, combos: status === "pass" ? [] : [{ cards: ["A", "B"] }] } } });
+    assert.deepEqual(db.snapshotBuild(withChecks("warn")).combos, { checked: true, count: 1 });
+    assert.deepEqual(db.snapshotBuild(withChecks("fail")).combos, { checked: true, count: 1 });
+    assert.deepEqual(db.snapshotBuild(withChecks("pass")).combos, { checked: true, count: 0 });
+    assert.deepEqual(db.snapshotBuild(withChecks("pending")).combos, { checked: false, count: 0 });
+    assert.deepEqual(db.snapshotBuild(withChecks("unchecked")).combos, { checked: false, count: 0 });
+    assert.deepEqual(db.savedComboVerdict(undefined), { checked: false, count: 0 });
+  });
+
+  test("hint notes say whose saved build and when; the Bracket 4 note only for a combo at Bracket 3", () => {
+    const date = () => "12 Oct";
+    assert.deepEqual(db.buildHintNotes({ bracket: 3, combo: true, savedAt: "x", owner: "Mateo", mine: true }, date), {
+      bracket: "From your saved build, 12 Oct: Bracket 3.",
+      b4: "From your saved build, 12 Oct: it found a two-card combo, so this is flagged as a potential Bracket 4.",
+    });
+    assert.deepEqual(db.buildHintNotes({ bracket: 2, combo: true, savedAt: "x", owner: "Mateo", mine: false }, date), {
+      bracket: "From Mateo's saved build, 12 Oct: Bracket 2.",
+      b4: null,
+    });
+    assert.equal(db.buildHintNotes({ bracket: 3, combo: false, owner: "A", mine: true }, date).b4, null);
+    assert.equal(db.buildHintNotes({ bracket: 3, combo: null, owner: "A", mine: true }, date).b4, null);
+    assert.deepEqual(db.buildHintNotes(null), { bracket: null, b4: null });
+  });
+}

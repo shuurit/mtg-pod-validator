@@ -387,6 +387,33 @@ function snapshotBuild(build, settings = {}) {
     cards: build.cards.map(c => ({ name: c.name, oracleId: c.oracleId || null, status: c.status, price: c.price ?? null, type: c.type || "other" })),
     basics: (build.basics || []).map(b => ({ name: b.name, count: b.count })),
     tally: { free: t.free || 0, deck: t.deck || 0, missing: t.missing || 0, missingCost: t.missingCost || 0, unknownPrices: t.unknownPrices || 0 },
+    combos: savedComboVerdict(build.checks),
+  };
+}
+
+// What Commander Spellbook said about two-card combos when the build was
+// saved: checked only once it answered (pass/warn/fail), with how many it
+// found. Update the App reads it back to pre-tick a new deck's potential
+// Bracket 4 flag (see buildHintNotes).
+function savedComboVerdict(checks) {
+  const c = checks && checks.twoCardCombos;
+  const checked = !!c && ["pass", "warn", "fail"].includes(c.status);
+  return { checked, count: checked ? (c.combos || []).length : 0 };
+}
+
+// Update the App: the notes under a new deck whose bracket (and potential
+// Bracket 4 flag) came from a saved build. hint: { bracket, combo, savedAt,
+// owner, mine } from POST /deck-builder/build-hints. Returns { bracket,
+// b4 } -- b4 only when the saved build found a two-card combo and the deck
+// is going in at Bracket 3, the only bracket the flag applies to.
+function buildHintNotes(hint, formatDate) {
+  if (!hint || !hint.bracket) return { bracket: null, b4: null };
+  const when = formatDate ? formatDate(hint.savedAt) : "";
+  const whose = hint.mine ? "your" : `${hint.owner}'s`;
+  const from = `From ${whose} saved build${when ? `, ${when}` : ""}`;
+  return {
+    bracket: `${from}: Bracket ${hint.bracket}.`,
+    b4: hint.combo === true && Number(hint.bracket) === 3 ? `${from}: it found a two-card combo, so this is flagged as a potential Bracket 4.` : null,
   };
 }
 
@@ -1109,7 +1136,7 @@ if (typeof module !== "undefined") {
   module.exports = {
     DECK_BUILDER_DECK_SIZE, parseDeckRequest, readingToRequest, mergeDeckRequests, requestedMinimum, humanizeThemeSlug, themeName, themeOptions, deckBuilderSlug, deckCommanders, deckSize, combinedIdentity, pairingOf, secondCommanderKind, canPair, pairOrder,
     pickBlockReason, mergeCollectionPicks, wantsFolderName, missingCardsForWants, wantsHandoffUrl,
-    snapshotBuildOptions, snapshotBuild, savedBuildTitle, savedBuildGroups, savedBuildToText,
+    snapshotBuildOptions, snapshotBuild, savedBuildTitle, savedBuildGroups, savedBuildToText, savedComboVerdict, buildHintNotes,
     BRACKET_RULES, DEFAULT_WEIGHTS, ROLE_MINIMUMS, ROLE_LABELS, roleCounts, cardStatus, scoreCard, deckTemplate, splitBasics,
     buildDeck, candidatePool, swapOptions, applySwap, SWAP_OPTION_COUNT, bracketChecks, combosCheck, comboManaCost, comboRequest, tagsChecked, deckToText, typeOrder,
   };

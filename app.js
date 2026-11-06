@@ -9206,6 +9206,74 @@ function calculateGameToUpdate(pgGame, box, resultsEl) {
 // are the actual source of truth for what gets submitted -- rendering just
 // reflects them, it never invents the checked/power values on its own.
 const rosterUpdateDeckState = new Map(); // deckId (string) -> { checked, bracket }
+
+// ---- Brackets from saved Build a Deck builds ----
+// A new deck whose commander(s) match one of its player's saved Build a
+// Deck builds starts with that build's bracket picked (and, at Bracket 3,
+// the potential Bracket 4 flag ticked if the build found a two-card combo),
+// with a note saying where it came from. The relay does the matching
+// (POST /deck-builder/build-hints) and answers only for matching decks.
+// Nothing is submitted on the strength of it: the card stays sealed and
+// unticked until someone opens it, sees the note, and can change it.
+const ROSTER_BUILD_HINTS_URL = RELAY_BASE_URL + "/deck-builder/build-hints";
+const rosterBuildHints = new Map(); // deckId (string) -> hint
+const rosterBuildHintsAsked = new Set(); // deckIds already asked about
+
+// "12 Oct", with the year when it isn't this one.
+function formatHintDate(text) {
+  const d = new Date(/Z$/.test(text || "") ? text : `${String(text || "").replace(" ", "T")}Z`);
+  if (Number.isNaN(d.getTime())) return "";
+  const opts = { day: "numeric", month: "short" };
+  if (d.getFullYear() !== new Date().getFullYear()) opts.year = "numeric";
+  return d.toLocaleDateString(undefined, opts);
+}
+
+async function requestRosterBuildHints(diff) {
+  const decks = [];
+  for (const group of diff.newDecksForExisting) {
+    for (const deck of group.decks) {
+      const key = String(deck.id);
+      if (rosterBuildHintsAsked.has(key)) continue;
+      decks.push({ key, player: group.player, commander: deck.commander_name });
+    }
+  }
+  if (!decks.length) return;
+  decks.forEach(d => rosterBuildHintsAsked.add(d.key));
+  let hints = {};
+  try {
+    const res = await fetch(ROSTER_BUILD_HINTS_URL, {
+      method: "POST",
+      cache: "no-store",
+      headers: authHeaders(),
+      body: JSON.stringify({ decks: decks.slice(0, 60) }),
+    });
+    if (!res.ok) return;
+    hints = (await res.json()).hints || {};
+  } catch {
+    return; // no hint is the same as today: nothing picked
+  }
+  let changed = false;
+  for (const [key, hint] of Object.entries(hints)) {
+    if (!hint || !hint.bracket) continue;
+    rosterBuildHints.set(key, hint);
+    changed = true;
+  }
+  if (changed && !isEditingRosterUpdateForm()) renderUpdateAppTab();
+}
+
+// A hint goes into a card's state only as that card is drawn (from
+// buildUtaDeckCard), never in the background: whatever bracket gets
+// submitted has been on screen. And only into a card nobody has touched,
+// never over a bracket picked by hand; once per card.
+function applyRosterBuildHint(deckId) {
+  const key = String(deckId);
+  const hint = rosterBuildHints.get(key);
+  const state = rosterUpdateDeckState.get(key);
+  if (!hint || !state || state.bracket || state.hintApplied) return;
+  const notes = buildHintNotes(hint, formatHintDate);
+  rosterUpdateDeckState.set(key, { ...state, bracket: String(hint.bracket), potentialBracket4: !!notes.b4, fromBuild: true, hintApplied: true });
+}
+
 const rosterUpdateNameState = new Map(); // username -> displayName
 let rosterUpdateSelectedGroupKey = null; // which player's group the dropdown is showing, preserved across renders too
 let rosterUpdateSubmitConfirmation = null; // message to show once, right after a successful submit -- see renderRosterUpdateConfirmationBanner
@@ -9265,6 +9333,7 @@ async function loadRosterDiff() {
     rosterDiffData = await res.json();
     renderPlayersTable();
     if (!isEditingRosterUpdateForm()) renderUpdateAppTab();
+    requestRosterBuildHints(computeRosterDiff(rosterDiffData));
   } catch (err) {
     if (statusEl) statusEl.textContent = `Couldn't load live playgroup.gg data (${err.message}).`;
     document.getElementById("uta-list").innerHTML = "";
@@ -9355,6 +9424,7 @@ function computeRosterDiff(data) {
 // closest("tr") lookup for its sibling flame button) is updated alongside
 // this to look for .uta-deck-card instead.
 function buildUtaDeckCard(deck) {
+  applyRosterBuildHint(deck.id);
   const state = rosterUpdateDeckState.get(String(deck.id));
 
   const card = document.createElement("div");
@@ -9409,6 +9479,24 @@ function buildUtaDeckCard(deck) {
     sub.className = "uta-deck-card-sub";
     sub.textContent = subParts.join(" · ");
     info.appendChild(sub);
+  }
+  // Where a pre-picked bracket (and flag) came from, while they're still
+  // the saved build's (requestRosterBuildHints).
+  const hint = rosterBuildHints.get(String(deck.id));
+  if (hint && state.fromBuild) {
+    const notes = buildHintNotes(hint, formatHintDate);
+    const bracketNote = document.createElement("div");
+    bracketNote.className = "uta-deck-card-hint uta-hint-bracket";
+    bracketNote.textContent = notes.bracket;
+    bracketNote.hidden = state.bracket !== String(hint.bracket);
+    info.appendChild(bracketNote);
+    if (notes.b4) {
+      const b4Note = document.createElement("div");
+      b4Note.className = "uta-deck-card-hint uta-hint-b4";
+      b4Note.textContent = notes.b4;
+      b4Note.hidden = !state.potentialBracket4;
+      info.appendChild(b4Note);
+    }
   }
   card.appendChild(info);
 
@@ -9492,6 +9580,19 @@ function buildUtaDeckCard(deck) {
   return card;
 }
 
+// A saved-build note says what the build said, so it shows only while the
+// card still agrees with it: a different bracket or an untoggled flag hides
+// it.
+function syncRosterHintNotes(card, deckId) {
+  if (!card) return;
+  const hint = rosterBuildHints.get(String(deckId));
+  const state = rosterUpdateDeckState.get(String(deckId)) || {};
+  const bracketNote = card.querySelector(".uta-hint-bracket");
+  if (bracketNote && hint) bracketNote.hidden = state.bracket !== String(hint.bracket);
+  const b4Note = card.querySelector(".uta-hint-b4");
+  if (b4Note) b4Note.hidden = !state.potentialBracket4;
+}
+
 // The five Commander brackets, by name.
 const BRACKET_NAMES = ["Exhibition", "Core", "Upgraded", "Optimized", "cEDH"];
 
@@ -9524,6 +9625,7 @@ function wireRosterUpdateGroupInputs(container) {
         }
       }
       rosterUpdateDeckState.set(deckId, next);
+      syncRosterHintNotes(el.closest(".uta-deck-card"), deckId);
     });
   });
   // A plain local toggle, not a live write like togglePotentialBracket4 --
@@ -9538,6 +9640,7 @@ function wireRosterUpdateGroupInputs(container) {
       const next = !current?.potentialBracket4;
       rosterUpdateDeckState.set(el.dataset.deckId, { ...current, potentialBracket4: next });
       el.classList.toggle("deck-edit-btn-active", next);
+      syncRosterHintNotes(el.closest(".uta-deck-card"), el.dataset.deckId);
     });
   });
   const nameInput = container.querySelector(".uta-display-name");

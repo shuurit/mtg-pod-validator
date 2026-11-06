@@ -3564,6 +3564,10 @@ function deckBuilderCleanBuild(body) {
   const tally = {};
   for (const k of ["free", "deck", "missing", "unknownPrices"]) tally[k] = Math.round(num(t[k], 0, 200) ?? 0);
   tally.missingCost = Math.round((num(t.missingCost, 0, 1000000) ?? 0) * 100) / 100;
+  // Spellbook's two-card combo verdict at save time (savedComboVerdict in
+  // deck-builder.js); builds saved before it existed have none.
+  const c = body.combos && typeof body.combos === "object" ? body.combos : null;
+  const combos = c ? { checked: !!c.checked, count: Math.round(num(c.count, 0, 50) ?? 0) } : null;
 
   return {
     id: Number.isInteger(body.id) && body.id > 0 ? body.id : null,
@@ -3571,7 +3575,7 @@ function deckBuilderCleanBuild(body) {
     commander2: commanders[1] || null,
     bracket,
     options,
-    list: { cards, basics, tally },
+    list: combos ? { cards, basics, tally, combos } : { cards, basics, tally },
   };
 }
 
@@ -3647,6 +3651,91 @@ async function handleDeckBuilderBuilds(request, env, session, url) {
   }
   const row = await env.DB.prepare("SELECT * FROM deck_builds WHERE id = ? AND player_id = ?").bind(id, playerId).first();
   return jsonResponse({ build: deckBuilderBuildOut(row, true) }, 200, noStore);
+}
+
+// ---------- POST /deck-builder/build-hints ----------
+// Update the App lists new playgroup.gg decks for players to place in a
+// bracket. When one's commander(s) match a saved Build a Deck build by the
+// same player, the page pre-selects that build's bracket (and the potential
+// Bracket 4 flag if the build found a two-card combo), with a note saying
+// so. Saved builds are otherwise private (GET /deck-builder/builds is your
+// own only), and whoever fills in Update the App is often not the deck's
+// owner, so the matching happens here: the page sends the pending decks
+// (player + commander), and gets back, per matching deck, only the build's
+// bracket, its combo verdict, its save date and the owner's name -- never
+// the owner's list of builds.
+const BUILD_HINTS_MAX_DECKS = 60;
+
+// One commander name for matching: front face only (Scryfall spells a
+// double-faced commander "Front // Back", playgroup.gg usually just the
+// front), no "(…)" deck disambiguation, accents folded, case and
+// punctuation ignored.
+function deckBuilderCommanderNameKey(name) {
+  return String(name || "")
+    .split(" // ")[0]
+    .replace(/\s*\([^)]*\)\s*$/, "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+// A deck's commander(s) as one key, order-insensitive. Takes a list of names
+// or a deck name, where partner decks are "Name A/Name B" (a lone "/" -- a
+// "//" belongs to one double-faced card).
+function deckBuilderCommanderKey(names) {
+  const list = Array.isArray(names) ? names : String(names || "").split(/(?<!\/)\/(?!\/)/);
+  const keys = list.map(deckBuilderCommanderNameKey).filter(Boolean);
+  return keys.length ? [...new Set(keys)].sort().join("|") : "";
+}
+
+// The most recent of a player's builds (newest first, as stored rows) whose
+// commander(s) are the deck's, or null.
+function deckBuilderPickBuildHint(rows, commander) {
+  const key = deckBuilderCommanderKey(commander);
+  if (!key) return null;
+  return rows.find(r => deckBuilderCommanderKey([r.commander, r.commander2].filter(Boolean)) === key) || null;
+}
+
+async function handleDeckBuilderBuildHints(request, env, session) {
+  const body = await request.json().catch(() => null);
+  const text = (v, n) => (typeof v === "string" ? v.replace(/\s+/g, " ").trim().slice(0, n) : "");
+  const decks = (Array.isArray(body && body.decks) ? body.decks : []).slice(0, BUILD_HINTS_MAX_DECKS)
+    .map(d => ({ key: text(d && d.key, 40), player: text(d && d.player, 80), commander: text(d && d.commander, 300) }))
+    .filter(d => d.key && d.player && d.commander);
+  const noStore = { "Cache-Control": "no-store" };
+  if (!decks.length) return jsonResponse({ hints: {} }, 200, noStore);
+
+  const names = [...new Set(decks.map(d => d.player))];
+  const { results: players } = await env.DB.prepare(
+    "SELECT id, name FROM players WHERE name IN (SELECT value FROM json_each(?))"
+  ).bind(JSON.stringify(names)).all();
+  if (!players.length) return jsonResponse({ hints: {} }, 200, noStore);
+  const idByName = new Map(players.map(p => [p.name, p.id]));
+  const { results: rows } = await env.DB.prepare(
+    `SELECT id, player_id, commander, commander2, bracket, cards_json, updated_at FROM deck_builds
+     WHERE player_id IN (SELECT value FROM json_each(?)) ORDER BY updated_at DESC, id DESC`
+  ).bind(JSON.stringify(players.map(p => p.id))).all();
+
+  const hints = {};
+  for (const d of decks) {
+    const playerId = idByName.get(d.player);
+    if (!playerId) continue;
+    const match = deckBuilderPickBuildHint(rows.filter(r => r.player_id === playerId), d.commander);
+    if (!match) continue;
+    let combos = null;
+    try { combos = (JSON.parse(match.cards_json) || {}).combos || null; } catch { combos = null; }
+    hints[d.key] = {
+      bracket: match.bracket,
+      // true / false once Spellbook answered at save time; null if unknown.
+      combo: combos && combos.checked ? combos.count > 0 : null,
+      savedAt: match.updated_at,
+      owner: d.player,
+      mine: playerId === (session && session.playerId),
+    };
+  }
+  return jsonResponse({ hints }, 200, noStore);
 }
 
 async function handleDeckWinRates(env) {
@@ -5639,6 +5728,10 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/deck-builder/read-request") {
       return handleDeckBuilderReadRequest(request, env, ctx);
+    }
+
+    if (request.method === "POST" && url.pathname === "/deck-builder/build-hints") {
+      return handleDeckBuilderBuildHints(request, env, session);
     }
 
     if (url.pathname === "/deck-builder/builds" && ["GET", "POST", "DELETE"].includes(request.method)) {
