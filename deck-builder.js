@@ -298,6 +298,47 @@ function pickKeys(obj, keys) {
   return Object.fromEntries(keys.filter(k => obj && obj[k] != null).map(k => [k, obj[k]]));
 }
 
+// ---- Missing cards -> a want folder in the Archidekt Trading App ----
+// The trading app's Wants import takes a list handed over in its address
+// (#import-wants=<JSON>, see stashWantsHandoff in that app): the player
+// reviews it there, signed in, and presses Add. Nothing is written from
+// here. The fragment never reaches a server.
+const TRADING_APP_BASE_URL = "https://archidekt-trading-app.pages.dev/";
+
+// "Build: Atraxa, Praetors' Voice (Bracket 3)"; a pair joins its names the
+// way the page heads it ("Name A / Name B").
+function wantsFolderName(commanders, bracket) {
+  const names = (commanders || []).map(c => (c && c.name) || "").filter(Boolean).join(" / ");
+  return `Build: ${names || "Unnamed deck"} (Bracket ${bracket})`.slice(0, 80);
+}
+
+// The cards to get, once each, as the import's { n, u, o } entries (name,
+// Scryfall print id, oracle id).
+function missingCardsForWants(build) {
+  const seen = new Set();
+  const cards = [];
+  for (const c of (build && build.cards) || []) {
+    if (c.status !== "missing" || !c.name) continue;
+    const key = c.oracleId || c.name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const entry = { n: c.name };
+    if (c.uid) entry.u = c.uid;
+    if (c.oracleId) entry.o = c.oracleId;
+    cards.push(entry);
+  }
+  return cards;
+}
+
+// The trading app address that opens its Wants import with these cards,
+// or null when there's nothing to get.
+function wantsHandoffUrl(build, commanders, base = TRADING_APP_BASE_URL) {
+  const cards = missingCardsForWants(build);
+  if (!cards.length) return null;
+  const payload = { v: 1, folder: wantsFolderName(commanders, build.bracket), cards };
+  return `${base}#import-wants=${encodeURIComponent(JSON.stringify(payload))}`;
+}
+
 // ---- Themes ----
 // The relay answers with the commander's EDHREC themes ({ slug, name,
 // count }, most decks first) and, for a themed build, `theme`: { slug,
@@ -989,7 +1030,7 @@ function typeOrder(type) {
 if (typeof module !== "undefined") {
   module.exports = {
     DECK_BUILDER_DECK_SIZE, parseDeckRequest, readingToRequest, mergeDeckRequests, requestedMinimum, humanizeThemeSlug, themeName, themeOptions, deckBuilderSlug, deckCommanders, deckSize, combinedIdentity, pairingOf, secondCommanderKind, canPair, pairOrder,
-    pickBlockReason, mergeCollectionPicks,
+    pickBlockReason, mergeCollectionPicks, wantsFolderName, missingCardsForWants, wantsHandoffUrl,
     BRACKET_RULES, DEFAULT_WEIGHTS, ROLE_MINIMUMS, ROLE_LABELS, roleCounts, cardStatus, scoreCard, deckTemplate, splitBasics,
     buildDeck, candidatePool, swapOptions, applySwap, SWAP_OPTION_COUNT, bracketChecks, combosCheck, comboManaCost, comboRequest, tagsChecked, deckToText, typeOrder,
   };
