@@ -732,7 +732,9 @@ function buildDeck(data, opts = {}) {
   const size = deckSize(data);
   const shape = deckTemplate(data.template, size);
   const pinnedIds = new Set(opts.pinned || []);
-  const pool = candidatePool(data, opts);
+  // Binder gems (mergeBinderGems) have no EDHREC numbers to rank them by,
+  // so the builder never picks one itself: only when the player adds it.
+  const pool = candidatePool(data, opts).filter(c => !c.gem || pinnedIds.has(c.oracleId));
 
   const picked = [];
   const taken = new Set();
@@ -1048,10 +1050,17 @@ function pickBlockReason(build, incoming, outgoing) {
 function swapOptions(data, build, card, opts = {}) {
   const inDeck = new Set(build.cards.map(c => c.oracleId));
   const cardRoles = card.roles || [];
-  const options = candidatePool(data, opts)
+  const fits = candidatePool(data, opts)
     .filter(c => c.type === card.type && !c.basic && !inDeck.has(c.oracleId) && c.oracleId !== card.oracleId)
-    .filter(c => !cardRoles.length || cardRoles.some(r => hasRole(c, r)))
-    .slice(0, SWAP_OPTION_COUNT);
+    .filter(c => !cardRoles.length || cardRoles.some(r => hasRole(c, r)));
+  // EDHREC's next-best first; then up to SWAP_GEM_COUNT cards from the
+  // player's binder that fit, best EDHREC rank first (their scores would
+  // otherwise be all ownership bonus and crowd EDHREC's out).
+  const gemRank = c => (c.edhrecRank == null ? Infinity : c.edhrecRank);
+  const options = [
+    ...fits.filter(c => !c.gem).slice(0, SWAP_OPTION_COUNT),
+    ...fits.filter(c => c.gem).sort((a, b) => gemRank(a) - gemRank(b)).slice(0, SWAP_GEM_COUNT),
+  ];
   return options.map(c => {
     const blocked = pickBlockReason(build, c, card);
     const drops = cardRoles.filter(r => !hasRole(c, r) && build.roles && build.roles[r] && build.roles[r].count - 1 < build.roles[r].min);
@@ -1076,6 +1085,60 @@ function applySwap(swaps, outId, inId) {
   excluded.delete(inId);
   pinned.add(inId);
   return { pinned: [...pinned], excluded: [...excluded] };
+}
+
+// ---- From your binder ----
+// The relay's POST /deck-builder/gems: cards the player owns that fit the
+// commander (Commander-legal, in its colour identity) but that EDHREC's
+// list doesn't suggest. They join the candidate pool flagged `gem`, owned:
+// buildDeck never picks one by itself (no synergy or inclusion numbers to
+// rank it by), swaps offer the best few, and adding one pins it, after
+// which the bracket's rules apply to it like any card.
+const SWAP_GEM_COUNT = 2;
+
+function mergeBinderGems(data, gems) {
+  const known = new Set((data.candidates || []).map(c => c.oracleId));
+  const extra = (gems || []).filter(g => g && g.oracleId && g.name && !known.has(g.oracleId)).map(g => ({
+    uid: g.uid || null,
+    name: g.name,
+    oracleId: g.oracleId,
+    type: g.type || "other",
+    cmc: g.cmc ?? null,
+    price: g.price ?? null,
+    gameChanger: !!g.gameChanger,
+    massLandDenial: !!g.massLandDenial,
+    extraTurn: !!g.extraTurn,
+    roles: g.roles || [],
+    edhrecRank: g.edhrecRank ?? null,
+    basic: false,
+    synergy: null,
+    inclusion: null,
+    inAverageDeck: false,
+    fromCollection: true,
+    gem: true,
+  }));
+  if (!extra.length) return data;
+  const cards = { ...((data.collection && data.collection.cards) || {}) };
+  for (const g of gems) {
+    if (g && g.oracleId && !cards[g.oracleId]) cards[g.oracleId] = { qty: Math.max(1, Number(g.qty) || 1), decks: g.decks || [] };
+  }
+  return {
+    ...data,
+    candidates: [...(data.candidates || []), ...extra],
+    collection: { ...(data.collection || {}), cards },
+  };
+}
+
+// The "From your binder" list for a built deck: the gems not in it, best
+// EDHREC rank first, each with its status (binder / in another deck) and,
+// when the bracket wouldn't allow adding it, why.
+function binderGemsList(data, build, opts = {}) {
+  const inDeck = new Set(build.cards.map(c => c.oracleId));
+  const rank = c => (c.edhrecRank == null ? Infinity : c.edhrecRank);
+  return candidatePool(data, opts)
+    .filter(c => c.gem && !inDeck.has(c.oracleId))
+    .sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name))
+    .map(c => ({ ...c, blocked: pickBlockReason(build, c, null) }));
 }
 
 // ---- Picks from the player's collection ----
@@ -1136,6 +1199,7 @@ if (typeof module !== "undefined") {
   module.exports = {
     DECK_BUILDER_DECK_SIZE, parseDeckRequest, readingToRequest, mergeDeckRequests, requestedMinimum, humanizeThemeSlug, themeName, themeOptions, deckBuilderSlug, deckCommanders, deckSize, combinedIdentity, pairingOf, secondCommanderKind, canPair, pairOrder,
     pickBlockReason, mergeCollectionPicks, wantsFolderName, missingCardsForWants, wantsHandoffUrl,
+    mergeBinderGems, binderGemsList, SWAP_GEM_COUNT,
     snapshotBuildOptions, snapshotBuild, savedBuildTitle, savedBuildGroups, savedBuildToText, savedComboVerdict, buildHintNotes,
     BRACKET_RULES, DEFAULT_WEIGHTS, ROLE_MINIMUMS, ROLE_LABELS, roleCounts, cardStatus, scoreCard, deckTemplate, splitBasics,
     buildDeck, candidatePool, swapOptions, applySwap, SWAP_OPTION_COUNT, bracketChecks, combosCheck, comboManaCost, comboRequest, tagsChecked, deckToText, typeOrder,

@@ -1039,3 +1039,63 @@ test("applySwap with nothing to replace just adds the pick", () => {
     assert.deepEqual(db.buildHintNotes(null), { bracket: null, b4: null });
   });
 }
+
+// ---- From your binder ----
+{
+  const db = require("../deck-builder.js");
+  const gem = (name, extra = {}) => ({ oracleId: oid(), uid: oid(), name, type: "instant", cmc: 2, price: 3, gameChanger: false, massLandDenial: false, extraTurn: false, roles: [], edhrecRank: 100, qty: 1, decks: [], ...extra });
+
+  test("binder gems join the pool owned and flagged, but the builder never picks one by itself", () => {
+    const cards = pool();
+    const gems = [gem("Counterspell", { edhrecRank: 16 }), gem("Rhystic Study", { type: "enchantment", edhrecRank: 46 })];
+    const merged = db.mergeBinderGems(data(cards, owning([])), gems);
+    assert.equal(merged.candidates.length, cards.length + 2);
+    assert.ok(merged.candidates.slice(-2).every(c => c.gem && c.fromCollection && c.synergy === null));
+    assert.deepEqual({ ...merged.collection.cards[gems[0].oracleId] }, { qty: 1, decks: [] });
+    // Owned cards score a 40-point bonus; gems still stay out unless added.
+    const build = buildDeck(merged, {});
+    assert.ok(!build.cards.some(c => c.gem));
+    // Added (pinned), one goes in, owned.
+    const added = buildDeck(merged, { pinned: [gems[0].oracleId] });
+    const inDeck = added.cards.find(c => c.oracleId === gems[0].oracleId);
+    assert.ok(inDeck && inDeck.status === "free");
+    // A gem EDHREC does list stays EDHREC's card.
+    const dup = db.mergeBinderGems(data(cards), [{ ...gem("Dup"), oracleId: cards[0].oracleId }]);
+    assert.equal(dup.candidates.length, cards.length);
+  });
+
+  test("the From your binder list: gems not in the deck, best EDHREC rank first, with the bracket's verdict", () => {
+    const gems = [
+      gem("No rank", { edhrecRank: null }),
+      gem("Rhystic Study", { type: "enchantment", edhrecRank: 46, gameChanger: true }),
+      gem("Counterspell", { edhrecRank: 16 }),
+      gem("Armageddon", { type: "sorcery", edhrecRank: 900, massLandDenial: true }),
+    ];
+    const merged = db.mergeBinderGems(data(pool(), owning([]), 2), gems);
+    const build = buildDeck(merged, { pinned: [gems[2].oracleId] });
+    const list = db.binderGemsList(merged, build);
+    assert.deepEqual(list.map(c => c.name), ["Rhystic Study", "Armageddon", "No rank"], "Counterspell is in the deck now");
+    assert.equal(list[0].blocked, "Bracket 2 allows no Game Changers");
+    assert.equal(list[1].blocked, "Bracket 2 allows no mass land denial");
+    assert.equal(list[2].blocked, null);
+  });
+
+  test("swaps offer EDHREC's next-best first, then at most two binder gems that fit, still under bracket rules", () => {
+    const cards = pool();
+    const gems = [
+      gem("Gem A", { edhrecRank: 300 }),
+      gem("Gem B", { edhrecRank: 20, gameChanger: true }),
+      gem("Gem C", { edhrecRank: 50 }),
+      gem("Gem creature", { type: "creature", edhrecRank: 1 }),
+    ];
+    const merged = db.mergeBinderGems(data(cards, owning([]), 2), gems);
+    const build = buildDeck(merged, {});
+    const target = build.cards.find(c => c.type === "instant");
+    const options = swapOptions(merged, build, target, {});
+    const names = options.map(c => c.name);
+    assert.equal(options.filter(c => !c.gem).length, 5);
+    assert.deepEqual(options.filter(c => c.gem).map(c => c.name), ["Gem B", "Gem C"], "best two by EDHREC rank, instants only");
+    assert.ok(names.indexOf("Gem B") > names.findLastIndex(n => !n.startsWith("Gem")), "gems come after EDHREC's");
+    assert.equal(options.find(c => c.name === "Gem B").blocked, "Bracket 2 allows no Game Changers");
+  });
+}

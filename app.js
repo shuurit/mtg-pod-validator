@@ -11287,6 +11287,10 @@ const deckBuilderUi = {
   // id. One search per request + commander + bracket: an AI call each.
   picks: null,
   picksAdded: new Map(),
+  // "From your binder" (POST /deck-builder/gems): the player's own cards that
+  // fit the commander but aren't in EDHREC's list -- { answer } per build,
+  // answer undefined while the request is out.
+  gems: null,
   // Friends who own the cards to get (freshDeckBuilderOwners), per build.
   owners: null,
   // Saved builds (GET/POST/DELETE /deck-builder/builds): the list above the
@@ -11884,6 +11888,7 @@ async function runDeckBuild(opts = {}) {
     deckBuilderUi.picks = null;
     deckBuilderUi.picksAdded = new Map();
     deckBuilderUi.owners = freshDeckBuilderOwners();
+    deckBuilderUi.gems = null;
     // A rebuild of a saved build takes back its swaps and collection picks;
     // any other build starts clean (and Save makes a new saved build).
     deckBuilderUi.viewingSaved = null;
@@ -11915,6 +11920,8 @@ async function runDeckBuild(opts = {}) {
         return;
       }
     }
+    // The player's own cards that fit but EDHREC didn't suggest.
+    requestBinderGems();
     // The request box: look through the player's own collection for it.
     requestCollectionPicks();
   } catch (err) {
@@ -12099,6 +12106,7 @@ function deckBuilderWhy(card) {
   if (card.synergy != null) why.push(`synergy ${card.synergy > 0 ? "+" : ""}${card.synergy}`);
   if (card.status === "missing" && card.decks.length) why.push(`in ${card.decks.join(", ")}`);
   if (card.upgradeFor) why.push(`upgrade over ${card.upgradeFor}`);
+  if (card.gem) why.push(card.edhrecRank != null ? `from your binder · #${card.edhrecRank} on EDHREC` : "from your binder");
   return why.join(" · ");
 }
 
@@ -12561,7 +12569,7 @@ function deckBuilderSaveButton(build, data) {
       excluded: deckBuilderUi.swaps.excluded,
       request: document.getElementById("db-request").value,
       pairFallback: data.pairSource === "first-commander",
-      picks: [...deckBuilderUi.picksAdded.values()],
+      picks: [...deckBuilderUi.picksAdded.values(), ...deckBuilderBinderGems().filter(g => deckBuilderUi.swaps.pinned.includes(g.oracleId))],
     });
     if (deckBuilderUi.savedId) body.id = deckBuilderUi.savedId;
     try {
@@ -12581,12 +12589,125 @@ function deckBuilderSaveButton(build, data) {
   return btn;
 }
 
+// ---- From your binder ----
+// Cards the player owns that fit the commander (Commander-legal, in its
+// colour identity) but that EDHREC's list doesn't suggest, from the relay's
+// POST /deck-builder/gems after each build. Never added by the builder
+// itself: listed here with an Add button, and offered after EDHREC's in the
+// swap panel (swapOptions), with the bracket's rules applied either way.
+const DECK_BUILDER_GEMS_URL = RELAY_BASE_URL + "/deck-builder/gems";
+const DECK_BUILDER_GEMS_SHOWN = 8;
+
+function deckBuilderBinderGems() {
+  const answer = deckBuilderUi.gems && deckBuilderUi.gems.answer;
+  return answer && answer.checked && Array.isArray(answer.gems) ? answer.gems : [];
+}
+
+async function requestBinderGems() {
+  const data = deckBuilderUi.data;
+  if (!data) return;
+  const state = { answer: undefined, expanded: false };
+  deckBuilderUi.gems = state;
+  const commanders = deckCommanders(data);
+  let answer;
+  try {
+    const res = await fetch(DECK_BUILDER_GEMS_URL, {
+      method: "POST",
+      cache: "no-store",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        colorIdentity: combinedIdentity(commanders),
+        exclude: [...(data.candidates || []).map(c => c.oracleId), ...commanders.map(c => c && c.oracleId)].filter(Boolean).slice(0, 2000),
+      }),
+    });
+    answer = res.ok ? await res.json() : { checked: false, reason: "unavailable" };
+  } catch {
+    answer = { checked: false, reason: "unavailable" };
+  }
+  if (deckBuilderUi.gems !== state) return; // a newer build took over
+  state.answer = answer;
+  renderDeckBuild();
+}
+
+function deckBuilderBinderSection(data, build, buildOpts) {
+  const state = deckBuilderUi.gems;
+  if (!state) return null;
+  const answer = state.answer;
+  // Not linked to Archidekt: the collection note above already says how.
+  if (answer && !answer.checked && ["no-account", "no-archidekt", "bridge-off"].includes(answer.reason)) return null;
+  const section = makeEl("section", "db-picks db-binder");
+  section.setAttribute("aria-labelledby", "db-binder-title");
+  const title = makeEl("h4", "db-group-title", "From your binder");
+  title.id = "db-binder-title";
+  section.append(title);
+  if (answer === undefined) {
+    const p = makeEl("p", "hint db-picks-note", "Looking through your binder…");
+    p.setAttribute("aria-live", "polite");
+    section.append(p);
+    return section;
+  }
+  if (!answer.checked) {
+    section.append(makeEl("p", "hint db-picks-note", "Couldn't look through your binder just now."));
+    return section;
+  }
+  const gems = binderGemsList(data, build, buildOpts);
+  if (!gems.length) {
+    section.append(makeEl("p", "hint db-picks-note", deckBuilderBinderGems().length
+      ? "Every card from your binder that fits is already in the deck."
+      : "Nothing else in your binder fits this commander."));
+    return section;
+  }
+  section.append(makeEl("p", "hint db-picks-note", "Cards you own that fit this commander but EDHREC's list doesn't suggest, by how widely they're played. The builder never adds these itself."));
+  const shown = state.expanded ? gems : gems.slice(0, DECK_BUILDER_GEMS_SHOWN);
+  const list = makeEl("ul", "db-pick-list");
+  for (const gem of shown) {
+    const li = makeEl("li", "db-pick");
+    const main = makeEl("div", "db-row-main");
+    const typeLabel = gem.type && gem.type !== "other" ? gem.type[0].toUpperCase() + gem.type.slice(1) : "";
+    const bits = [typeLabel, gem.edhrecRank != null ? `#${gem.edhrecRank} on EDHREC` : "not ranked on EDHREC"];
+    main.append(deckBuilderName(gem), makeEl("span", "db-row-why", bits.filter(Boolean).join(" · ")));
+    const head = makeEl("div", "db-pick-head");
+    head.append(main, deckBuilderChip(gem));
+    li.append(head);
+    const btn = makeEl("button", "db-pick-add", "Add to deck");
+    btn.type = "button";
+    btn.dataset.focusKey = `gem|${gem.oracleId}`;
+    if (gem.blocked) {
+      btn.disabled = true;
+      const note = makeEl("span", "db-swap-note db-swap-blocked", `Not allowed: ${gem.blocked}.`);
+      note.id = `db-gem-note-${gem.oracleId}`;
+      btn.setAttribute("aria-describedby", note.id);
+      li.append(note);
+    } else {
+      btn.addEventListener("click", () => {
+        deckBuilderUi.swaps = applySwap(deckBuilderUi.swaps, null, gem.oracleId);
+        setDeckBuilderStatus(`Added ${gem.name} from your binder.`);
+        renderDeckBuild();
+      });
+    }
+    li.append(btn);
+    list.append(li);
+  }
+  section.append(list);
+  if (gems.length > shown.length) {
+    const more = makeEl("button", "db-picks-search", `Show all ${gems.length}`);
+    more.type = "button";
+    more.addEventListener("click", () => {
+      state.expanded = true;
+      renderDeckBuild();
+    });
+    section.append(more);
+  }
+  return section;
+}
+
 function renderDeckBuild() {
   // A saved build on show isn't a live result: late answers (combos,
   // friends' copies) for the last live build mustn't replace it.
   if (deckBuilderUi.viewingSaved) return;
   // Picks the player added from their collection join the pool, owned.
-  const data = deckBuilderUi.data ? mergeCollectionPicks(deckBuilderUi.data, [...deckBuilderUi.picksAdded.values()]) : null;
+  // Binder gems join the pool too, but only as swaps or when added.
+  const data = deckBuilderUi.data ? mergeCollectionPicks(mergeBinderGems(deckBuilderUi.data, deckBuilderBinderGems()), [...deckBuilderUi.picksAdded.values()]) : null;
   const result = document.getElementById("db-result");
   if (!data || !result) return;
   // Every render replaces the rows -- including the ones nobody asked for,
@@ -12765,6 +12886,7 @@ function renderDeckBuild() {
 
   const roleSummary = deckBuilderRoleSummary(build);
   const picksSection = deckBuilderPicksSection(build);
+  const binderSection = deckBuilderBinderSection(data, build, buildOpts);
   const ownersNote = deckBuilderOwnersNote(build);
   const viewToggle = document.getElementById("db-view-toggle");
   if (viewToggle) viewToggle.hidden = false;
@@ -12854,6 +12976,7 @@ function renderDeckBuild() {
     ...(comboNote ? [comboNote] : []),
     roleSummary,
     ...(picksSection ? [picksSection] : []),
+    ...(binderSection ? [binderSection] : []),
     ...(viewToggle ? [viewToggle] : []),
     groups,
     actions,

@@ -72,7 +72,7 @@ function sandbox(fetchImpl, kv = new Map()) {
     "DECK_BUILDER_AI_MODEL", "COLLECTION_PICKS_MAX", "COLLECTION_PICKS_SHORTLIST", "ARCHIDEKT_TRADING_APP_BASE_URL",
     "DECK_BUILDER_REQUEST_STOPWORDS", "DECK_BUILDER_TAG_RE", "DECK_BUILDER_READ_CACHE_PREFIX",
     "DECK_BUILDER_READ_CACHE_TTL_SECONDS", "DECK_BUILDER_READ_ROLES", "DECK_BUILDER_TAG_EXAMPLES",
-    "DECK_BUILDER_OWNERS_MAX",
+    "DECK_BUILDER_OWNERS_MAX", "DECK_BUILDER_GEMS_MAX",
   ].map(constant).join("\n").replace(/^const /gm, "var "), ctx);
   vm.runInContext(block("DECK_BUILDER_ROLE_KEYWORDS"), ctx);
   vm.runInContext(block("DECK_BUILDER_ROLE_ARCHIDEKT_TAGS"), ctx);
@@ -81,7 +81,7 @@ function sandbox(fetchImpl, kv = new Map()) {
   // The handler answers through jsonResponse; a plain object is enough here.
   ctx.jsonResponse = (body, status = 200) => ({ body, status });
   vm.runInContext([
-    "deckBuilderSearchTags", "deckBuilderPicksPrompt", "deckBuilderValidatePicks", "deckBuilderFallbackPicks", "handleDeckBuilderCollectionPicks",
+    "deckBuilderSearchTags", "deckBuilderPicksPrompt", "deckBuilderValidatePicks", "deckBuilderFallbackPicks", "handleDeckBuilderCollectionPicks", "deckBuilderCheckOwnedCards", "handleDeckBuilderGems",
     "deckBuilderReadingPrompt", "deckBuilderValidateReading", "handleDeckBuilderReadRequest",
     "handleDeckBuilderOwners",
     "scryfallFetch", "scryfallBackingOff", "recordScryfallBackoff", "kvGetJson",
@@ -958,4 +958,76 @@ test("the owners route sits behind the sign-in check", () => {
   const signIn = RELAY.indexOf('url.pathname === "/deck-builder/candidates"');
   const owners = RELAY.indexOf('url.pathname === "/deck-builder/owners"');
   assert.ok(signIn > 0 && owners > signIn);
+});
+
+// ---- POST /deck-builder/gems: From your binder ----
+function gemsSandbox({ bridge, scryfall }) {
+  const calls = { bridge: null, scryfall: null };
+  const s = sandbox(async (url, init) => {
+    if (url.includes("/api/internal/collection-gems")) {
+      calls.bridge = { body: JSON.parse(init.body), key: init.headers["X-Collection-Bridge-Key"] };
+      if (bridge instanceof Error) throw bridge;
+      return json(200, bridge);
+    }
+    if (url.includes("/cards/collection")) {
+      calls.scryfall = JSON.parse(init.body);
+      if (scryfall instanceof Error) throw scryfall;
+      return json(200, scryfall);
+    }
+    return json(200, { has_more: false, data: [] }); // Tagger searches
+  });
+  s.SCRYFALL_THROTTLE.backoffUntil = 0;
+  s.env.COLLECTION_BRIDGE_KEY = "test-key";
+  return { s, calls };
+}
+const gemsRequest = (more = {}) => ({ json: async () => ({ colorIdentity: "wub", exclude: [OID(90).toUpperCase(), OID(90), "junk"], ...more }) });
+const bridgeCard = (n, name, extra = {}) => ({ oracleId: OID(n), uid: `print-${n}`, name, cmc: 2, types: ["Instant"], edhrecRank: n * 10, gameChanger: false, massLandDenial: false, extraTurns: false, qty: 1, decks: [], ...extra });
+
+test("gems: asks the bridge for the signed-in player, then keeps only what Scryfall says is legal and in colours", async () => {
+  const { s, calls } = gemsSandbox({
+    bridge: { connected: true, cards: [bridgeCard(1, "Counterspell", { decks: ["Old Deck"], qty: 2 }), bridgeCard(2, "Mana Crypt"), bridgeCard(3, "Lightning Bolt"), bridgeCard(4, "Rhystic Study", { edhrecRank: 46 })] },
+    scryfall: { data: [
+      scryCard(1, "Counterspell", { type_line: "Instant", color_identity: ["U"], oracle_text: "Counter target spell." }),
+      scryCard(2, "Mana Crypt", { type_line: "Artifact", color_identity: [], legal: false }),
+      scryCard(3, "Lightning Bolt", { type_line: "Instant", color_identity: ["R"] }),
+      scryCard(4, "Rhystic Study", { type_line: "Enchantment", color_identity: ["U"], game_changer: true, oracle_text: "Whenever an opponent casts a spell, you may draw a card unless that player pays {1}." }),
+    ] },
+  });
+  const res = await s.handleDeckBuilderGems(gemsRequest(), s.env, s.ctx, { discordUserId: "123456789012" });
+  assert.equal(res.status, 200);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.bridge.body)), { discordId: "123456789012", colorIdentity: "WUB", excludeOracleIds: [OID(90)], limit: 40 });
+  assert.equal(calls.bridge.key, "test-key");
+  assert.equal(calls.scryfall.identifiers.length, 4);
+  const gems = JSON.parse(JSON.stringify(res.body.gems));
+  assert.deepEqual(gems.map(g => g.name), ["Counterspell", "Rhystic Study"], "banned and off-colour cards dropped");
+  assert.deepEqual(
+    { type: gems[0].type, cmc: gems[0].cmc, price: gems[0].price, qty: gems[0].qty, decks: gems[0].decks, edhrecRank: gems[0].edhrecRank, uid: gems[0].uid },
+    { type: "instant", cmc: 3, price: 1.5, qty: 2, decks: ["Old Deck"], edhrecRank: 10, uid: "print-1" }
+  );
+  assert.equal(gems[1].type, "enchantment");
+  assert.equal(gems[1].gameChanger, true);
+  assert.ok(gems[1].roles.includes("draw"));
+});
+
+test("gems: no account, bridge down, Scryfall down or a bad request each get a plain answer", async () => {
+  let { s } = gemsSandbox({ bridge: { connected: false, reason: "no-archidekt" }, scryfall: {} });
+  let res = await s.handleDeckBuilderGems(gemsRequest(), s.env, s.ctx, { discordUserId: "1" });
+  assert.deepEqual([res.body.checked, res.body.reason], [false, "no-archidekt"]);
+  ({ s } = gemsSandbox({ bridge: new Error("down"), scryfall: {} }));
+  res = await s.handleDeckBuilderGems(gemsRequest(), s.env, s.ctx, { discordUserId: "1" });
+  assert.deepEqual([res.body.checked, res.body.reason], [false, "unavailable"]);
+  ({ s } = gemsSandbox({ bridge: { connected: true, cards: [bridgeCard(1, "Counterspell")] }, scryfall: new Error("down") }));
+  res = await s.handleDeckBuilderGems(gemsRequest(), s.env, s.ctx, { discordUserId: "1" });
+  assert.deepEqual([res.body.checked, res.body.reason], [false, "unchecked"], "nothing unchecked is offered");
+  ({ s } = gemsSandbox({ bridge: { connected: true, cards: [] }, scryfall: {} }));
+  res = await s.handleDeckBuilderGems(gemsRequest(), s.env, s.ctx, { discordUserId: "1" });
+  assert.deepEqual(JSON.parse(JSON.stringify(res.body)), { checked: true, gems: [] });
+  res = await s.handleDeckBuilderGems(gemsRequest({ colorIdentity: "Blue" }), s.env, s.ctx, { discordUserId: "1" });
+  assert.equal(res.status, 400);
+});
+
+test("the gems route sits behind the sign-in check", () => {
+  const signIn = RELAY.indexOf('url.pathname === "/deck-builder/candidates"');
+  const gemsRoute = RELAY.indexOf('url.pathname === "/deck-builder/gems"');
+  assert.ok(signIn > 0 && gemsRoute > signIn);
 });
