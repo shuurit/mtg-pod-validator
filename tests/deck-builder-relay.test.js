@@ -72,6 +72,7 @@ function sandbox(fetchImpl, kv = new Map()) {
     "DECK_BUILDER_AI_MODEL", "COLLECTION_PICKS_MAX", "COLLECTION_PICKS_SHORTLIST", "ARCHIDEKT_TRADING_APP_BASE_URL",
     "DECK_BUILDER_REQUEST_STOPWORDS", "DECK_BUILDER_TAG_RE", "DECK_BUILDER_READ_CACHE_PREFIX",
     "DECK_BUILDER_READ_CACHE_TTL_SECONDS", "DECK_BUILDER_READ_ROLES", "DECK_BUILDER_TAG_EXAMPLES",
+    "DECK_BUILDER_OWNERS_MAX",
   ].map(constant).join("\n").replace(/^const /gm, "var "), ctx);
   vm.runInContext(block("DECK_BUILDER_ROLE_KEYWORDS"), ctx);
   vm.runInContext(block("DECK_BUILDER_ROLE_ARCHIDEKT_TAGS"), ctx);
@@ -82,6 +83,7 @@ function sandbox(fetchImpl, kv = new Map()) {
   vm.runInContext([
     "deckBuilderSearchTags", "deckBuilderPicksPrompt", "deckBuilderValidatePicks", "deckBuilderFallbackPicks", "handleDeckBuilderCollectionPicks",
     "deckBuilderReadingPrompt", "deckBuilderValidateReading", "handleDeckBuilderReadRequest",
+    "handleDeckBuilderOwners",
     "scryfallFetch", "scryfallBackingOff", "recordScryfallBackoff", "kvGetJson",
     "edhrecJson", "deckBuilderThemes", "hasCardlists", "deckBuilderPages", "deckBuilderPrimaryType", "deckBuilderNameKey", "scryfallCollection", "buildDeckBuilderCandidates", "scryfallSearchOracleIds", "deckBuilderTags", "parseSpellbookCombos",
     "scryfallRoleSearch", "deckBuilderIdentityKey", "deckBuilderRoleTags", "deckBuilderKeywordRoles", "deckBuilderCardRoles",
@@ -895,4 +897,65 @@ test("the read-request route sits behind the sign-in check", () => {
   const signIn = RELAY.indexOf('url.pathname === "/deck-builder/candidates"');
   const read = RELAY.indexOf('url.pathname === "/deck-builder/read-request"');
   assert.ok(signIn > 0 && read > signIn, "read-request is routed with the other signed-in deck-builder routes");
+});
+
+// ---- POST /deck-builder/owners: friends who own the cards to get ----
+function ownersSandbox(answer) {
+  const calls = [];
+  const s = sandbox(async (url, init) => {
+    calls.push({ url, init, body: JSON.parse(init.body) });
+    if (answer instanceof Error) throw answer;
+    return typeof answer === "number" ? json(answer, {}) : json(200, answer);
+  });
+  s.env.COLLECTION_BRIDGE_KEY = "test-key";
+  return { s, calls };
+}
+const ownersRequest = (oracleIds) => ({ json: async () => ({ oracleIds }) });
+const SESSION = { discordUserId: "123456789012" };
+
+test("owners: the bridge is asked for the signed-in player only, and only names and the flag come back", async () => {
+  const { s, calls } = ownersSandbox({
+    connected: true,
+    owners: {
+      [OID(1)]: [{ name: "Mateo", upForTrade: true, quantity: 4, uid: "x" }, { name: "  Ana ", upForTrade: false }],
+      [OID(2)]: [],
+      [OID(9)]: [{ name: "Not asked about", upForTrade: false }],
+    },
+  });
+  const res = await s.handleDeckBuilderOwners(ownersRequest([OID(1), OID(2).toUpperCase(), OID(1), "nope"]), s.env, SESSION);
+  assert.equal(res.status, 200);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "https://archidekt-trading-app.pages.dev/api/internal/card-owners");
+  assert.equal(calls[0].init.headers["X-Collection-Bridge-Key"], "test-key");
+  assert.deepEqual(calls[0].body, { discordId: "123456789012", oracleIds: [OID(1), OID(2)] });
+  assert.deepEqual(JSON.parse(JSON.stringify(res.body)), {
+    checked: true,
+    owners: { [OID(1)]: [{ name: "Mateo", upForTrade: true }, { name: "Ana", upForTrade: false }] },
+  });
+});
+
+test("owners: nothing to ask, too many, no account, or the bridge failing each get a plain answer", async () => {
+  let { s, calls } = ownersSandbox({ connected: true, owners: {} });
+  let res = await s.handleDeckBuilderOwners(ownersRequest([]), s.env, SESSION);
+  assert.deepEqual([res.body.checked, calls.length], [true, 0]);
+  res = await s.handleDeckBuilderOwners(ownersRequest(Array.from({ length: 101 }, (_, i) => OID(i))), s.env, SESSION);
+  assert.equal(res.status, 400);
+  ({ s } = ownersSandbox({ connected: false, reason: "no-account" }));
+  res = await s.handleDeckBuilderOwners(ownersRequest([OID(1)]), s.env, SESSION);
+  assert.deepEqual([res.body.checked, res.body.reason], [false, "no-account"]);
+  for (const failure of [403, new Error("network down")]) {
+    ({ s } = ownersSandbox(failure));
+    res = await s.handleDeckBuilderOwners(ownersRequest([OID(1)]), s.env, SESSION);
+    assert.deepEqual([res.body.checked, res.body.reason], [false, "unavailable"]);
+  }
+  ({ s, calls } = ownersSandbox({}));
+  delete s.env.COLLECTION_BRIDGE_KEY;
+  res = await s.handleDeckBuilderOwners(ownersRequest([OID(1)]), s.env, SESSION);
+  assert.deepEqual([res.body.reason, calls.length], ["bridge-off", 0]);
+});
+
+test("the owners route sits behind the sign-in check", () => {
+  const signIn = RELAY.indexOf('url.pathname === "/deck-builder/candidates"');
+  const owners = RELAY.indexOf('url.pathname === "/deck-builder/owners"');
+  assert.ok(signIn > 0 && owners > signIn);
 });

@@ -3448,6 +3448,55 @@ async function handleDeckBuilderCollectionPicks(request, env, ctx, session) {
   return jsonResponse({ checked: true, source, model: source === "ai" ? DECK_BUILDER_AI_MODEL : null, searched: tags, picks }, 200, { "Cache-Control": "no-store" });
 }
 
+// ---------- POST /deck-builder/owners ----------
+// The cards a Build a Deck player would have to get (status "missing" in
+// deck-builder.js) -> who else in the circle owns each one and would part
+// with it, from archidekt-trading-app's POST /api/internal/card-owners. That
+// route applies the trading app's own lock rules (locked cards, locked decks
+// without a spare) and answers Discord usernames and an up-for-trade flag
+// only. Always for the signed-in player (session.discordUserId), whose own
+// copies it leaves out. Not cached: who owns what changes with every sync.
+const DECK_BUILDER_OWNERS_MAX = 100;
+
+async function handleDeckBuilderOwners(request, env, session) {
+  const body = await request.json().catch(() => null);
+  const uidOk = v => typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+  const oracleIds = [...new Set((Array.isArray(body && body.oracleIds) ? body.oracleIds : []).filter(uidOk).map(v => v.toLowerCase()))];
+  const noStore = { "Cache-Control": "no-store" };
+  if (!oracleIds.length) return jsonResponse({ checked: true, owners: {} }, 200, noStore);
+  if (oracleIds.length > DECK_BUILDER_OWNERS_MAX) {
+    return jsonResponse({ error: `At most ${DECK_BUILDER_OWNERS_MAX} cards.` }, 400);
+  }
+  if (!env.COLLECTION_BRIDGE_KEY) return jsonResponse({ checked: false, reason: "bridge-off" }, 200, noStore);
+  let answer;
+  try {
+    const res = await fetch(`${ARCHIDEKT_TRADING_APP_BASE_URL}/api/internal/card-owners`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Collection-Bridge-Key": env.COLLECTION_BRIDGE_KEY },
+      body: JSON.stringify({ discordId: String(session.discordUserId || ""), oracleIds }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    answer = await res.json();
+  } catch (err) {
+    console.error(`card owners lookup failed: ${err.message}`);
+    return jsonResponse({ checked: false, reason: "unavailable" }, 200, noStore);
+  }
+  if (!answer || answer.connected === false) {
+    return jsonResponse({ checked: false, reason: (answer && answer.reason) || "no-account" }, 200, noStore);
+  }
+  // Only the asked-for cards, and only a name and the flag for each owner.
+  const owners = {};
+  for (const id of oracleIds) {
+    const list = (answer.owners && answer.owners[id]) || [];
+    const clean = (Array.isArray(list) ? list : [])
+      .filter(o => o && typeof o.name === "string" && o.name.trim())
+      .map(o => ({ name: o.name.trim().slice(0, 64), upForTrade: !!o.upForTrade }))
+      .slice(0, 20);
+    if (clean.length) owners[id] = clean;
+  }
+  return jsonResponse({ checked: true, owners }, 200, noStore);
+}
+
 async function handleDeckWinRates(env) {
   let data;
   try {
@@ -5438,6 +5487,10 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/deck-builder/read-request") {
       return handleDeckBuilderReadRequest(request, env, ctx);
+    }
+
+    if (request.method === "POST" && url.pathname === "/deck-builder/owners") {
+      return handleDeckBuilderOwners(request, env, session);
     }
 
     if (request.method === "POST" && url.pathname === "/deck-builder/collection-picks") {

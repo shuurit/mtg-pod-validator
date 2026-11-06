@@ -7444,3 +7444,32 @@ button.db-swap-btn:disabled {
 }
 .db-copy-note { margin: 0; }
 .db-copy-note[hidden], .db-copy-fallback[hidden] { display: none; }
+
+/* Build a Deck: who in the circle has a card to get (deckBuilderRow,
+   deckBuilderOwnersNote). The price chip stays on top; the names sit under
+   it, right-aligned, in the "you have it" green -- a friend's copy is the
+   next best thing to your own. */
+.db-row-side {
+  flex: 0 0 auto;
+  max-width: 48%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+.db-row-side .db-chip { max-width: 100%; }
+.db-row-friends {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--good);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.db-owners-note a, .db-swap-friends a { color: var(--accent); }
+.db-swap-friends {
+  margin: 4px 0 2px;
+  font-size: 0.82rem;
+  color: var(--good);
+  font-weight: 600;
+}
+.db-swap-friends a { font-weight: 500; }
