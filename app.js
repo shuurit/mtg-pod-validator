@@ -7129,6 +7129,7 @@ function activateTab(tabName) {
   if (tabName === "pod") pollLiveTable(true);
   if (tabName === "tonight") pollLiveTable(true);
   if (tabName === "deck-builder" && switching) loadSavedBuilds();
+  if (tabName === "my-decks" && switching && myDecksUi.view === "list") loadMyDecks();
   // Standings always opens on the league; a dossier is somewhere you go
   // from there, not somewhere the tab remembers.
   if (tabName === "winrates" && switching) {
@@ -7166,7 +7167,7 @@ function crossfadeTabBackground(bgEl) {
 // another one (Tonight's to-dos, the avatar menu's Proposals) sit just
 // past their way in, so opening one reads as going forward and the back
 // link as coming back.
-const TAB_SEQUENCE = { tonight: 0, "games-to-update": 0.5, "update-app": 0.5, pod: 1, winrates: 2, achievements: 3, proposals: 4, "deck-builder": 4 };
+const TAB_SEQUENCE = { tonight: 0, "games-to-update": 0.5, "update-app": 0.5, pod: 1, winrates: 2, achievements: 3, proposals: 4, "deck-builder": 4, "my-decks": 4 };
 
 function playTabEnter(panel, previous) {
   if (REDUCED_MOTION.matches) return;
@@ -12924,6 +12925,7 @@ function renderDeckBuild() {
   });
   actions.append(copyBtn);
   actions.append(deckBuilderSaveButton(build, data));
+  actions.append(deckBuilderArchidektButton(build));
   // The cards to get, into a want folder in the Archidekt Trading App: a
   // link that opens its Wants import with them (wantsHandoffUrl). The
   // player checks the list there, signed in, and presses Add; nothing is
@@ -12999,6 +13001,723 @@ function renderDeckBuild() {
   }
 }
 
+// ---------- Create on Archidekt (Build a Deck and My Decks) ----------
+// A NEW deck on the player's own Archidekt account, through the relay's
+// POST /archidekt/card-ids (Archidekt's own id for each card, 20 at a time;
+// the player's own printings first) and POST /archidekt/decks, which the
+// Archidekt Trading App carries out with the session it holds. Nothing is
+// edited or deleted on Archidekt; nothing is written until Create.
+const ARCHIDEKT_CARD_IDS_URL = RELAY_BASE_URL + "/archidekt/card-ids";
+const ARCHIDEKT_DECKS_URL = RELAY_BASE_URL + "/archidekt/decks";
+const ARCHIDEKT_CARD_ID_CHUNK = 20;
+const archidektCreateUi = { job: null, busy: false };
+
+// Why Archidekt can't be written to, in words, for a bridge `reason`.
+function archidektReasonText(reason) {
+  if (reason === "no-account") return "You don't have an Archidekt Trading App account yet, so there's no Archidekt account to write to.";
+  if (reason === "no-archidekt") return "Connect Archidekt in the Archidekt Trading App first.";
+  if (reason === "expired") return "Your Archidekt connection has expired. Reconnect it in the Archidekt Trading App, then try again.";
+  if (reason === "bridge-off") return "Archidekt writing isn't switched on for this app yet.";
+  return "The Archidekt Trading App didn't answer. Try again in a moment.";
+}
+
+function setArchidektCreateStatus(text, tone) {
+  const el = document.getElementById("archidekt-create-status");
+  if (!el) return;
+  el.hidden = !text;
+  el.classList.toggle("is-error", tone === "error");
+  el.replaceChildren();
+  if (text instanceof Node) el.append(text);
+  else el.textContent = text || "";
+}
+
+// job: { name, bracket, rows (archidektDeckCards), lead, text (the list for
+// Archidekt's Import if the write fails) }
+function showArchidektCreate(job) {
+  const modal = document.getElementById("archidekt-create-modal");
+  if (!modal) return;
+  archidektCreateUi.job = job;
+  const count = job.rows.reduce((n, r) => n + r.qty, 0);
+  document.getElementById("archidekt-create-lead").textContent = job.lead
+    || `A new Commander deck on your Archidekt account with these ${count} cards, at Bracket ${job.bracket}. Nothing else on Archidekt changes.`;
+  document.getElementById("archidekt-create-name").value = job.name;
+  const go = document.getElementById("archidekt-create-go");
+  go.disabled = false;
+  go.textContent = "Create deck";
+  go.hidden = false;
+  setArchidektCreateStatus("");
+  presentModal(modal);
+}
+
+function hideArchidektCreate() {
+  if (archidektCreateUi.busy) return;
+  dismissModal(document.getElementById("archidekt-create-modal"));
+}
+
+async function archidektPost(url, body) {
+  const res = await fetch(url, { method: "POST", cache: "no-store", headers: authHeaders(), body: JSON.stringify(body) });
+  const answer = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(answer.error || `HTTP ${res.status}`);
+  return answer;
+}
+
+function archidektLink(href, text) {
+  const a = makeEl("a", null, text);
+  a.href = href;
+  a.target = "_blank";
+  a.rel = "noopener";
+  return a;
+}
+
+async function runArchidektCreate() {
+  const job = archidektCreateUi.job;
+  if (!job || archidektCreateUi.busy) return;
+  const name = document.getElementById("archidekt-create-name").value.replace(/\s+/g, " ").trim();
+  if (!name) {
+    setArchidektCreateStatus("Give the deck a name.", "error");
+    document.getElementById("archidekt-create-name").focus();
+    return;
+  }
+  const go = document.getElementById("archidekt-create-go");
+  archidektCreateUi.busy = true;
+  go.disabled = true;
+  go.textContent = "Creating…";
+  try {
+    // 1. Archidekt's id for every card, a chunk at a time.
+    const ids = [];
+    for (let i = 0; i < job.rows.length; i += ARCHIDEKT_CARD_ID_CHUNK) {
+      setArchidektCreateStatus(`Finding the cards on Archidekt… ${Math.min(i + ARCHIDEKT_CARD_ID_CHUNK, job.rows.length)} of ${job.rows.length}`);
+      const chunk = job.rows.slice(i, i + ARCHIDEKT_CARD_ID_CHUNK);
+      const answer = await archidektPost(ARCHIDEKT_CARD_IDS_URL, { cards: chunk.map(r => ({ name: r.name, uid: r.uid, oracleId: r.oracleId })) });
+      if (answer.connected === false) throw Object.assign(new Error(archidektReasonText(answer.reason)), { plain: true });
+      ids.push(...chunk.map((_, k) => answer.ids[k] || null));
+    }
+    const unknown = job.rows.filter((_, i) => !ids[i]);
+    if (unknown.some(r => r.commander)) {
+      throw Object.assign(new Error(`Archidekt doesn't know the commander (${unknown.filter(r => r.commander).map(r => r.name).join(", ")}), so the deck wasn't made.`), { plain: true });
+    }
+    // 2. The deck itself.
+    setArchidektCreateStatus("Creating the deck on Archidekt…");
+    const cards = job.rows.map((r, i) => ({ cardId: ids[i], qty: r.qty, commander: r.commander })).filter(c => c.cardId);
+    const made = await archidektPost(ARCHIDEKT_DECKS_URL, { name, bracket: job.bracket, private: document.getElementById("archidekt-create-private").checked, cards });
+    if (made.connected === false) throw Object.assign(new Error(archidektReasonText(made.reason)), { plain: true });
+    const line = makeEl("span");
+    if (!made.cardsAdded) {
+      line.append("The deck was made, but its cards didn't go in. ", archidektLink(made.url, "Open it on Archidekt"), " and use Import with “Copy for Archidekt”.");
+      setArchidektCreateStatus(line, "error");
+    } else {
+      line.append(`Made “${name}” with ${made.cardCount} cards. `, archidektLink(made.url, "Open it on Archidekt"));
+      if (unknown.length) line.append(` Archidekt didn't know ${unknown.length === 1 ? "one card" : `${unknown.length} cards`} (${unknown.map(r => r.name).join(", ")}); add ${unknown.length === 1 ? "it" : "them"} there.`);
+      setArchidektCreateStatus(line);
+      go.hidden = true;
+      if (typeof job.onCreated === "function") job.onCreated(made);
+    }
+  } catch (err) {
+    setArchidektCreateStatus(err.plain ? err.message : `Couldn't create the deck (${err.message}).`, "error");
+  } finally {
+    archidektCreateUi.busy = false;
+    go.disabled = false;
+    go.textContent = "Create deck";
+  }
+}
+
+function initArchidektCreate() {
+  const modal = document.getElementById("archidekt-create-modal");
+  if (!modal) return;
+  document.getElementById("archidekt-create-form").addEventListener("submit", e => {
+    e.preventDefault();
+    runArchidektCreate();
+  });
+  document.getElementById("archidekt-create-close").addEventListener("click", hideArchidektCreate);
+  document.getElementById("archidekt-create-cancel").addEventListener("click", hideArchidektCreate);
+  modal.addEventListener("click", e => { if (e.target === modal) hideArchidektCreate(); });
+}
+
+// The Build a Deck result's button.
+function deckBuilderArchidektButton(build) {
+  const btn = makeEl("button", "db-archidekt-btn", "Create on Archidekt");
+  btn.type = "button";
+  btn.addEventListener("click", () => {
+    const commanders = build.commanders && build.commanders.length ? build.commanders : [build.commander];
+    showArchidektCreate({
+      name: archidektDeckName(commanders.map(c => c.name).join(" / "), `(Bracket ${build.bracket})`),
+      bracket: build.bracket,
+      rows: archidektDeckCards({ commanders, cards: build.cards, basics: build.basics }),
+    });
+  });
+  return btn;
+}
+
+// ---------- My Decks ----------
+// The signed-in player's pod decks (GET /my-decks: this season's record,
+// bracket, and the Archidekt deck each is linked to), and for any of them an
+// Upgrade: its Archidekt list (GET /my-decks/cards) against Build a Deck's
+// candidates for its commander at its bracket (GET /deck-builder/candidates),
+// put through planUpgrade in deck-builder.js. Moved here from the Archidekt
+// Trading App's Home ("Your pod decks" / Upgrade picks); links made there
+// carry over.
+const MY_DECKS_URL = RELAY_BASE_URL + "/my-decks";
+const myDecksUi = {
+  data: null,      // GET /my-decks
+  loading: false,
+  deck: null,      // the pod deck being upgraded or linked
+  view: "list",    // "list" | "link" | "upgrade"
+  token: 0,        // the latest load; older answers are dropped
+  cards: null,     // GET /my-decks/cards for deck
+  candidates: null, // GET /deck-builder/candidates for its commander(s)
+  bracket: 3,
+  maxSwaps: UPGRADE_DEFAULT_SWAPS,
+  budget: 0,
+  focusId: null,   // what to focus after the next render (a render replaces every control)
+  keep: new Set(),
+  skip: new Set(),
+  owners: new Map(), // oracle id -> [{ name, upForTrade }] from /deck-builder/owners
+  ownersAsked: new Set(),
+};
+
+function setMyDecksStatus(text, tone) {
+  const el = document.getElementById("md-status");
+  if (!el) return;
+  el.hidden = !text;
+  el.textContent = text || "";
+  el.classList.toggle("is-error", tone === "error");
+}
+
+function openMyDecksTab() {
+  activateTab("my-decks");
+}
+
+async function loadMyDecks() {
+  if (myDecksUi.loading) return;
+  myDecksUi.loading = true;
+  const body = document.getElementById("md-body");
+  if (!myDecksUi.data && body) renderSkeletonCards(body, 3, ["medium", "short"]);
+  try {
+    const res = await fetch(MY_DECKS_URL, { cache: "no-store", headers: authHeaders() });
+    const answer = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(answer.error || `HTTP ${res.status}`);
+    myDecksUi.data = answer;
+    setMyDecksStatus("");
+  } catch (err) {
+    setMyDecksStatus(`Couldn't load your decks (${err.message}). Pull down to try again.`, "error");
+    if (!myDecksUi.data && body) body.replaceChildren();
+  } finally {
+    myDecksUi.loading = false;
+  }
+  if (myDecksUi.view === "list") renderMyDecks();
+}
+
+function myDeckRecordText(d) {
+  if (!d.gamesPlayed) return "No games this season";
+  const pct = Math.round((d.wins / d.gamesPlayed) * 100);
+  return `${d.wins}W ${d.gamesPlayed - d.wins}L · ${pct}% this season`;
+}
+
+function myDeckArchidektName(d) {
+  const decks = (myDecksUi.data && myDecksUi.data.archidekt.decks) || [];
+  const found = decks.find(a => a.id === d.archidektDeckId);
+  return found ? found.name : d.archidektDeckId ? `Archidekt deck ${d.archidektDeckId}` : null;
+}
+
+function myDeckRow(d) {
+  const li = makeEl("li", "md-deck");
+  const coin = buildIdentityCoin(d.colorIdentity || "");
+  if (coin) li.append(coin);
+  const main = makeEl("div", "md-deck-main");
+  const name = makeEl("span", "md-deck-name", d.name);
+  main.append(name);
+  const meta = makeEl("span", "md-deck-meta", myDeckRecordText(d));
+  if (d.bracket) meta.append(` · Bracket ${d.bracket}`);
+  main.append(meta);
+  const linked = myDeckArchidektName(d);
+  main.append(makeEl("span", "md-deck-link", linked ? `Archidekt: ${linked}` : "Not linked to an Archidekt deck yet"));
+  li.append(main);
+  if (isStrugglingDeck(d)) li.append(makeEl("span", "md-flag", "Struggling"));
+  const btn = makeEl("button", "md-upgrade-btn", "Upgrade");
+  btn.type = "button";
+  btn.setAttribute("aria-label", `Upgrade ${d.name}`);
+  btn.addEventListener("click", () => openMyDeckUpgrade(d.podDeckId));
+  li.append(btn);
+  return li;
+}
+
+function renderMyDecks() {
+  const body = document.getElementById("md-body");
+  const data = myDecksUi.data;
+  if (!body || !data) return;
+  myDecksUi.view = "list";
+  document.getElementById("md-lead").hidden = false;
+  const out = [];
+  const arch = data.archidekt || {};
+  if (!arch.connected) {
+    const note = makeEl("p", "db-note db-note-warn", archidektReasonText(arch.reason));
+    if (arch.reason !== "bridge-off") note.append(" ", archidektLink(TRADING_APP_URL, "Open the Archidekt Trading App"));
+    out.push(note);
+  } else if (arch.username) {
+    out.push(makeEl("p", "db-note", `Archidekt: ${arch.username} · ${arch.decks.length} deck${arch.decks.length === 1 ? "" : "s"}`));
+  }
+  if (!data.decks.length) {
+    out.push(makeEl("p", "hint", "You don't have any decks in the pod yet. New decks come in through Update the App."));
+    body.replaceChildren(...out);
+    return;
+  }
+
+  // The deck that needs help most gets the big tile.
+  const featured = featuredDeck(data.decks);
+  if (featured) {
+    const tile = makeEl("article", "md-feature");
+    tile.append(makeEl("span", "md-flag", "Struggling"));
+    tile.append(makeEl("h3", "md-feature-name", featured.name));
+    const rec = makeEl("p", "md-feature-record");
+    rec.append("Won ", makeEl("b", null, String(featured.wins)), ` of ${featured.gamesPlayed} games this season. A fair share in a 4-player pod is 1 in 4.`);
+    tile.append(rec);
+    const btn = makeEl("button", "primary", "Upgrade this deck");
+    btn.type = "button";
+    btn.addEventListener("click", () => openMyDeckUpgrade(featured.podDeckId));
+    tile.append(btn);
+    out.push(tile);
+  }
+  const rest = data.decks.filter(d => d !== featured).sort((a, b) => isStrugglingDeck(b) - isStrugglingDeck(a) || b.gamesPlayed - a.gamesPlayed);
+  if (rest.length) {
+    out.push(makeEl("h3", "db-group-title", featured ? "Your other decks" : "Your decks"));
+    const ul = makeEl("ul", "md-deck-list");
+    ul.append(...rest.map(myDeckRow));
+    out.push(ul);
+  }
+  const build = makeEl("button", "md-crosslink", "Build a new deck instead ");
+  build.type = "button";
+  build.append(Object.assign(makeEl("span", null, "→"), { ariaHidden: "true" }));
+  build.addEventListener("click", openDeckBuilderTab);
+  out.push(build);
+  body.replaceChildren(...out);
+}
+
+function myDecksBackButton() {
+  const back = makeEl("button", "md-back", "← All my decks");
+  back.type = "button";
+  back.addEventListener("click", () => {
+    myDecksUi.token++;
+    myDecksUi.view = "list";
+    setMyDecksStatus("");
+    renderMyDecks();
+    window.scrollTo({ top: 0 });
+  });
+  return back;
+}
+
+async function openMyDeckUpgrade(podDeckId, { relink = false } = {}) {
+  const deck = myDecksUi.data && myDecksUi.data.decks.find(d => d.podDeckId === podDeckId);
+  if (!deck) return;
+  const token = ++myDecksUi.token;
+  const sameDeck = myDecksUi.deck && myDecksUi.deck.podDeckId === podDeckId;
+  myDecksUi.deck = deck;
+  if (!sameDeck) {
+    myDecksUi.keep = new Set();
+    myDecksUi.skip = new Set();
+    myDecksUi.maxSwaps = UPGRADE_DEFAULT_SWAPS;
+    myDecksUi.budget = 0;
+    myDecksUi.bracket = deck.bracket || 3;
+  }
+  document.getElementById("md-lead").hidden = true;
+  setMyDecksStatus("");
+  window.scrollTo({ top: 0 });
+  const arch = myDecksUi.data.archidekt;
+  if (!arch.connected) {
+    myDecksUi.view = "link";
+    const body = document.getElementById("md-body");
+    body.replaceChildren(myDecksBackButton(), makeEl("h3", "md-feature-name", deck.name), makeEl("p", "db-note db-note-warn", archidektReasonText(arch.reason)));
+    return;
+  }
+  if (!deck.archidektDeckId || relink) return renderMyDeckLink(deck);
+  await loadMyDeckUpgrade(token);
+}
+
+function renderMyDeckLink(deck) {
+  myDecksUi.view = "link";
+  const body = document.getElementById("md-body");
+  const decks = [...myDecksUi.data.archidekt.decks].sort((a, b) => deckNameScore(deck.name, b.name) - deckNameScore(deck.name, a.name));
+  const pick = deck.archidektDeckId || (decks[0] && deckNameScore(deck.name, decks[0].name) > 0 ? decks[0].id : null);
+  const lead = makeEl("p", "hint");
+  lead.append("Which Archidekt deck is ", makeEl("b", null, deck.name), "? Its commander and current list come from there. You only do this once.");
+  const set = makeEl("fieldset", "md-link-list");
+  set.append(makeEl("legend", "visually-hidden", "Archidekt deck"));
+  for (const d of decks) {
+    const label = makeEl("label", "md-link-row");
+    const radio = document.createElement("input");
+    radio.type = "radio";
+    radio.name = "md-link-deck";
+    radio.value = String(d.id);
+    radio.checked = d.id === pick;
+    label.append(radio, makeEl("span", null, d.name));
+    if (d.id === pick && !deck.archidektDeckId) label.append(makeEl("span", "md-suggested", "Suggested"));
+    set.append(label);
+  }
+  if (!decks.length) set.append(makeEl("p", "hint", "Your Archidekt account has no decks yet."));
+  const go = makeEl("button", "primary", "Use this deck");
+  go.type = "button";
+  go.disabled = !decks.length;
+  go.addEventListener("click", () => linkMyDeck(deck, go));
+  const row = makeEl("div", "row");
+  row.append(go);
+  body.replaceChildren(myDecksBackButton(), makeEl("h3", "md-feature-name", deck.name), lead, set, row);
+}
+
+async function linkMyDeck(deck, btn) {
+  const chosen = document.querySelector('#md-body input[name="md-link-deck"]:checked');
+  if (!chosen) return setMyDecksStatus("Pick a deck first.", "error");
+  btn.disabled = true;
+  try {
+    await archidektPost(`${MY_DECKS_URL}/link`, { podDeckId: deck.podDeckId, archidektDeckId: Number(chosen.value) });
+  } catch (err) {
+    btn.disabled = false;
+    return setMyDecksStatus(`Couldn't save that (${err.message}).`, "error");
+  }
+  deck.archidektDeckId = Number(chosen.value);
+  deck.commanderUid = null;
+  myDecksUi.cards = null;
+  myDecksUi.candidates = null;
+  openMyDeckUpgrade(deck.podDeckId);
+}
+
+async function loadMyDeckUpgrade(token) {
+  const deck = myDecksUi.deck;
+  const body = document.getElementById("md-body");
+  myDecksUi.view = "upgrade";
+  body.replaceChildren(myDecksBackButton(), makeEl("h3", "md-feature-name", deck.name));
+  setMyDecksStatus("Reading your Archidekt deck…");
+  try {
+    if (!myDecksUi.cards || myDecksUi.cards.deckId !== deck.archidektDeckId) {
+      const res = await fetch(`${MY_DECKS_URL}/cards?deckId=${deck.archidektDeckId}`, { cache: "no-store", headers: authHeaders() });
+      const answer = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(answer.error || `HTTP ${res.status}`);
+      if (answer.connected === false) throw Object.assign(new Error(archidektReasonText(answer.reason)), { plain: true });
+      myDecksUi.cards = answer;
+    }
+    if (token !== myDecksUi.token) return;
+    const commanders = myDecksUi.cards.commanders || [];
+    if (!commanders.length) {
+      setMyDecksStatus("");
+      const change = makeEl("button", null, "Pick a different Archidekt deck");
+      change.type = "button";
+      change.addEventListener("click", () => openMyDeckUpgrade(deck.podDeckId, { relink: true }));
+      body.append(makeEl("p", "db-note db-note-warn", "That Archidekt deck has no card in its Commander category, so there's no commander to look up."), change);
+      return;
+    }
+    const names = commanders.map(c => c.name);
+    const key = `${names.join("|")}|${myDecksUi.bracket}`;
+    if (!myDecksUi.candidates || myDecksUi.candidates.key !== key) {
+      setMyDecksStatus(`Reading EDHREC for ${names.join(" and ")} at Bracket ${myDecksUi.bracket}…`);
+      const params = new URLSearchParams({ commander: names[0], bracket: String(myDecksUi.bracket) });
+      if (names[1]) params.set("commander2", names[1]);
+      let answer = await fetchCandidates(params);
+      // A pair EDHREC has no page for: the first commander's own page.
+      if (answer.reason === "no-edhrec-pair") {
+        params.set("pairFallback", "1");
+        answer = await fetchCandidates(params);
+      }
+      if (answer.reason) throw Object.assign(new Error(`EDHREC has no Bracket ${myDecksUi.bracket} page for ${names.join(" and ")}. Try another bracket.`), { plain: true, keepBracket: true });
+      myDecksUi.candidates = { key, data: answer };
+      myDecksUi.owners = new Map();
+      myDecksUi.ownersAsked = new Set();
+    }
+    if (token !== myDecksUi.token) return;
+    setMyDecksStatus("");
+    renderMyDeckUpgrade();
+  } catch (err) {
+    if (token !== myDecksUi.token) return;
+    setMyDecksStatus(err.plain ? err.message : `Couldn't put the upgrade together (${err.message}). Try again in a moment.`, "error");
+    if (err.keepBracket) body.append(myDeckBracketToggle());
+  }
+}
+
+async function fetchCandidates(params) {
+  const res = await fetch(`${DECK_BUILDER_RELAY_URL}?${params}`, { cache: "no-store", headers: authHeaders() });
+  const answer = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(answer.error || `HTTP ${res.status}`);
+  return answer;
+}
+
+function myDeckBracketToggle() {
+  const wrap = makeEl("div", "db-field");
+  const label = makeEl("span", "db-label", "Upgrade toward bracket");
+  label.id = "md-bracket-label";
+  const group = makeEl("div", "view-toggle db-bracket-toggle");
+  group.setAttribute("role", "group");
+  group.setAttribute("aria-labelledby", "md-bracket-label");
+  BRACKET_NAMES.forEach((name, i) => {
+    const b = i + 1;
+    const btn = makeEl("button", `view-toggle-btn${b === myDecksUi.bracket ? " active" : ""}`);
+    btn.type = "button";
+    btn.setAttribute("aria-pressed", String(b === myDecksUi.bracket));
+    btn.append(makeEl("b", null, String(b)), makeEl("span", null, name));
+    btn.addEventListener("click", () => {
+      if (b === myDecksUi.bracket) return;
+      myDecksUi.bracket = b;
+      loadMyDeckUpgrade(++myDecksUi.token);
+    });
+    group.append(btn);
+  });
+  wrap.append(label, group);
+  return wrap;
+}
+
+function myDeckCardWhy(card, side) {
+  if (side === "out") {
+    const bits = [];
+    if (card.breaks === "gameChangers") bits.push("over the Game Changer limit");
+    if (card.breaks === "massLandDenial") bits.push("mass land denial isn't allowed");
+    if (card.breaks === "extraTurns") bits.push("over the extra-turn limit");
+    if (!card.onEdhrec) bits.push(`not in EDHREC's list at Bracket ${myDecksUi.bracket}`);
+    else {
+      if (card.inclusion != null) bits.push(`${card.inclusion}% of decks`);
+      if (card.synergy != null) bits.push(`synergy ${card.synergy > 0 ? "+" : ""}${card.synergy}`);
+    }
+    return bits.join(" · ");
+  }
+  return deckBuilderWhy(card);
+}
+
+function myDeckSwapRow(swap) {
+  const li = makeEl("li", "md-swap");
+  if (swap.fixes) li.classList.add("md-swap-fix");
+  const out = makeEl("div", "md-swap-side md-swap-out");
+  out.append(makeEl("span", "md-swap-tag", "Cut"), makeEl("span", "db-row-name", swap.out.name), makeEl("span", "db-row-why", myDeckCardWhy(swap.out, "out")));
+  const keep = makeEl("button", "md-swap-btn", "Keep");
+  keep.type = "button";
+  keep.setAttribute("aria-label", `Keep ${swap.out.name}`);
+  keep.addEventListener("click", () => { myDecksUi.keep.add(swap.out.oracleId); myDecksUi.focusId = "md-swaps-title"; renderMyDeckUpgrade(); });
+  out.append(keep);
+
+  const inn = makeEl("div", "md-swap-side md-swap-in");
+  const nameLine = makeEl("span", "md-swap-name");
+  nameLine.append(makeEl("span", "db-row-name", swap.in.name), deckBuilderChip(swap.in));
+  inn.append(makeEl("span", "md-swap-tag", "Add"), nameLine, makeEl("span", "db-row-why", myDeckCardWhy(swap.in, "in")));
+  const owners = swap.in.status === "missing" ? myDecksUi.owners.get(swap.in.oracleId) : null;
+  if (owners && owners.length) inn.append(makeEl("span", "db-row-why md-swap-owners", deckBuilderOwnersText(owners)));
+  const skip = makeEl("button", "md-swap-btn", "Not this");
+  skip.type = "button";
+  skip.setAttribute("aria-label", `Don't add ${swap.in.name}`);
+  skip.addEventListener("click", () => { myDecksUi.skip.add(swap.in.oracleId); myDecksUi.focusId = "md-swaps-title"; renderMyDeckUpgrade(); });
+  inn.append(skip);
+  li.append(out, inn);
+  return li;
+}
+
+// Who in the circle has the cards to get, asked once per card.
+async function requestMyDeckOwners(plan) {
+  const ids = plan.swaps.map(s => s.in).filter(c => c.status === "missing").map(c => c.oracleId).filter(id => !myDecksUi.ownersAsked.has(id));
+  if (!ids.length) return;
+  ids.forEach(id => myDecksUi.ownersAsked.add(id));
+  try {
+    const answer = await archidektPost(DECK_BUILDER_OWNERS_URL, { oracleIds: ids.slice(0, DECK_BUILDER_OWNERS_MAX) });
+    if (!answer.checked) return;
+    for (const id of ids) myDecksUi.owners.set(id, (answer.owners && answer.owners[id]) || []);
+    if (myDecksUi.view === "upgrade") renderMyDeckUpgrade();
+  } catch {
+    // Owners are a nicety; the swaps stand without them.
+  }
+}
+
+function myDeckCheckLine(label, before, after) {
+  const fmt = c => {
+    if (!c || c.status === "unchecked") return "not checked";
+    if (label === "Game Changers") return c.cap === Infinity ? `${c.count}` : `${c.count} of ${c.cap}`;
+    if (label === "Mass land denial") return c.allowed ? `${c.count} · allowed` : c.count ? `${c.count} ✗` : "none";
+    return c.cap === Infinity ? `${c.count}` : c.count ? `${c.count} of ${c.cap}` : "none";
+  };
+  const li = makeEl("li", "db-check");
+  const tone = after.status === "pass" ? "ok" : after.status === "fail" ? "bad" : "unchecked";
+  const val = makeEl("span", `db-check-val db-${tone}`, before.status === after.status && fmt(before) === fmt(after) ? `${fmt(after)} ${after.status === "pass" ? "✓" : after.status === "fail" ? "✗" : ""}` : `${fmt(before)} → ${fmt(after)} ${after.status === "pass" ? "✓" : after.status === "fail" ? "✗" : ""}`);
+  li.append(makeEl("span", null, label), val);
+  return li;
+}
+
+function renderMyDeckUpgrade() {
+  const deck = myDecksUi.deck;
+  const cards = myDecksUi.cards;
+  const cand = myDecksUi.candidates && myDecksUi.candidates.data;
+  const body = document.getElementById("md-body");
+  if (!deck || !cards || !cand || !body) return;
+  myDecksUi.view = "upgrade";
+  const budget = myDecksUi.budget || 0;
+  const plan = planUpgrade(cand, { commanders: cards.commanders.map(c => c.oracleId), cards: cards.cards }, {
+    maxSwaps: myDecksUi.maxSwaps,
+    keep: [...myDecksUi.keep],
+    skip: [...myDecksUi.skip],
+    budget,
+  });
+  myDecksUi.lastPlan = plan;
+
+  const head = makeEl("div", "db-head");
+  const coin = buildIdentityCoin(cards.colorIdentity || "");
+  if (coin) head.append(coin);
+  const titles = makeEl("div", "db-head-titles");
+  titles.append(makeEl("h3", "db-commander", deck.name));
+  const sub = makeEl("p", "db-sub", `${myDeckRecordText(deck)} · ${cards.commanders.map(c => c.name).join(" / ")} · `);
+  sub.append(archidektLink(cards.url, cards.name || "Archidekt deck"), " · ");
+  const change = makeEl("button", "md-inline-btn", "change");
+  change.type = "button";
+  change.addEventListener("click", () => openMyDeckUpgrade(deck.podDeckId, { relink: true }));
+  sub.append(change);
+  titles.append(sub);
+  head.append(titles);
+
+  const lead = makeEl("p", "db-note", `Your list against what Bracket ${myDecksUi.bracket} decks with this commander run on EDHREC. Cards you already run count as owned, so a swap only shows up when the new card is clearly better. Cards in your binder come before cards to get.`);
+
+  // Controls: bracket, how many swaps, budget.
+  const swapsField = makeEl("div", "db-field");
+  const swapsLabel = makeEl("span", "db-label", "How many swaps");
+  swapsLabel.id = "md-swaps-label";
+  const swapsGroup = makeEl("div", "view-toggle md-swaps-toggle");
+  swapsGroup.setAttribute("role", "group");
+  swapsGroup.setAttribute("aria-labelledby", "md-swaps-label");
+  for (const n of UPGRADE_SWAP_CHOICES) {
+    const btn = makeEl("button", `view-toggle-btn${n === myDecksUi.maxSwaps ? " active" : ""}`, String(n));
+    btn.type = "button";
+    btn.setAttribute("aria-pressed", String(n === myDecksUi.maxSwaps));
+    btn.addEventListener("click", () => { myDecksUi.maxSwaps = n; myDecksUi.focusId = "md-swaps-label"; renderMyDeckUpgrade(); });
+    swapsGroup.append(btn);
+  }
+  swapsField.append(swapsLabel, swapsGroup);
+
+  const budgetField = makeEl("label", "db-field");
+  budgetField.htmlFor = "md-budget";
+  const budgetLabel = makeEl("span", "db-label", "Budget for cards you don't own ");
+  const budgetOut = makeEl("output", null, `$${budget}`);
+  budgetLabel.append(budgetOut);
+  const slider = document.createElement("input");
+  slider.type = "range";
+  slider.id = "md-budget";
+  slider.min = "0";
+  slider.max = "200";
+  slider.step = "5";
+  slider.value = String(budget);
+  // The label follows the drag; the swaps follow on release, since a render
+  // replaces the slider itself.
+  slider.addEventListener("input", () => { budgetOut.textContent = `$${slider.value}`; });
+  slider.addEventListener("change", () => {
+    myDecksUi.budget = Number(slider.value) || 0;
+    myDecksUi.focusId = "md-budget";
+    renderMyDeckUpgrade();
+  });
+  budgetField.append(budgetLabel, slider);
+
+  const t = plan.toGet;
+  const fromBinder = plan.swaps.filter(s => s.in.status !== "missing").length;
+  const tally = makeEl("div", "db-tally");
+  const cell = (n, label) => {
+    const c = makeEl("div", "db-tally-cell");
+    c.append(makeEl("b", null, String(n)), makeEl("span", null, label));
+    return c;
+  };
+  tally.append(cell(plan.swaps.length, "swaps"), cell(fromBinder, "from your cards"), cell(t.count, `to get${t.count ? ` · ${formatDollars(t.cost)}${t.unknownPrices ? "+" : ""}` : ""}`));
+
+  const checks = makeEl("ul", "db-checks");
+  checks.setAttribute("aria-label", `Bracket ${myDecksUi.bracket} check, now and after the swaps`);
+  const b = plan.before.checks;
+  const a = plan.after.checks;
+  checks.append(
+    myDeckCheckLine("Game Changers", b.gameChangers, a.gameChangers),
+    myDeckCheckLine("Mass land denial", b.massLandDenial, a.massLandDenial),
+    myDeckCheckLine("Extra turns", b.extraTurns, a.extraTurns),
+  );
+
+  const roles = makeEl("ul", "md-roles");
+  roles.setAttribute("aria-label", "Roles, now and after the swaps");
+  for (const role of Object.keys(ROLE_MINIMUMS)) {
+    const before = plan.before.roles[role];
+    const after = plan.after.roles[role];
+    const li = makeEl("li", "md-role");
+    li.append(makeEl("span", null, ROLE_LABELS[role]));
+    const low = after < ROLE_MINIMUMS[role];
+    const v = makeEl("span", `md-role-val${low ? " db-warn" : ""}`, `${before === after ? after : `${before} → ${after}`}${low ? ` of ${ROLE_MINIMUMS[role]}` : ""}`);
+    li.append(v);
+    roles.append(li);
+  }
+
+  const out = [myDecksBackButton(), head, lead, myDeckBracketToggle(), swapsField, budgetField, tally, checks, roles];
+  if (cards.unknown && cards.unknown.length) {
+    out.push(makeEl("p", "db-note", `Scryfall didn't know ${cards.unknown.join(", ")}, so ${cards.unknown.length === 1 ? "it's" : "they're"} left out of the checks.`));
+  }
+  if (!plan.swaps.length) {
+    out.push(makeEl("p", "db-note", myDecksUi.keep.size || myDecksUi.skip.size
+      ? "No more swaps with the cards you've kept and passed on."
+      : `Nothing clearly better on EDHREC's list for this commander at Bracket ${myDecksUi.bracket}. The deck is already close to what those decks run.`));
+  } else {
+    const title = makeEl("h3", "db-group-title", plan.more ? `The ${plan.swaps.length} clearest swaps · ${plan.more} more` : `${plan.swaps.length} swap${plan.swaps.length === 1 ? "" : "s"}`);
+    title.id = "md-swaps-title";
+    title.tabIndex = -1;
+    out.push(title);
+    const ul = makeEl("ul", "md-swaps");
+    ul.append(...plan.swaps.map(myDeckSwapRow));
+    out.push(ul);
+  }
+  if (myDecksUi.keep.size || myDecksUi.skip.size) {
+    const reset = makeEl("button", "db-reset-swaps", `Bring back ${myDecksUi.keep.size + myDecksUi.skip.size} passed-over card${myDecksUi.keep.size + myDecksUi.skip.size === 1 ? "" : "s"}`);
+    reset.type = "button";
+    reset.addEventListener("click", () => { myDecksUi.keep = new Set(); myDecksUi.skip = new Set(); renderMyDeckUpgrade(); });
+    out.push(reset);
+  }
+
+  // Actions: a new Archidekt deck with the swaps made; the cards to get into
+  // a want folder; the list as text.
+  const actions = makeEl("div", "row db-actions");
+  const commanders = cards.commanders;
+  const basics = cards.cards.filter(c => c.basic).map(c => ({ name: c.name, count: c.qty }));
+  const upgraded = plan.after.cards.filter(c => !c.basic);
+  if (plan.swaps.length) {
+    const create = makeEl("button", "primary", "Create upgraded deck on Archidekt");
+    create.type = "button";
+    create.addEventListener("click", () => showArchidektCreate({
+      name: archidektDeckName(cards.name || deck.name, "(upgraded)"),
+      bracket: myDecksUi.bracket,
+      rows: archidektDeckCards({ commanders, cards: upgraded, basics }),
+      lead: `A new deck on your Archidekt account: ${cards.name || deck.name} with these ${plan.swaps.length} swaps made. Your current deck stays exactly as it is.`,
+    }));
+    actions.append(create);
+  }
+  const copyBtn = makeEl("button", null, "Copy upgraded list");
+  copyBtn.type = "button";
+  const copyNote = makeEl("p", "hint db-copy-note");
+  copyNote.hidden = true;
+  copyBtn.addEventListener("click", async () => {
+    const text = deckToText({ commanders, cards: upgraded, basics });
+    try {
+      await navigator.clipboard.writeText(text);
+      copyNote.textContent = "Copied. In Archidekt, use Import on a deck and paste.";
+    } catch {
+      copyNote.textContent = "Couldn't copy automatically.";
+    }
+    copyNote.hidden = false;
+  });
+  actions.append(copyBtn);
+  const wantsUrl = wantsHandoffUrl({ cards: plan.swaps.map(s => s.in), bracket: myDecksUi.bracket }, commanders);
+  if (wantsUrl) {
+    const wants = makeEl("a", "db-wants-link", "Cards to get → want folder");
+    wants.href = wantsUrl;
+    wants.target = "_blank";
+    wants.rel = "noopener";
+    actions.append(wants);
+  }
+  out.push(actions, copyNote);
+  body.replaceChildren(...out);
+  if (myDecksUi.focusId) {
+    const target = document.getElementById(myDecksUi.focusId);
+    myDecksUi.focusId = null;
+    if (target && target.id === "md-swaps-label") target.nextElementSibling.querySelector(".active")?.focus({ preventScroll: true });
+    else if (target) target.focus({ preventScroll: true });
+  }
+  requestMyDeckOwners(plan);
+}
+
+function initMyDecks() {
+  const btn = document.getElementById("auth-my-decks-btn");
+  if (btn) btn.addEventListener("click", () => { hideAuthMenu(); openMyDecksTab(); });
+  const cross = document.getElementById("db-my-decks-link");
+  if (cross) cross.addEventListener("click", openMyDecksTab);
+  initArchidektCreate();
+}
+
 // Runs before anything else in this section so there's no flash of the
 // wrong theme after a stored explicit choice -- see initTheme/applyTheme.
 initTheme();
@@ -13048,6 +13767,7 @@ checkAuthSession().then(() => {
     initProposals();
     loadProposals();
     initDeckBuilder();
+    initMyDecks();
   }
 });
 
@@ -13074,7 +13794,8 @@ async function refreshEverything() {
   // three now-guaranteed-401 requests every time a signed-out visitor
   // switches back to the tab.
   if (!currentUser) return;
-  await Promise.all([syncFromD1(), refreshPlaygroupGames(), loadRosterDiff(), refreshAchievementsView(), loadProposals()]);
+  const myDecksOpen = !document.getElementById("tab-my-decks").hidden && myDecksUi.view === "list";
+  await Promise.all([syncFromD1(), refreshPlaygroupGames(), loadRosterDiff(), refreshAchievementsView(), loadProposals(), ...(myDecksOpen ? [loadMyDecks()] : [])]);
 }
 
 // Only fires on an actual open/return to the app, not a timer -- catches

@@ -373,6 +373,14 @@ no new bindings, same `DECK_CACHE`/`DB` bindings as before.
      archidekt-trading-app's Pages project (`npx wrangler pages secret put
      COLLECTION_BRIDGE_KEY --project-name archidekt-trading-app`). Lets
      Build a Deck read the player's Archidekt collection.
+   - `DECK_BRIDGE_KEY` — any random string. Set the same value on
+     archidekt-trading-app's Pages project (`npx wrangler pages secret put
+     DECK_BRIDGE_KEY --project-name archidekt-trading-app`). Lets My Decks
+     list, read and link the player's Archidekt decks, and lets Build a
+     Deck / My Decks **create a new** Archidekt deck (`/my-decks*`,
+     `/archidekt/*`). Its own key because it can write to Archidekt; it
+     never edits or deletes an existing deck. Unset, My Decks still lists
+     pod decks and records but says Archidekt isn't switched on.
 5. **KV namespace**: **Workers & Pages** → **KV** → **Create a namespace**
    (e.g. `mtg-pod-validator-cache`) → bind it to the Worker under
    **Settings** → **Bindings**, variable name exactly `DECK_CACHE`.

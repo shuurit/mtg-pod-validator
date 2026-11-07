@@ -7578,3 +7578,227 @@ button.db-saved-delete {
   color: var(--accent-strong);
 }
 .uta-deck-card-hint[hidden] { display: none; }
+
+/* ---- My Decks (renderMyDecks / renderMyDeckUpgrade in app.js) ----
+   The pod decks list, the deck that needs help most as a feature panel,
+   and an upgrade as Cut/Add pairs. Struggling is always the word, never
+   colour alone. Reuses Build a Deck's db-* pieces (tally, checks, chips,
+   rows) for everything they already cover. */
+#bg-my-decks { background-image: linear-gradient(var(--bg-scrim), var(--bg-scrim)), url('bg-validator.webp'); }
+
+.md-body {
+  display: grid;
+  gap: 12px;
+}
+
+/* "Upgrade a deck you already have →" on Build a Deck, and the way back:
+   a quiet text link, since each page's own action is the primary one. */
+.md-crosslink,
+.md-back,
+.md-inline-btn {
+  justify-self: start;
+  padding: 6px 0;
+  min-height: 34px;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+.md-inline-btn {
+  min-height: 0;
+  padding: 0;
+  font-size: inherit;
+  text-decoration: underline;
+}
+.md-crosslink:hover,
+.md-back:hover,
+.md-inline-btn:hover { color: var(--accent-strong); background: none; }
+
+.md-flag {
+  justify-self: start;
+  align-self: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--bad-border);
+  background: var(--bad-bg);
+  color: var(--bad);
+  font-family: var(--font-display);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.md-feature {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-accent);
+}
+.md-feature-name {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.45rem;
+  font-weight: 700;
+  line-height: 1.05;
+  overflow-wrap: anywhere;
+}
+.md-feature-record {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.md-feature-record b { color: var(--ink); }
+.md-feature .primary { justify-self: start; }
+
+.md-deck-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.md-deck {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+.md-deck .id-coin {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+}
+.md-deck-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.md-deck-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.md-deck-meta,
+.md-deck-link {
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.md-upgrade-btn { flex-shrink: 0; }
+@media (pointer: coarse) {
+  .md-upgrade-btn,
+  .md-swap-btn { min-height: 44px; }
+}
+@media (max-width: 520px) {
+  /* The flag would squeeze the name to a sliver beside the button. */
+  .md-deck { flex-wrap: wrap; }
+  .md-deck .md-flag { order: 3; }
+}
+
+.md-link-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.md-link-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+}
+.md-link-row:hover { background: var(--accent-soft); }
+.md-link-row span:first-of-type { overflow-wrap: anywhere; }
+.md-suggested {
+  margin-left: auto;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.md-swaps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+/* One swap: the card to cut above the card to add, each with its own
+   button, so "keep this" and "not that one" are separate choices. */
+.md-swap {
+  display: grid;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.md-swap-fix { border-color: var(--warn-border); }
+.md-swap-side {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-rows: auto auto;
+  column-gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+}
+.md-swap-in {
+  border-top: 1px solid var(--border-soft);
+  background: var(--bg-accent);
+}
+.md-swap-side > .md-swap-tag { grid-row: 1 / span 3; align-self: start; margin-top: 2px; }
+.md-swap-side > :not(.md-swap-tag):not(.md-swap-btn) { grid-column: 2; min-width: 0; }
+.md-swap-side > .md-swap-btn { grid-column: 3; grid-row: 1 / span 3; }
+.md-swap-tag {
+  width: 3.2em;
+  font-family: var(--font-display);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.md-swap-out .md-swap-tag { color: var(--bad); }
+.md-swap-in .md-swap-tag { color: var(--good); }
+.md-swap-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.md-swap-btn {
+  padding: 4px 10px;
+  font-size: 0.8rem;
+}
+.md-swap-owners { color: var(--accent); }
+
+.md-roles {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.md-role {
+  display: inline-flex;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border-soft);
+  font-size: 0.8rem;
+}
+.md-role-val {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.md-swaps-toggle .view-toggle-btn { min-width: 3em; }

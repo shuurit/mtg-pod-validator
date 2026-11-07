@@ -17,7 +17,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="style.css?v=97">
+<link rel="stylesheet" href="style.css?v=98">
 
 <!-- Home-screen icon (iOS "Add to Home Screen" + Android/Chrome install).
      Generated from icon-source.png via scripts/generate_icons.py -- rerun
@@ -54,6 +54,7 @@
      gets artwork of its own -- house rules belong to the table. -->
 <div class="tab-bg" id="bg-proposals"></div>
 <div class="tab-bg" id="bg-deck-builder"></div>
+<div class="tab-bg" id="bg-my-decks"></div>
 <!-- Frosted band behind the iOS status bar, shown only once the page has
      scrolled under it -- see .scroll-edge in style.css, initScrollEdge in
      app.js. -->
@@ -130,6 +131,9 @@
             <button id="auth-house-rules-btn" type="button" class="auth-menu-item auth-menu-item-nav">House Rules</button>
             <!-- Build a Deck is reached only from here, like Proposals. See
                  openDeckBuilderTab in app.js. -->
+            <!-- My Decks: your pod decks, their season, and upgrades built
+                 with Build a Deck's engine. See initMyDecks in app.js. -->
+            <button id="auth-my-decks-btn" type="button" class="auth-menu-item auth-menu-item-nav">My Decks</button>
             <button id="auth-deck-builder-btn" type="button" class="auth-menu-item auth-menu-item-nav">Build a Deck</button>
             <div class="auth-menu-divider"></div>
             <button id="auth-signout-btn" type="button" class="auth-menu-item">Sign out</button>
@@ -291,6 +295,7 @@
       </button>
       <h2>Build a Deck</h2>
       <p class="hint">Pick a commander and a bracket. The deck comes from what decks at that bracket run on EDHREC, using cards from your Archidekt collection first.</p>
+      <button type="button" class="md-crosslink" id="db-my-decks-link">Upgrade a deck you already have <span aria-hidden="true">→</span></button>
       <!-- Your saved results (loadSavedBuilds / renderSavedBuilds in app.js);
            hidden until there's one. -->
       <section class="db-saved" id="db-saved" aria-labelledby="db-saved-title" hidden>
@@ -361,6 +366,24 @@
         <button type="button" class="view-toggle-btn active" data-db-view="role" aria-pressed="true">By role</button>
         <button type="button" class="view-toggle-btn" data-db-view="type" aria-pressed="false">By type</button>
       </div>
+    </section>
+  </div>
+
+  <!-- My Decks (avatar menu, and the link on Build a Deck): the signed-in
+       player's pod decks with this season's record, each linked once to an
+       Archidekt deck, and an Upgrade that runs Build a Deck's engine against
+       the deck as it is (planUpgrade in deck-builder.js). Rendered by
+       renderMyDecks / renderMyDeckUpgrade in app.js. -->
+  <div id="tab-my-decks" class="tab-panel" hidden>
+    <section class="card">
+      <button type="button" class="back-link" data-goto-tab="tonight">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
+        Tonight
+      </button>
+      <h2>My Decks</h2>
+      <p class="hint" id="md-lead">Your pod decks and how they're doing this season. Upgrade one to see the swaps Build a Deck would make, using your collection first.</p>
+      <p class="hint db-status" id="md-status" aria-live="polite" hidden></p>
+      <div id="md-body" class="md-body"></div>
     </section>
   </div>
 
@@ -542,6 +565,32 @@
   </div>
 </div>
 
+<!-- Create on Archidekt: a NEW deck on the player's own Archidekt account
+     from a Build a Deck result or an upgraded My Decks deck -- see
+     showArchidektCreate in app.js. Nothing is written until Create. -->
+<div id="archidekt-create-modal" class="modal-overlay" hidden>
+  <div class="modal-card">
+    <button id="archidekt-create-close" class="icon-btn modal-close" aria-label="Close">&#10005;</button>
+    <h2>Create on Archidekt</h2>
+    <p class="hint" id="archidekt-create-lead"></p>
+    <form id="archidekt-create-form" class="db-form" novalidate>
+      <label class="db-field" for="archidekt-create-name">
+        <span class="db-label">Deck name</span>
+        <input type="text" id="archidekt-create-name" maxlength="100" autocomplete="off">
+      </label>
+      <label class="db-toggle" for="archidekt-create-private">
+        <input type="checkbox" id="archidekt-create-private" checked>
+        Private on Archidekt (you can share it from there)
+      </label>
+      <p class="hint db-status" id="archidekt-create-status" aria-live="polite" hidden></p>
+      <div class="row">
+        <button type="submit" class="primary" id="archidekt-create-go">Create deck</button>
+        <button type="button" id="archidekt-create-cancel">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <!-- Shown when Close the Season is clicked -- see showCloseSeasonConfirm in
      app.js. Only offered on the latest, still-active season, so this can
      never fire for an already-concluded one. -->
@@ -581,7 +630,7 @@
 </div>
 
 <script src="deck-tally.js?v=2"></script>
-<script src="deck-builder.js?v=14"></script>
-<script src="app.js?v=108"></script>
+<script src="deck-builder.js?v=15"></script>
+<script src="app.js?v=109"></script>
 </body>
 </html>
