@@ -7591,10 +7591,10 @@ button.db-saved-delete {
   gap: 12px;
 }
 
-/* "Upgrade a deck you already have →" on Build a Deck, and the way back:
-   a quiet text link, since each page's own action is the primary one. */
+/* "Upgrade a deck you already have" on Build a Deck and "Build a new deck
+   instead" here: a quiet text link with the app's chevron, since each
+   page's own action is the primary one. */
 .md-crosslink,
-.md-back,
 .md-inline-btn {
   justify-self: start;
   padding: 6px 0;
@@ -7613,9 +7613,38 @@ button.db-saved-delete {
   font-size: inherit;
   text-decoration: underline;
 }
+.md-crosslink {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
 .md-crosslink:hover,
-.md-back:hover,
 .md-inline-btn:hover { color: var(--accent-strong); background: none; }
+.md-chevron {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+/* The chevron leans the way it points on hover/focus: feedback that the
+   link goes somewhere. Transform only; colour does the rest. */
+.md-crosslink .md-chevron { transition: transform 0.15s ease; }
+.md-crosslink:focus-visible .md-chevron { transform: translateX(2px); }
+@media (hover: hover) and (pointer: fine) {
+  .md-crosslink:hover .md-chevron { transform: translateX(2px); }
+}
+/* A sub-view's way back is the panel's own back pill, with its chevron. */
+.back-link.md-back { margin-right: 6px; }
+.back-link[hidden] { display: none; }
+
+/* A view the player opened rises in like a tab does (mdEnterView in
+   app.js). Content only, never the .card behind it (web-animation rule 5). */
+.md-body.md-entering > * {
+  animation: tab-content-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .md-body.md-entering > * { animation: none; }
+}
+.md-skeleton { display: grid; gap: 10px; }
 
 .md-flag {
   justify-self: start;
@@ -7691,6 +7720,7 @@ button.db-saved-delete {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
+.md-deck-link.is-unlinked { font-style: italic; }
 .md-upgrade-btn { flex-shrink: 0; }
 @media (pointer: coarse) {
   .md-upgrade-btn,
@@ -7750,10 +7780,14 @@ button.db-saved-delete {
   align-items: center;
   padding: 8px 10px;
 }
+/* The card coming in is what the swap is for, so it gets the heavier
+   name and the tinted well; the card going out sits quieter above it. */
 .md-swap-in {
   border-top: 1px solid var(--border-soft);
   background: var(--bg-accent);
 }
+.md-swap-in .db-row-name { font-weight: 600; }
+.md-swap-out .db-row-name { color: var(--muted); }
 .md-swap-side > .md-swap-tag { grid-row: 1 / span 3; align-self: start; margin-top: 2px; }
 .md-swap-side > :not(.md-swap-tag):not(.md-swap-btn) { grid-column: 2; min-width: 0; }
 .md-swap-side > .md-swap-btn { grid-column: 3; grid-row: 1 / span 3; }
@@ -7802,3 +7836,77 @@ button.db-saved-delete {
 }
 
 .md-swaps-toggle .view-toggle-btn { min-width: 3em; }
+
+/* "Adjust": the upgrade's settings folded under one line that already says
+   what they're set to (renderMyDeckUpgrade). A native <details>, so it's a
+   keyboard and screen-reader disclosure for free. */
+.md-adjust {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.md-adjust > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 6px 12px;
+  cursor: pointer;
+  list-style: none;
+  border-radius: inherit;
+}
+.md-adjust > summary::-webkit-details-marker { display: none; }
+.md-adjust > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.md-adjust-label {
+  font-family: var(--font-display);
+  font-size: 0.82rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.md-adjust-now {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.md-adjust > summary .md-chevron {
+  color: var(--muted);
+  transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.md-adjust[open] > summary .md-chevron { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) {
+  .md-adjust > summary .md-chevron { transition: none; }
+}
+@media (hover: hover) and (pointer: fine) {
+  .md-adjust > summary:hover { background: var(--accent-soft); }
+}
+.md-adjust-body {
+  display: grid;
+  gap: 12px;
+  padding: 4px 12px 12px;
+}
+
+.md-compare {
+  display: grid;
+  gap: 10px;
+}
+.md-empty {
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+}
+
+/* Five bracket names don't fit the Adjust panel's narrower row at phone
+   width (UPGRADED ran into OPTIMIZED): the number carries it there, and the
+   name stays for screen readers via the button's own text. */
+@media (max-width: 520px) {
+  .md-adjust .db-bracket-toggle .view-toggle-btn span {
+    font-size: 0.58rem;
+    letter-spacing: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .md-adjust-body { padding-inline: 8px; }
+}

@@ -13168,6 +13168,7 @@ const myDecksUi = {
   bracket: 3,
   maxSwaps: UPGRADE_DEFAULT_SWAPS,
   budget: 0,
+  adjustOpen: false, // the Adjust disclosure, kept open across redraws once used
   focusId: null,   // what to focus after the next render (a render replaces every control)
   keep: new Set(),
   skip: new Set(),
@@ -13207,10 +13208,10 @@ async function loadMyDecks() {
   if (myDecksUi.view === "list") renderMyDecks();
 }
 
-function myDeckRecordText(d) {
-  if (!d.gamesPlayed) return "No games this season";
+function myDeckRecordText(d, short = false) {
+  if (!d.gamesPlayed) return short ? "No games yet" : "No games this season";
   const pct = Math.round((d.wins / d.gamesPlayed) * 100);
-  return `${d.wins}W ${d.gamesPlayed - d.wins}L · ${pct}% this season`;
+  return `${d.wins}W ${d.gamesPlayed - d.wins}L · ${pct}%${short ? "" : " this season"}`;
 }
 
 function myDeckArchidektName(d) {
@@ -13226,11 +13227,11 @@ function myDeckRow(d) {
   const main = makeEl("div", "md-deck-main");
   const name = makeEl("span", "md-deck-name", d.name);
   main.append(name);
-  const meta = makeEl("span", "md-deck-meta", myDeckRecordText(d));
+  const meta = makeEl("span", "md-deck-meta", myDeckRecordText(d, true));
   if (d.bracket) meta.append(` · Bracket ${d.bracket}`);
   main.append(meta);
   const linked = myDeckArchidektName(d);
-  main.append(makeEl("span", "md-deck-link", linked ? `Archidekt: ${linked}` : "Not linked to an Archidekt deck yet"));
+  main.append(makeEl("span", `md-deck-link${linked ? "" : " is-unlinked"}`, linked ? `Archidekt: ${linked}` : "Not linked yet"));
   li.append(main);
   if (isStrugglingDeck(d)) li.append(makeEl("span", "md-flag", "Struggling"));
   const btn = makeEl("button", "md-upgrade-btn", "Upgrade");
@@ -13246,6 +13247,7 @@ function renderMyDecks() {
   const data = myDecksUi.data;
   if (!body || !data) return;
   myDecksUi.view = "list";
+  setMyDecksSubview(false);
   document.getElementById("md-lead").hidden = false;
   const out = [];
   const arch = data.archidekt || {};
@@ -13284,25 +13286,71 @@ function renderMyDecks() {
     ul.append(...rest.map(myDeckRow));
     out.push(ul);
   }
-  const build = makeEl("button", "md-crosslink", "Build a new deck instead ");
+  const build = makeEl("button", "md-crosslink", "Build a new deck instead");
   build.type = "button";
-  build.append(Object.assign(makeEl("span", null, "→"), { ariaHidden: "true" }));
+  build.append(mdChevron());
   build.addEventListener("click", openDeckBuilderTab);
   out.push(build);
   body.replaceChildren(...out);
 }
 
-function myDecksBackButton() {
-  const back = makeEl("button", "md-back", "← All my decks");
-  back.type = "button";
-  back.addEventListener("click", () => {
-    myDecksUi.token++;
-    myDecksUi.view = "list";
-    setMyDecksStatus("");
-    renderMyDecks();
-    window.scrollTo({ top: 0 });
-  });
-  return back;
+// The app's chevron (the back-link's own path), for links that point
+// somewhere: drawn, not a Unicode arrow.
+function mdChevron(dir = "right") {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  svg.classList.add("md-chevron");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", dir === "left" ? "m15 18-6-6 6-6" : "m9 18 6-6-6-6");
+  svg.append(path);
+  return svg;
+}
+
+// A view the player asked for (list -> upgrade and back) rises in with the
+// tab's own entrance (tab-content-in). Never on a refresh or a re-render of
+// the same view (web-animation rule 7). The class comes off on a timer, so
+// nothing waits on animationend (rule 2).
+function mdEnterView() {
+  const body = document.getElementById("md-body");
+  if (!body || REDUCED_MOTION.matches) return;
+  body.classList.remove("md-entering");
+  void body.offsetWidth;
+  body.classList.add("md-entering");
+  clearTimeout(mdEnterView.timer);
+  mdEnterView.timer = setTimeout(() => body.classList.remove("md-entering"), 400);
+}
+
+// In a sub-view (link, upgrade) the panel's "Tonight" pill swaps for an
+// "All my decks" pill in the same place, so each screen has one way out
+// and it sits where every other page keeps it.
+function setMyDecksSubview(on) {
+  const panelBack = document.querySelector("#tab-my-decks .card > .back-link[data-goto-tab]");
+  if (!panelBack) return;
+  let back = document.getElementById("md-back");
+  if (!back) {
+    back = makeEl("button", "back-link md-back");
+    back.id = "md-back";
+    back.type = "button";
+    back.hidden = true;
+    back.append(mdChevron("left"), "All my decks");
+    back.addEventListener("click", () => {
+      myDecksUi.token++;
+      myDecksUi.view = "list";
+      setMyDecksStatus("");
+      renderMyDecks();
+      mdEnterView();
+      window.scrollTo({ top: 0 });
+    });
+    panelBack.after(back);
+  }
+  panelBack.hidden = on;
+  back.hidden = !on;
 }
 
 async function openMyDeckUpgrade(podDeckId, { relink = false } = {}) {
@@ -13316,16 +13364,19 @@ async function openMyDeckUpgrade(podDeckId, { relink = false } = {}) {
     myDecksUi.skip = new Set();
     myDecksUi.maxSwaps = UPGRADE_DEFAULT_SWAPS;
     myDecksUi.budget = 0;
+    myDecksUi.adjustOpen = false;
     myDecksUi.bracket = deck.bracket || 3;
   }
   document.getElementById("md-lead").hidden = true;
+  setMyDecksSubview(true);
   setMyDecksStatus("");
   window.scrollTo({ top: 0 });
+  if (!sameDeck || myDecksUi.view === "list") mdEnterView();
   const arch = myDecksUi.data.archidekt;
   if (!arch.connected) {
     myDecksUi.view = "link";
     const body = document.getElementById("md-body");
-    body.replaceChildren(myDecksBackButton(), makeEl("h3", "md-feature-name", deck.name), makeEl("p", "db-note db-note-warn", archidektReasonText(arch.reason)));
+    body.replaceChildren(makeEl("h3", "md-feature-name", deck.name), makeEl("p", "db-note db-note-warn", archidektReasonText(arch.reason)));
     return;
   }
   if (!deck.archidektDeckId || relink) return renderMyDeckLink(deck);
@@ -13359,7 +13410,7 @@ function renderMyDeckLink(deck) {
   go.addEventListener("click", () => linkMyDeck(deck, go));
   const row = makeEl("div", "row");
   row.append(go);
-  body.replaceChildren(myDecksBackButton(), makeEl("h3", "md-feature-name", deck.name), lead, set, row);
+  body.replaceChildren(makeEl("h3", "md-feature-name", deck.name), lead, set, row);
 }
 
 async function linkMyDeck(deck, btn) {
@@ -13383,7 +13434,11 @@ async function loadMyDeckUpgrade(token) {
   const deck = myDecksUi.deck;
   const body = document.getElementById("md-body");
   myDecksUi.view = "upgrade";
-  body.replaceChildren(myDecksBackButton(), makeEl("h3", "md-feature-name", deck.name));
+  // Shaped like the swaps that are coming, while the deck and EDHREC load.
+  const skeleton = makeEl("div", "md-skeleton");
+  skeleton.setAttribute("aria-hidden", "true");
+  renderSkeletonCards(skeleton, 3, ["medium", "short"]);
+  body.replaceChildren(makeEl("h3", "md-feature-name", deck.name), skeleton);
   setMyDecksStatus("Reading your Archidekt deck…");
   try {
     if (!myDecksUi.cards || myDecksUi.cards.deckId !== deck.archidektDeckId) {
@@ -13397,6 +13452,7 @@ async function loadMyDeckUpgrade(token) {
     const commanders = myDecksUi.cards.commanders || [];
     if (!commanders.length) {
       setMyDecksStatus("");
+      body.querySelector(".md-skeleton")?.remove();
       const change = makeEl("button", null, "Pick a different Archidekt deck");
       change.type = "button";
       change.addEventListener("click", () => openMyDeckUpgrade(deck.podDeckId, { relink: true }));
@@ -13425,6 +13481,7 @@ async function loadMyDeckUpgrade(token) {
     renderMyDeckUpgrade();
   } catch (err) {
     if (token !== myDecksUi.token) return;
+    body.querySelector(".md-skeleton")?.remove();
     setMyDecksStatus(err.plain ? err.message : `Couldn't put the upgrade together (${err.message}). Try again in a moment.`, "error");
     if (err.keepBracket) body.append(myDeckBracketToggle());
   }
@@ -13453,6 +13510,7 @@ function myDeckBracketToggle() {
     btn.addEventListener("click", () => {
       if (b === myDecksUi.bracket) return;
       myDecksUi.bracket = b;
+      myDecksUi.adjustOpen = true;
       loadMyDeckUpgrade(++myDecksUi.token);
     });
     group.append(btn);
@@ -13477,6 +13535,23 @@ function myDeckCardWhy(card, side) {
   return deckBuilderWhy(card);
 }
 
+// Keep / Not this: the swap fades and folds away, then the plan is redrawn
+// (the next swap moves up into its place). The redraw never waits on the
+// animation: finish() runs from the timer as well, once.
+function mdDismissSwap(li, apply) {
+  apply();
+  myDecksUi.focusId = "md-swaps-title";
+  let done = false;
+  const finish = () => { if (!done) { done = true; renderMyDeckUpgrade(); } };
+  if (REDUCED_MOTION.matches || !li.animate) return finish();
+  li.style.pointerEvents = "none";
+  li.animate(
+    [{ opacity: 1, transform: "none" }, { opacity: 0, transform: "scale(0.98)" }],
+    { duration: 160, easing: "cubic-bezier(0.23, 1, 0.32, 1)", fill: "forwards" },
+  ).finished.then(finish, finish);
+  setTimeout(finish, 260);
+}
+
 function myDeckSwapRow(swap) {
   const li = makeEl("li", "md-swap");
   if (swap.fixes) li.classList.add("md-swap-fix");
@@ -13485,7 +13560,7 @@ function myDeckSwapRow(swap) {
   const keep = makeEl("button", "md-swap-btn", "Keep");
   keep.type = "button";
   keep.setAttribute("aria-label", `Keep ${swap.out.name}`);
-  keep.addEventListener("click", () => { myDecksUi.keep.add(swap.out.oracleId); myDecksUi.focusId = "md-swaps-title"; renderMyDeckUpgrade(); });
+  keep.addEventListener("click", () => mdDismissSwap(li, () => myDecksUi.keep.add(swap.out.oracleId)));
   out.append(keep);
 
   const inn = makeEl("div", "md-swap-side md-swap-in");
@@ -13497,7 +13572,7 @@ function myDeckSwapRow(swap) {
   const skip = makeEl("button", "md-swap-btn", "Not this");
   skip.type = "button";
   skip.setAttribute("aria-label", `Don't add ${swap.in.name}`);
-  skip.addEventListener("click", () => { myDecksUi.skip.add(swap.in.oracleId); myDecksUi.focusId = "md-swaps-title"; renderMyDeckUpgrade(); });
+  skip.addEventListener("click", () => mdDismissSwap(li, () => myDecksUi.skip.add(swap.in.oracleId)));
   inn.append(skip);
   li.append(out, inn);
   return li;
@@ -13553,16 +13628,18 @@ function renderMyDeckUpgrade() {
   if (coin) head.append(coin);
   const titles = makeEl("div", "db-head-titles");
   titles.append(makeEl("h3", "db-commander", deck.name));
-  const sub = makeEl("p", "db-sub", `${myDeckRecordText(deck)} · ${cards.commanders.map(c => c.name).join(" / ")} · `);
-  sub.append(archidektLink(cards.url, cards.name || "Archidekt deck"), " · ");
+  titles.append(makeEl("p", "db-sub", `${cards.commanders.map(c => c.name).join(" / ")}, ${myDeckRecordText(deck)}`));
+  const sub = makeEl("p", "db-sub");
+  sub.append(archidektLink(cards.url, cards.name || "Archidekt deck"), " on Archidekt (");
   const change = makeEl("button", "md-inline-btn", "change");
   change.type = "button";
+  change.setAttribute("aria-label", "Use a different Archidekt deck");
   change.addEventListener("click", () => openMyDeckUpgrade(deck.podDeckId, { relink: true }));
-  sub.append(change);
+  sub.append(change, ")");
   titles.append(sub);
   head.append(titles);
 
-  const lead = makeEl("p", "db-note", `Your list against what Bracket ${myDecksUi.bracket} decks with this commander run on EDHREC. Cards you already run count as owned, so a swap only shows up when the new card is clearly better. Cards in your binder come before cards to get.`);
+  const lead = makeEl("p", "db-note", `Swaps toward what Bracket ${myDecksUi.bracket} decks with this commander run on EDHREC. Your current cards count as owned, so a swap only shows up when the new card is clearly better.`);
 
   // Controls: bracket, how many swaps, budget.
   const swapsField = makeEl("div", "db-field");
@@ -13575,7 +13652,7 @@ function renderMyDeckUpgrade() {
     const btn = makeEl("button", `view-toggle-btn${n === myDecksUi.maxSwaps ? " active" : ""}`, String(n));
     btn.type = "button";
     btn.setAttribute("aria-pressed", String(n === myDecksUi.maxSwaps));
-    btn.addEventListener("click", () => { myDecksUi.maxSwaps = n; myDecksUi.focusId = "md-swaps-label"; renderMyDeckUpgrade(); });
+    btn.addEventListener("click", () => { myDecksUi.maxSwaps = n; myDecksUi.adjustOpen = true; myDecksUi.focusId = "md-swaps-label"; renderMyDeckUpgrade(); });
     swapsGroup.append(btn);
   }
   swapsField.append(swapsLabel, swapsGroup);
@@ -13597,6 +13674,7 @@ function renderMyDeckUpgrade() {
   slider.addEventListener("input", () => { budgetOut.textContent = `$${slider.value}`; });
   slider.addEventListener("change", () => {
     myDecksUi.budget = Number(slider.value) || 0;
+    myDecksUi.adjustOpen = true;
     myDecksUi.focusId = "md-budget";
     renderMyDeckUpgrade();
   });
@@ -13635,12 +13713,34 @@ function renderMyDeckUpgrade() {
     roles.append(li);
   }
 
-  const out = [myDecksBackButton(), head, lead, myDeckBracketToggle(), swapsField, budgetField, tally, checks, roles];
+  // The settings, folded under one line that says what they're set to:
+  // most people take the defaults, and the swaps are what they came for.
+  const adjust = document.createElement("details");
+  adjust.className = "md-adjust";
+  adjust.open = !!myDecksUi.adjustOpen;
+  adjust.addEventListener("toggle", () => { myDecksUi.adjustOpen = adjust.open; });
+  const summary = document.createElement("summary");
+  summary.append(
+    makeEl("span", "md-adjust-label", "Adjust"),
+    makeEl("span", "md-adjust-now", `Bracket ${myDecksUi.bracket}, up to ${myDecksUi.maxSwaps} swaps, ${budget ? `$${budget} to spend` : "nothing to buy"}`),
+    mdChevron(),
+  );
+  const adjustBody = makeEl("div", "md-adjust-body");
+  adjustBody.append(myDeckBracketToggle(), swapsField, budgetField);
+  adjust.append(summary, adjustBody);
+
+  const compare = makeEl("section", "md-compare");
+  compare.setAttribute("aria-labelledby", "md-compare-title");
+  const compareTitle = makeEl("h3", "db-group-title", plan.swaps.length ? "Before and after" : "Where the deck stands");
+  compareTitle.id = "md-compare-title";
+  compare.append(compareTitle, checks, roles);
+
+  const out = [head, lead, tally, adjust];
   if (cards.unknown && cards.unknown.length) {
     out.push(makeEl("p", "db-note", `Scryfall didn't know ${cards.unknown.join(", ")}, so ${cards.unknown.length === 1 ? "it's" : "they're"} left out of the checks.`));
   }
   if (!plan.swaps.length) {
-    out.push(makeEl("p", "db-note", myDecksUi.keep.size || myDecksUi.skip.size
+    out.push(makeEl("p", "db-note md-empty", myDecksUi.keep.size || myDecksUi.skip.size
       ? "No more swaps with the cards you've kept and passed on."
       : `Nothing clearly better on EDHREC's list for this commander at Bracket ${myDecksUi.bracket}. The deck is already close to what those decks run.`));
   } else {
@@ -13699,7 +13799,7 @@ function renderMyDeckUpgrade() {
     wants.rel = "noopener";
     actions.append(wants);
   }
-  out.push(actions, copyNote);
+  out.push(compare, actions, copyNote);
   body.replaceChildren(...out);
   if (myDecksUi.focusId) {
     const target = document.getElementById(myDecksUi.focusId);
