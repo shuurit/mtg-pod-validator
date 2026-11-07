@@ -7662,76 +7662,6 @@ button.db-saved-delete {
   white-space: nowrap;
 }
 
-.md-feature {
-  display: grid;
-  gap: 8px;
-  padding: 14px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border);
-  background: var(--bg-accent);
-}
-.md-feature-name {
-  margin: 0;
-  font-family: var(--font-display);
-  font-size: 1.45rem;
-  font-weight: 700;
-  line-height: 1.05;
-  overflow-wrap: anywhere;
-}
-.md-feature-record {
-  margin: 0;
-  font-size: 0.9rem;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-}
-.md-feature-record b { color: var(--ink); }
-.md-feature .primary { justify-self: start; }
-
-.md-deck-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.md-deck {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--border-soft);
-}
-.md-deck .id-coin {
-  flex-shrink: 0;
-  width: 24px;
-  height: 24px;
-}
-.md-deck-main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-.md-deck-name {
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-.md-deck-meta,
-.md-deck-link {
-  font-size: 0.78rem;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-}
-.md-deck-link.is-unlinked { font-style: italic; }
-.md-upgrade-btn { flex-shrink: 0; }
-@media (pointer: coarse) {
-  .md-upgrade-btn,
-  .md-swap-btn { min-height: 44px; }
-}
-@media (max-width: 520px) {
-  /* The flag would squeeze the name to a sliver beside the button. */
-  .md-deck { flex-wrap: wrap; }
-  .md-deck .md-flag { order: 3; }
-}
-
 .md-link-list {
   display: grid;
   gap: 2px;
@@ -7909,4 +7839,214 @@ button.db-saved-delete {
     white-space: nowrap;
   }
   .md-adjust-body { padding-inline: 8px; }
+}
+
+/* ---- Decks tab: commander-art tiles (renderMyDecks, myDeckArt) ----
+   Every deck is its commander's art, cropped landscape (Scryfall's
+   art_crop), with the name under it; partners split the frame. The struggling
+   deck gets the wide picture with its record over the art. Until a picture
+   loads (or if none does) the frame shows the deck's colour coin on the
+   inset well, so a tile is never an empty box. */
+.md-art {
+  position: relative;
+  display: flex;
+  pointer-events: none;
+  overflow: hidden;
+  background: var(--bg-accent);
+}
+.md-art-coin {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 34px;
+  height: 34px;
+}
+.md-art-face {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.md-art-face + .md-art-face { border-left: 1px solid var(--card-bg); }
+.md-art-face img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 0.25s ease-out;
+}
+.md-art-face.is-loaded img { opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  .md-art-face img { transition: none; }
+}
+
+.md-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+}
+.md-tiles-item { display: grid; }
+button.md-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+  padding: 0;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+  transition: border-color 0.15s ease, transform 0.12s ease-out;
+}
+button.md-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Press: the whole tile gives a little, like a card under a thumb. */
+button.md-tile:active { transform: scale(0.98); }
+.md-tile-art {
+  aspect-ratio: 4 / 3;
+}
+/* The art leans in on hover (pointer devices only); the tile itself stays
+   still so the grid never shifts. Transform on the picture, inside a box
+   that clips it. */
+.md-tile-art img { transition: opacity 0.25s ease-out, transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1); }
+@media (hover: hover) and (pointer: fine) {
+  button.md-tile:hover { border-color: var(--accent); background: var(--card-bg); color: inherit; }
+  button.md-tile:hover .md-tile-art img { transform: scale(1.04); }
+}
+button.md-tile:focus-visible .md-tile-art img { transform: scale(1.04); }
+@media (prefers-reduced-motion: reduce) {
+  button.md-tile,
+  .md-tile-art img { transition: none; }
+  button.md-tile:active { transform: none; }
+  button.md-tile:hover .md-tile-art img,
+  button.md-tile:focus-visible .md-tile-art img { transform: none; }
+}
+.md-tile-text {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px 10px;
+}
+.md-tile-name {
+  font-family: var(--font-display);
+  font-size: 1.08rem;
+  font-weight: 600;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+}
+.md-tile-meta {
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.md-tile-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.md-tile-unlinked {
+  font-size: 0.72rem;
+  font-style: italic;
+  color: var(--muted);
+}
+.md-tile .md-flag { font-size: 0.7rem; padding: 1px 6px; }
+
+/* "Build a new deck": the same tile, dashed, with a drawn plus where the
+   art would be. */
+button.md-tile-new {
+  border-style: dashed;
+  background: transparent;
+  box-shadow: none;
+}
+.md-tile-plus {
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.md-tile-plus svg { width: 36px; height: 36px; }
+
+/* The struggling deck: its art full width, the record and the action laid
+   over a scrim at the bottom. White on the scrim, in both themes, because
+   it sits on a photograph, not on a theme surface. */
+.md-feature {
+  position: relative;
+  display: grid;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-md);
+}
+.md-feature-art {
+  grid-area: 1 / 1;
+  aspect-ratio: 16 / 10;
+  min-height: 240px;
+}
+/* Positioned so it paints above the (positioned) art layer it shares a
+   grid cell with; without it the art swallows the button's taps. */
+.md-feature-body {
+  position: relative;
+  grid-area: 1 / 1;
+  align-self: end;
+  display: grid;
+  gap: 6px;
+  padding: 48px 14px 14px;
+  color: #fff;
+  background: linear-gradient(to bottom, rgba(10, 9, 14, 0) 0%, rgba(10, 9, 14, 0.72) 45%, rgba(10, 9, 14, 0.9) 100%);
+}
+.md-feature-body .md-flag {
+  border-color: rgba(255, 255, 255, 0.35);
+  background: rgba(190, 40, 40, 0.85);
+  color: #fff;
+}
+.md-feature-name {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.7rem;
+  font-weight: 700;
+  line-height: 1.02;
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+}
+.md-feature-record {
+  margin: 0;
+  font-size: 0.9rem;
+  text-wrap: pretty;
+  color: rgba(255, 255, 255, 0.86);
+  font-variant-numeric: tabular-nums;
+}
+.md-feature-record b { color: #fff; }
+.md-feature .primary { justify-self: start; }
+.md-arch-note { font-size: 0.8rem; }
+
+/* A deck's own screens (link, upgrade) open on its art as a banner. */
+.md-head-art {
+  width: 100%;
+  aspect-ratio: 21 / 9;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+}
+.db-head.md-head {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+.md-sub-name {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.45rem;
+  font-weight: 700;
+  line-height: 1.05;
+}
+
+/* Five top tabs on a narrow window with a mouse: a touch less size so
+   TROPHIES still fits without a sideways scroll. */
+@media (max-width: 520px) {
+  .tabs { gap: 2px; justify-content: space-between; }
+  .tab-btn { font-size: 0.9rem; letter-spacing: 0.01em; padding-inline: 2px; }
 }

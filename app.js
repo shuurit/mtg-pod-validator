@@ -7117,6 +7117,8 @@ function activateTab(tabName) {
   const previous = [...document.querySelectorAll(".tab-panel")].find(p => !p.hidden);
   document.querySelectorAll(".tab-btn, .bottom-tab-btn").forEach(b => b.classList.remove("active"));
   document.querySelectorAll(`[data-tab="${tabName}"]`).forEach(b => b.classList.add("active"));
+  // Build a Deck lives under the Decks tab: keep that tab lit while it's open.
+  if (tabName === "deck-builder") document.querySelectorAll('[data-tab="my-decks"]').forEach(b => b.classList.add("active"));
   document.querySelectorAll(".tab-panel").forEach(p => { p.hidden = true; });
   panel.hidden = false;
   // Same id scheme as the tab panel (#bg-<tab> next to #tab-<tab>).
@@ -7167,7 +7169,7 @@ function crossfadeTabBackground(bgEl) {
 // another one (Tonight's to-dos, the avatar menu's Proposals) sit just
 // past their way in, so opening one reads as going forward and the back
 // link as coming back.
-const TAB_SEQUENCE = { tonight: 0, "games-to-update": 0.5, "update-app": 0.5, pod: 1, winrates: 2, achievements: 3, proposals: 4, "deck-builder": 4, "my-decks": 4 };
+const TAB_SEQUENCE = { tonight: 0, "games-to-update": 0.5, "update-app": 0.5, pod: 1, winrates: 2, achievements: 3, proposals: 4, "my-decks": 1.5, "deck-builder": 1.6 };
 
 function playTabEnter(panel, previous) {
   if (REDUCED_MOTION.matches) return;
@@ -10896,8 +10898,6 @@ function wireAuthControl() {
   if (proposalsBtn) proposalsBtn.addEventListener("click", () => { hideAuthMenu(); openProposalsTab("active"); });
   const houseRulesBtn = document.getElementById("auth-house-rules-btn");
   if (houseRulesBtn) houseRulesBtn.addEventListener("click", () => { hideAuthMenu(); openProposalsTab("adopted"); });
-  const deckBuilderBtn = document.getElementById("auth-deck-builder-btn");
-  if (deckBuilderBtn) deckBuilderBtn.addEventListener("click", () => { hideAuthMenu(); openDeckBuilderTab(); });
 
   const signoutBtn = document.getElementById("auth-signout-btn");
   if (signoutBtn) {
@@ -13184,10 +13184,6 @@ function setMyDecksStatus(text, tone) {
   el.classList.toggle("is-error", tone === "error");
 }
 
-function openMyDecksTab() {
-  activateTab("my-decks");
-}
-
 async function loadMyDecks() {
   if (myDecksUi.loading) return;
   myDecksUi.loading = true;
@@ -13220,26 +13216,76 @@ function myDeckArchidektName(d) {
   return found ? found.name : d.archidektDeckId ? `Archidekt deck ${d.archidektDeckId}` : null;
 }
 
-function myDeckRow(d) {
-  const li = makeEl("li", "md-deck");
+// A deck's commander art: playgroup.gg's art crops when the relay has them
+// (decks.commander_art_url / partner_art_url), otherwise Scryfall by the
+// deck's commander-based name (fetchCommanderArt, cached), so a deck
+// playgroup.gg hasn't synced still gets a picture. Partners split the frame.
+// Decorative: the tile's own text names the deck. Until a picture lands
+// (or if none does) the frame shows the deck's colours, never a blank box.
+function myDeckArt(d, cls) {
+  const wrap = makeEl("span", `md-art ${cls || ""}`.trim());
+  wrap.setAttribute("aria-hidden", "true");
+  const known = (d.artUrls || []).filter(Boolean);
+  const names = splitCommanderNames(d.name || "").slice(0, 2);
+  const count = Math.max(known.length, names.length, 1);
   const coin = buildIdentityCoin(d.colorIdentity || "");
-  if (coin) li.append(coin);
-  const main = makeEl("div", "md-deck-main");
-  const name = makeEl("span", "md-deck-name", d.name);
-  main.append(name);
-  const meta = makeEl("span", "md-deck-meta", myDeckRecordText(d, true));
-  if (d.bracket) meta.append(` · Bracket ${d.bracket}`);
-  main.append(meta);
-  const linked = myDeckArchidektName(d);
-  main.append(makeEl("span", `md-deck-link${linked ? "" : " is-unlinked"}`, linked ? `Archidekt: ${linked}` : "Not linked yet"));
-  li.append(main);
-  if (isStrugglingDeck(d)) li.append(makeEl("span", "md-flag", "Struggling"));
-  const btn = makeEl("button", "md-upgrade-btn", "Upgrade");
+  if (coin) {
+    coin.classList.add("md-art-coin");
+    wrap.append(coin);
+  }
+  const show = (face, url) => {
+    const img = document.createElement("img");
+    img.alt = "";
+    img.decoding = "async";
+    img.loading = "lazy";
+    img.draggable = false;
+    // Fades in once decoded, so a slow picture never pops in half-drawn.
+    img.addEventListener("load", () => face.classList.add("is-loaded"), { once: true });
+    img.src = url;
+    face.append(img);
+  };
+  for (let k = 0; k < count; k++) {
+    const face = makeEl("span", "md-art-face");
+    if (known[k]) show(face, known[k]);
+    else if (names[k]) fetchCommanderArt(names[k]).then(r => { if (r && r.imageUrl) show(face, r.imageUrl); });
+    wrap.append(face);
+  }
+  return wrap;
+}
+
+function myDeckTile(d) {
+  const btn = makeEl("button", "md-tile");
   btn.type = "button";
-  btn.setAttribute("aria-label", `Upgrade ${d.name}`);
+  const struggling = isStrugglingDeck(d);
+  const linked = myDeckArchidektName(d);
+  btn.setAttribute("aria-label", `${d.name}. ${myDeckRecordText(d)}${d.bracket ? `, Bracket ${d.bracket}` : ""}${struggling ? ", struggling" : ""}${linked ? "" : ", not linked to Archidekt yet"}. Upgrade`);
+  btn.append(myDeckArt(d, "md-tile-art"));
+  const text = makeEl("span", "md-tile-text");
+  text.append(makeEl("span", "md-tile-name", d.name));
+  const meta = makeEl("span", "md-tile-meta", myDeckRecordText(d, true));
+  if (d.bracket) meta.append(` · B${d.bracket}`);
+  text.append(meta);
+  const flags = makeEl("span", "md-tile-flags");
+  if (struggling) flags.append(makeEl("span", "md-flag", "Struggling"));
+  if (!linked) flags.append(makeEl("span", "md-tile-unlinked", "Not linked"));
+  if (flags.childNodes.length) text.append(flags);
+  btn.append(text);
   btn.addEventListener("click", () => openMyDeckUpgrade(d.podDeckId));
-  li.append(btn);
-  return li;
+  return btn;
+}
+
+// The last tile: Build a Deck, which now lives under this tab.
+function myDecksBuildTile() {
+  const btn = makeEl("button", "md-tile md-tile-new");
+  btn.type = "button";
+  const plus = makeEl("span", "md-tile-art md-tile-plus");
+  plus.setAttribute("aria-hidden", "true");
+  plus.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>';
+  const text = makeEl("span", "md-tile-text");
+  text.append(makeEl("span", "md-tile-name", "Build a new deck"), makeEl("span", "md-tile-meta", "From EDHREC and your collection"));
+  btn.append(plus, text);
+  btn.addEventListener("click", openDeckBuilderTab);
+  return btn;
 }
 
 function renderMyDecks() {
@@ -13255,42 +13301,44 @@ function renderMyDecks() {
     const note = makeEl("p", "db-note db-note-warn", archidektReasonText(arch.reason));
     if (arch.reason !== "bridge-off") note.append(" ", archidektLink(TRADING_APP_URL, "Open the Archidekt Trading App"));
     out.push(note);
-  } else if (arch.username) {
-    out.push(makeEl("p", "db-note", `Archidekt: ${arch.username} · ${arch.decks.length} deck${arch.decks.length === 1 ? "" : "s"}`));
-  }
-  if (!data.decks.length) {
-    out.push(makeEl("p", "hint", "You don't have any decks in the pod yet. New decks come in through Update the App."));
-    body.replaceChildren(...out);
-    return;
   }
 
-  // The deck that needs help most gets the big tile.
+  // The deck that needs help most gets the big picture, its record over
+  // its commander's art, and the one action.
   const featured = featuredDeck(data.decks);
   if (featured) {
     const tile = makeEl("article", "md-feature");
-    tile.append(makeEl("span", "md-flag", "Struggling"));
-    tile.append(makeEl("h3", "md-feature-name", featured.name));
+    tile.setAttribute("aria-labelledby", "md-feature-name");
+    tile.append(myDeckArt(featured, "md-feature-art"));
+    const over = makeEl("div", "md-feature-body");
+    over.append(makeEl("span", "md-flag", "Struggling"));
+    const name = makeEl("h3", "md-feature-name", featured.name);
+    name.id = "md-feature-name";
+    over.append(name);
     const rec = makeEl("p", "md-feature-record");
-    rec.append("Won ", makeEl("b", null, String(featured.wins)), ` of ${featured.gamesPlayed} games this season. A fair share in a 4-player pod is 1 in 4.`);
-    tile.append(rec);
+    rec.append("Won ", makeEl("b", null, String(featured.wins)), ` of ${featured.gamesPlayed} this season. A fair share is 1 in 4.`);
+    over.append(rec);
     const btn = makeEl("button", "primary", "Upgrade this deck");
     btn.type = "button";
     btn.addEventListener("click", () => openMyDeckUpgrade(featured.podDeckId));
-    tile.append(btn);
+    over.append(btn);
+    tile.append(over);
     out.push(tile);
   }
   const rest = data.decks.filter(d => d !== featured).sort((a, b) => isStrugglingDeck(b) - isStrugglingDeck(a) || b.gamesPlayed - a.gamesPlayed);
-  if (rest.length) {
-    out.push(makeEl("h3", "db-group-title", featured ? "Your other decks" : "Your decks"));
-    const ul = makeEl("ul", "md-deck-list");
-    ul.append(...rest.map(myDeckRow));
-    out.push(ul);
+  const grid = makeEl("div", "md-tiles");
+  grid.setAttribute("role", "list");
+  for (const el of [...rest.map(myDeckTile), myDecksBuildTile()]) {
+    const item = makeEl("div", "md-tiles-item");
+    item.setAttribute("role", "listitem");
+    item.append(el);
+    grid.append(item);
   }
-  const build = makeEl("button", "md-crosslink", "Build a new deck instead");
-  build.type = "button";
-  build.append(mdChevron());
-  build.addEventListener("click", openDeckBuilderTab);
-  out.push(build);
+  if (!data.decks.length) out.push(makeEl("p", "hint", "No pod decks yet. New decks come in through Update the App; meanwhile you can build one."));
+  out.push(grid);
+  if (arch.connected && arch.username) {
+    out.push(makeEl("p", "db-note md-arch-note", `Archidekt: ${arch.username}, ${arch.decks.length} deck${arch.decks.length === 1 ? "" : "s"}`));
+  }
   body.replaceChildren(...out);
 }
 
@@ -13326,12 +13374,12 @@ function mdEnterView() {
   mdEnterView.timer = setTimeout(() => body.classList.remove("md-entering"), 400);
 }
 
-// In a sub-view (link, upgrade) the panel's "Tonight" pill swaps for an
-// "All my decks" pill in the same place, so each screen has one way out
-// and it sits where every other page keeps it.
+// Decks is a main tab, so its list has no back pill; a sub-view (link,
+// upgrade) gets an "All my decks" pill above the heading, where every other
+// page keeps its way back.
 function setMyDecksSubview(on) {
-  const panelBack = document.querySelector("#tab-my-decks .card > .back-link[data-goto-tab]");
-  if (!panelBack) return;
+  const heading = document.querySelector("#tab-my-decks .card > h2");
+  if (!heading) return;
   let back = document.getElementById("md-back");
   if (!back) {
     back = makeEl("button", "back-link md-back");
@@ -13347,9 +13395,8 @@ function setMyDecksSubview(on) {
       mdEnterView();
       window.scrollTo({ top: 0 });
     });
-    panelBack.after(back);
+    heading.before(back);
   }
-  panelBack.hidden = on;
   back.hidden = !on;
 }
 
@@ -13376,7 +13423,7 @@ async function openMyDeckUpgrade(podDeckId, { relink = false } = {}) {
   if (!arch.connected) {
     myDecksUi.view = "link";
     const body = document.getElementById("md-body");
-    body.replaceChildren(makeEl("h3", "md-feature-name", deck.name), makeEl("p", "db-note db-note-warn", archidektReasonText(arch.reason)));
+    body.replaceChildren(myDeckArt(deck, "md-head-art"), makeEl("h3", "md-sub-name", deck.name), makeEl("p", "db-note db-note-warn", archidektReasonText(arch.reason)));
     return;
   }
   if (!deck.archidektDeckId || relink) return renderMyDeckLink(deck);
@@ -13410,7 +13457,7 @@ function renderMyDeckLink(deck) {
   go.addEventListener("click", () => linkMyDeck(deck, go));
   const row = makeEl("div", "row");
   row.append(go);
-  body.replaceChildren(makeEl("h3", "md-feature-name", deck.name), lead, set, row);
+  body.replaceChildren(myDeckArt(deck, "md-head-art"), makeEl("h3", "md-sub-name", deck.name), lead, set, row);
 }
 
 async function linkMyDeck(deck, btn) {
@@ -13438,7 +13485,7 @@ async function loadMyDeckUpgrade(token) {
   const skeleton = makeEl("div", "md-skeleton");
   skeleton.setAttribute("aria-hidden", "true");
   renderSkeletonCards(skeleton, 3, ["medium", "short"]);
-  body.replaceChildren(makeEl("h3", "md-feature-name", deck.name), skeleton);
+  body.replaceChildren(myDeckArt(deck, "md-head-art"), makeEl("h3", "md-sub-name", deck.name), skeleton);
   setMyDecksStatus("Reading your Archidekt deck…");
   try {
     if (!myDecksUi.cards || myDecksUi.cards.deckId !== deck.archidektDeckId) {
@@ -13623,9 +13670,8 @@ function renderMyDeckUpgrade() {
   });
   myDecksUi.lastPlan = plan;
 
-  const head = makeEl("div", "db-head");
-  const coin = buildIdentityCoin(cards.colorIdentity || "");
-  if (coin) head.append(coin);
+  const head = makeEl("div", "db-head md-head");
+  head.append(myDeckArt(deck, "md-head-art"));
   const titles = makeEl("div", "db-head-titles");
   titles.append(makeEl("h3", "db-commander", deck.name));
   titles.append(makeEl("p", "db-sub", `${cards.commanders.map(c => c.name).join(" / ")}, ${myDeckRecordText(deck)}`));
@@ -13811,10 +13857,6 @@ function renderMyDeckUpgrade() {
 }
 
 function initMyDecks() {
-  const btn = document.getElementById("auth-my-decks-btn");
-  if (btn) btn.addEventListener("click", () => { hideAuthMenu(); openMyDecksTab(); });
-  const cross = document.getElementById("db-my-decks-link");
-  if (cross) cross.addEventListener("click", openMyDecksTab);
   initArchidektCreate();
 }
 

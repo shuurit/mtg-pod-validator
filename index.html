@@ -17,7 +17,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="style.css?v=99">
+<link rel="stylesheet" href="style.css?v=100">
 
 <!-- Home-screen icon (iOS "Add to Home Screen" + Android/Chrome install).
      Generated from icon-source.png via scripts/generate_icons.py -- rerun
@@ -129,12 +129,6 @@
               Pod Proposals <span id="auth-proposals-count" class="auth-menu-count" hidden></span>
             </button>
             <button id="auth-house-rules-btn" type="button" class="auth-menu-item auth-menu-item-nav">House Rules</button>
-            <!-- Build a Deck is reached only from here, like Proposals. See
-                 openDeckBuilderTab in app.js. -->
-            <!-- My Decks: your pod decks, their season, and upgrades built
-                 with Build a Deck's engine. See initMyDecks in app.js. -->
-            <button id="auth-my-decks-btn" type="button" class="auth-menu-item auth-menu-item-nav">My Decks</button>
-            <button id="auth-deck-builder-btn" type="button" class="auth-menu-item auth-menu-item-nav">Build a Deck</button>
             <div class="auth-menu-divider"></div>
             <button id="auth-signout-btn" type="button" class="auth-menu-item">Sign out</button>
           </div>
@@ -147,14 +141,15 @@
          tab's own h2 and lead copy says what that tab is for now. -->
   </header>
 
-  <!-- Four destinations, not five, and the same words as the touch bar
-       below: Games to Update and New Player(s)/Deck(s) are things that
-       need doing rather than places to browse, so they're surfaced as
-       items on Tonight (with their live counts) and reached from there.
-       Their panels still exist below, unchanged -- only their route in. -->
+  <!-- Five destinations, the same words as the touch bar below. Decks
+       holds your pod decks and their upgrades, with Build a Deck under it.
+       Games to Update and New Player(s)/Deck(s) are things that need doing
+       rather than places to browse, so they're surfaced as items on
+       Tonight (with their live counts) and reached from there. -->
   <nav class="tabs" id="main-tabs">
     <button class="tab-btn active" data-tab="tonight">Tonight <span class="tab-badge" id="tonight-tab-badge" hidden></span></button>
     <button class="tab-btn" data-tab="pod">Pod <span class="tab-badge" id="dsv-tab-badge" hidden></span></button>
+    <button class="tab-btn" data-tab="my-decks">Decks</button>
     <button class="tab-btn" data-tab="winrates">Standings</button>
     <button class="tab-btn" data-tab="achievements">Trophies</button>
   </nav>
@@ -284,18 +279,17 @@
     </section>
   </div>
 
-  <!-- Reached only from the avatar menu (Build a Deck) -- see
+  <!-- Reached from the Decks tab's "Build a new deck" tile -- see
        initDeckBuilder and renderDeckBuild in app.js, and deck-builder.js
        for how a deck is put together. -->
   <div id="tab-deck-builder" class="tab-panel" hidden>
     <section class="card">
-      <button type="button" class="back-link" data-goto-tab="tonight">
+      <button type="button" class="back-link" data-goto-tab="my-decks">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
-        Tonight
+        Decks
       </button>
       <h2>Build a Deck</h2>
       <p class="hint">Pick a commander and a bracket. The deck comes from what decks at that bracket run on EDHREC, using cards from your Archidekt collection first.</p>
-      <button type="button" class="md-crosslink" id="db-my-decks-link">Upgrade a deck you already have<svg class="md-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg></button>
       <!-- Your saved results (loadSavedBuilds / renderSavedBuilds in app.js);
            hidden until there's one. -->
       <section class="db-saved" id="db-saved" aria-labelledby="db-saved-title" hidden>
@@ -369,19 +363,15 @@
     </section>
   </div>
 
-  <!-- My Decks (avatar menu, and the link on Build a Deck): the signed-in
+  <!-- Decks (a main tab; Build a Deck opens from its last tile): the signed-in
        player's pod decks with this season's record, each linked once to an
        Archidekt deck, and an Upgrade that runs Build a Deck's engine against
        the deck as it is (planUpgrade in deck-builder.js). Rendered by
        renderMyDecks / renderMyDeckUpgrade in app.js. -->
   <div id="tab-my-decks" class="tab-panel" hidden>
     <section class="card">
-      <button type="button" class="back-link" data-goto-tab="tonight">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
-        Tonight
-      </button>
-      <h2>My Decks</h2>
-      <p class="hint" id="md-lead">Your pod decks and how they're doing this season. Upgrade one to see the swaps Build a Deck would make, using your collection first.</p>
+      <h2>Decks</h2>
+      <p class="hint" id="md-lead">Your pod decks this season. Tap one for upgrades from your own cards first, or build a new one.</p>
       <p class="hint db-status" id="md-status" aria-live="polite" hidden></p>
       <div id="md-body" class="md-body"></div>
     </section>
@@ -493,6 +483,10 @@
     <svg class="bottom-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="5"></circle><circle cx="12" cy="3.2" r="1.7"></circle><circle cx="20.8" cy="12" r="1.7"></circle><circle cx="12" cy="20.8" r="1.7"></circle><circle cx="3.2" cy="12" r="1.7"></circle></svg>
     <span class="bottom-tab-label">Pod</span>
     <span class="tab-badge" id="dsv-tab-badge-bottom" hidden></span>
+  </button>
+  <button class="bottom-tab-btn" data-tab="my-decks">
+    <svg class="bottom-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="3.5" width="12" height="16" rx="2"></rect><path d="M4.5 7v11a2.5 2.5 0 0 0 2.5 2.5h9"></path></svg>
+    <span class="bottom-tab-label">Decks</span>
   </button>
   <button class="bottom-tab-btn" data-tab="winrates">
     <svg class="bottom-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M4.5 19.5V11M12 19.5V4.5M19.5 19.5v-5.5"></path></svg>
@@ -631,6 +625,6 @@
 
 <script src="deck-tally.js?v=2"></script>
 <script src="deck-builder.js?v=15"></script>
-<script src="app.js?v=110"></script>
+<script src="app.js?v=111"></script>
 </body>
 </html>

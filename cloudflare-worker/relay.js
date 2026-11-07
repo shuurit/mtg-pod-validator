@@ -2242,7 +2242,7 @@ async function computeDeckWinRatesData(env, seasonId) {
 async function playerDeckRecords(env, playerId) {
   const seasonId = await getCurrentSeasonId(env);
   const { results } = await env.DB.prepare(`
-    SELECT d.id AS deck_id, d.name, d.color_identity, d.bracket,
+    SELECT d.id AS deck_id, d.name, d.color_identity, d.bracket, d.commander_art_url, d.partner_art_url,
            COUNT(gr.result) AS games_played,
            COALESCE(SUM(CASE WHEN gr.result = 1 THEN 1 ELSE 0 END), 0) AS wins,
            AVG(g.pod_size) AS avg_pod_size
@@ -2259,6 +2259,8 @@ async function playerDeckRecords(env, playerId) {
     name: d.name,
     colorIdentity: d.color_identity || null,
     bracket: d.bracket ?? null,
+    // playgroup.gg's art crops (My Decks' tiles); empty when not synced.
+    artUrls: [d.commander_art_url, d.partner_art_url].filter(Boolean),
     gamesPlayed: d.games_played,
     wins: d.wins,
     avgPodSize: d.avg_pod_size ? Math.round(d.avg_pod_size * 10) / 10 : null,
@@ -2274,7 +2276,7 @@ async function handleInternalPlayerDecks(request, env, url) {
   if (!/^[0-9]{5,25}$/.test(discordId)) return jsonResponse({ error: "Bad discordId" }, 400);
   const player = await env.DB.prepare("SELECT id, name FROM players WHERE discord_user_id = ?").bind(discordId).first();
   if (!player) return jsonResponse({ player: null, decks: [] }, 200, { "Cache-Control": "no-store" });
-  const decks = (await playerDeckRecords(env, player.id)).map(({ bracket, ...d }) => d);
+  const decks = (await playerDeckRecords(env, player.id)).map(({ bracket, artUrls, ...d }) => d);
   return jsonResponse({ player: { name: player.name }, decks }, 200, { "Cache-Control": "no-store" });
 }
 
