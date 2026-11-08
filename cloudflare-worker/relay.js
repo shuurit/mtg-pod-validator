@@ -113,6 +113,8 @@
  *              wrangler secret put POD_BRIDGE_KEY   (shared with archidekt-trading-app: GET /internal/player-decks)
  *              wrangler secret put COLLECTION_BRIDGE_KEY   (shared with archidekt-trading-app: its
  *                POST /api/internal/collection-match, called by GET /deck-builder/candidates)
+ *              wrangler secret put DECK_BRIDGE_KEY   (shared with archidekt-trading-app: its deck
+ *                bridge, POST /api/internal/archidekt-*, behind /my-decks* and /archidekt/*)
  * Outside APIs, no keys: EDHREC + Scryfall (GET /deck-builder/candidates),
  *              Commander Spellbook (POST /deck-builder/combos)
  * Bindings:    KV namespace bound as DECK_CACHE
@@ -2235,19 +2237,12 @@ async function computeDeckWinRatesData(env, seasonId) {
 // in with Discord). Guarded by POD_BRIDGE_KEY in X-Pod-Bridge-Key -- a
 // secret only the two workers hold, the reverse direction of
 // SEASON_ANNOUNCE_API_KEY. Read-only, one player at a time.
-async function handleInternalPlayerDecks(request, env, url) {
-  const key = request.headers.get("X-Pod-Bridge-Key");
-  if (!key || !env.POD_BRIDGE_KEY || key !== env.POD_BRIDGE_KEY) {
-    return jsonResponse({ error: "Not allowed" }, 401);
-  }
-  const discordId = url.searchParams.get("discordId") || "";
-  if (!/^[0-9]{5,25}$/.test(discordId)) return jsonResponse({ error: "Bad discordId" }, 400);
-  const player = await env.DB.prepare("SELECT id, name FROM players WHERE discord_user_id = ?").bind(discordId).first();
-  if (!player) return jsonResponse({ player: null, decks: [] }, 200, { "Cache-Control": "no-store" });
-
+// One player's active decks with this season's record -- the Amass pod
+// bridge below and My Decks (GET /my-decks) both read it.
+async function playerDeckRecords(env, playerId) {
   const seasonId = await getCurrentSeasonId(env);
   const { results } = await env.DB.prepare(`
-    SELECT d.id AS deck_id, d.name, d.color_identity,
+    SELECT d.id AS deck_id, d.name, d.color_identity, d.bracket, d.commander_art_url, d.partner_art_url,
            COUNT(gr.result) AS games_played,
            COALESCE(SUM(CASE WHEN gr.result = 1 THEN 1 ELSE 0 END), 0) AS wins,
            AVG(g.pod_size) AS avg_pod_size
@@ -2258,19 +2253,31 @@ async function handleInternalPlayerDecks(request, env, url) {
     WHERE d.player_id = ? AND d.archived = 0
     GROUP BY d.id
     ORDER BY games_played DESC, d.name
-  `).bind(seasonId, player.id).all();
+  `).bind(seasonId, playerId).all();
+  return results.map((d) => ({
+    podDeckId: d.deck_id,
+    name: d.name,
+    colorIdentity: d.color_identity || null,
+    bracket: d.bracket ?? null,
+    // playgroup.gg's art crops (My Decks' tiles); empty when not synced.
+    artUrls: [d.commander_art_url, d.partner_art_url].filter(Boolean),
+    gamesPlayed: d.games_played,
+    wins: d.wins,
+    avgPodSize: d.avg_pod_size ? Math.round(d.avg_pod_size * 10) / 10 : null,
+  }));
+}
 
-  return jsonResponse({
-    player: { name: player.name },
-    decks: results.map((d) => ({
-      podDeckId: d.deck_id,
-      name: d.name,
-      colorIdentity: d.color_identity || null,
-      gamesPlayed: d.games_played,
-      wins: d.wins,
-      avgPodSize: d.avg_pod_size ? Math.round(d.avg_pod_size * 10) / 10 : null,
-    })),
-  }, 200, { "Cache-Control": "no-store" });
+async function handleInternalPlayerDecks(request, env, url) {
+  const key = request.headers.get("X-Pod-Bridge-Key");
+  if (!key || !env.POD_BRIDGE_KEY || key !== env.POD_BRIDGE_KEY) {
+    return jsonResponse({ error: "Not allowed" }, 401);
+  }
+  const discordId = url.searchParams.get("discordId") || "";
+  if (!/^[0-9]{5,25}$/.test(discordId)) return jsonResponse({ error: "Bad discordId" }, 400);
+  const player = await env.DB.prepare("SELECT id, name FROM players WHERE discord_user_id = ?").bind(discordId).first();
+  if (!player) return jsonResponse({ player: null, decks: [] }, 200, { "Cache-Control": "no-store" });
+  const decks = (await playerDeckRecords(env, player.id)).map(({ bracket, artUrls, ...d }) => d);
+  return jsonResponse({ player: { name: player.name }, decks }, 200, { "Cache-Control": "no-store" });
 }
 
 // ---------- GET /deck-builder/candidates (Build a Deck) ----------
@@ -3575,6 +3582,181 @@ async function handleDeckBuilderOwners(request, env, session) {
     if (clean.length) owners[id] = clean;
   }
   return jsonResponse({ checked: true, owners }, 200, noStore);
+}
+
+// ---------- My Decks: GET /my-decks, POST /my-decks/link, GET /my-decks/cards ----------
+// ---------- and Archidekt writes: POST /archidekt/card-ids, POST /archidekt/decks ----------
+// My Decks is the signed-in player's own pod decks with this season's
+// record (playerDeckRecords), each linked once to one of their Archidekt
+// decks, and an Upgrade that runs Build a Deck's engine against the deck
+// they already have (planUpgrade in deck-builder.js). It replaced the
+// archidekt-trading-app's Home "Your pod decks" / Upgrade picks.
+//
+// Everything Archidekt goes through that app's deck bridge (POST
+// /api/internal/archidekt-*, DECK_BRIDGE_KEY in X-Deck-Bridge-Key): only it
+// holds the players' Archidekt sessions. Always for session.discordUserId,
+// never an id from the browser. The one write is creating a NEW deck; no
+// route here edits or deletes a deck that exists.
+const DECK_BRIDGE_TIMEOUT_MS = 20000;
+const MY_DECK_MAX_CARDS = 150;
+
+// One call to the deck bridge -> its JSON, or { connected: false, reason }
+// when it can't be reached (never throws).
+async function deckBridge(env, session, path, body = {}) {
+  if (!env.DECK_BRIDGE_KEY) return { connected: false, reason: "bridge-off" };
+  if (!session || !session.discordUserId) return { connected: false, reason: "no-account" };
+  try {
+    const res = await fetch(`${ARCHIDEKT_TRADING_APP_BASE_URL}/api/internal/${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Deck-Bridge-Key": env.DECK_BRIDGE_KEY },
+      body: JSON.stringify({ ...body, discordId: String(session.discordUserId) }),
+      signal: AbortSignal.timeout(DECK_BRIDGE_TIMEOUT_MS),
+    });
+    const answer = await res.json().catch(() => null);
+    if (!res.ok) return { error: (answer && answer.error) || `The trading app answered HTTP ${res.status}.`, status: res.status };
+    return answer || { connected: false, reason: "unavailable" };
+  } catch (err) {
+    console.error(`deck bridge ${path} failed: ${err.message}`);
+    return { connected: false, reason: "unavailable" };
+  }
+}
+
+async function handleMyDecks(env, session) {
+  const noStore = { "Cache-Control": "no-store" };
+  if (!session.playerId) return jsonResponse({ decks: [], archidekt: { connected: false, reason: "no-player" } }, 200, noStore);
+  const [decks, archidekt] = await Promise.all([playerDeckRecords(env, session.playerId), deckBridge(env, session, "archidekt-decks")]);
+  const links = (archidekt && archidekt.links) || {};
+  return jsonResponse({
+    decks: decks.map(d => ({
+      ...d,
+      archidektDeckId: links[d.podDeckId] ? links[d.podDeckId].archidektDeckId : null,
+      commanderUid: links[d.podDeckId] ? links[d.podDeckId].commanderUid : null,
+    })),
+    archidekt: {
+      connected: !!(archidekt && archidekt.connected),
+      reason: archidekt && archidekt.connected ? null : (archidekt && (archidekt.reason || (archidekt.error ? "unavailable" : null))) || "unavailable",
+      username: (archidekt && archidekt.archidektUsername) || null,
+      decks: Array.isArray(archidekt && archidekt.decks) ? archidekt.decks.map(d => ({ id: d.id, name: String(d.name || "Untitled deck").slice(0, 200) })) : [],
+    },
+  }, 200, noStore);
+}
+
+async function handleMyDeckLink(request, env, session) {
+  const body = await request.json().catch(() => ({}));
+  const podDeckId = Number(body.podDeckId);
+  if (!Number.isInteger(podDeckId) || podDeckId <= 0) return jsonResponse({ error: "Which deck?" }, 400);
+  const deck = await env.DB.prepare("SELECT id FROM decks WHERE id = ? AND player_id = ?").bind(podDeckId, session.playerId || -1).first();
+  if (!deck) return jsonResponse({ error: "That isn't one of your decks." }, 403);
+  const archidektDeckId = body.archidektDeckId == null ? null : Number(body.archidektDeckId);
+  const answer = await deckBridge(env, session, "pod-deck-link", {
+    podDeckId,
+    archidektDeckId,
+    commanderUid: typeof body.commanderUid === "string" ? body.commanderUid : null,
+  });
+  if (!answer.ok) return jsonResponse({ error: answer.error || "Couldn't save the link. Try again." }, answer.status === 400 ? 400 : 502);
+  return jsonResponse(answer, 200, { "Cache-Control": "no-store" });
+}
+
+// One of the player's Archidekt decks, every card with the facts Build a
+// Deck has for its candidates (type, mana value, price, Game Changer, mass
+// land denial, extra turns, roles), so the upgrade can check the whole deck
+// against its bracket -- not only the cards EDHREC lists.
+async function handleMyDeckCards(env, ctx, session, url) {
+  const deckId = Number(url.searchParams.get("deckId"));
+  if (!Number.isInteger(deckId) || deckId <= 0) return jsonResponse({ error: "Which deck?" }, 400);
+  const noStore = { "Cache-Control": "no-store" };
+  const deck = await deckBridge(env, session, "archidekt-deck", { deckId });
+  if (deck.error) return jsonResponse({ error: deck.error }, deck.status === 404 ? 404 : 502);
+  if (!deck.connected) return jsonResponse({ connected: false, reason: deck.reason || "unavailable" }, 200, noStore);
+
+  const uidOk = v => typeof v === "string" && DECK_BUILD_UUID_RE.test(v);
+  const rows = (Array.isArray(deck.cards) ? deck.cards : []).filter(c => c && uidOk(c.uid)).slice(0, MY_DECK_MAX_CARDS);
+  let scry;
+  try {
+    scry = await scryfallCollection([...new Set(rows.map(c => c.uid.toLowerCase()))]);
+  } catch (err) {
+    return jsonResponse({ error: `Couldn't look the deck's cards up on Scryfall (${err.message}).` }, 502);
+  }
+  const commanderRows = rows.filter(r => r.commander);
+  const commanderCards = commanderRows.map(r => scry.get(r.uid.toLowerCase())).filter(Boolean);
+  const identity = "WUBRG".split("").filter(l => commanderCards.some(c => (c.color_identity || []).includes(l))).join("");
+  const tags = await deckBuilderTags(env, ctx);
+  const roleInfo = await deckBuilderRoleTags(env, ctx, identity);
+  const num = v => (v != null && Number.isFinite(Number(v)) ? Number(v) : null);
+
+  const cards = [];
+  const missing = [];
+  for (const r of rows) {
+    const c = scry.get(r.uid.toLowerCase());
+    if (!c) { missing.push(r.name || r.uid); continue; }
+    const oracleId = String(c.oracle_id || c.card_faces?.[0]?.oracle_id || "").toLowerCase();
+    const typeLine = c.type_line || c.card_faces?.[0]?.type_line || "";
+    const faces = c.card_faces && c.card_faces.length
+      ? c.card_faces.map(f => ({ text: f.oracle_text || "", typeLine: f.type_line || "" }))
+      : [{ text: c.oracle_text || "", typeLine }];
+    const edhrecRank = num(c.edhrec_rank);
+    cards.push({
+      uid: c.id,
+      oracleId,
+      name: c.name,
+      qty: Math.max(1, Number(r.qty) || 1),
+      commander: !!r.commander,
+      type: deckBuilderPrimaryType(typeLine),
+      basic: /\bBasic\b/.test(typeLine) && /\bLand\b/.test(typeLine),
+      cmc: num(c.cmc),
+      price: num(c.prices?.usd) ?? num(c.prices?.usd_foil) ?? num(c.prices?.usd_etched),
+      gameChanger: !!c.game_changer,
+      massLandDenial: tags ? tags.massLandDenial.has(oracleId) : null,
+      extraTurn: tags ? tags.extraTurn.has(oracleId) : null,
+      roles: deckBuilderCardRoles(oracleId, edhrecRank, faces, roleInfo ? roleInfo.roles : null).roles,
+    });
+  }
+  return jsonResponse({
+    connected: true,
+    deckId,
+    name: deck.name || null,
+    url: `https://archidekt.com/decks/${deckId}`,
+    commanders: cards.filter(c => c.commander).map(c => ({ name: c.name, uid: c.uid, oracleId: c.oracleId, cmc: c.cmc, colorIdentity: identity })),
+    colorIdentity: identity,
+    tagsChecked: !!tags,
+    cards: cards.filter(c => !c.commander),
+    // Cards Scryfall didn't know (a custom or very new card): left out of
+    // the checks, and named so the page can say so.
+    unknown: missing.slice(0, 20),
+  }, 200, noStore);
+}
+
+// Archidekt's numeric ids for up to 20 cards at a time (the page chunks a
+// whole deck through this before creating it).
+async function handleArchidektCardIds(request, env, session) {
+  const body = await request.json().catch(() => ({}));
+  const cards = (Array.isArray(body.cards) ? body.cards : []).slice(0, 21).map(c => ({
+    name: typeof (c && c.name) === "string" ? c.name.slice(0, 200) : "",
+    uid: c && typeof c.uid === "string" ? c.uid : null,
+    oracleId: c && typeof c.oracleId === "string" ? c.oracleId : null,
+  }));
+  if (!cards.length) return jsonResponse({ ids: [] });
+  if (cards.length > 20) return jsonResponse({ error: "At most 20 cards per call." }, 400);
+  const answer = await deckBridge(env, session, "archidekt-card-ids", { cards });
+  if (answer.error) return jsonResponse({ error: answer.error }, 502);
+  if (!answer.connected) return jsonResponse({ connected: false, reason: answer.reason || "unavailable" }, 200, { "Cache-Control": "no-store" });
+  return jsonResponse({ connected: true, ids: Array.isArray(answer.ids) ? answer.ids : [] }, 200, { "Cache-Control": "no-store" });
+}
+
+// A new deck on the player's Archidekt account; the trading app checks the
+// card list (at most 120 rows, at most two commanders).
+async function handleArchidektDeckCreate(request, env, session) {
+  const body = await request.json().catch(() => ({}));
+  const answer = await deckBridge(env, session, "archidekt-deck-create", {
+    name: body.name,
+    bracket: body.bracket,
+    private: body.private !== false,
+    description: typeof body.description === "string" ? body.description.slice(0, 2000) : "",
+    cards: Array.isArray(body.cards) ? body.cards.slice(0, 121) : [],
+  });
+  if (answer.error && !answer.deckId) return jsonResponse({ error: answer.error }, answer.status === 400 ? 400 : 502);
+  if (answer.connected === false) return jsonResponse({ connected: false, reason: answer.reason || "unavailable" }, 200);
+  return jsonResponse(answer, 200, { "Cache-Control": "no-store" });
 }
 
 // ---------- /deck-builder/builds: saved Build a Deck results ----------
@@ -5812,6 +5994,26 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/deck-builder/build-hints") {
       return handleDeckBuilderBuildHints(request, env, session);
+    }
+
+    if (request.method === "GET" && url.pathname === "/my-decks") {
+      return handleMyDecks(env, session);
+    }
+
+    if (request.method === "POST" && url.pathname === "/my-decks/link") {
+      return handleMyDeckLink(request, env, session);
+    }
+
+    if (request.method === "GET" && url.pathname === "/my-decks/cards") {
+      return handleMyDeckCards(env, ctx, session, url);
+    }
+
+    if (request.method === "POST" && url.pathname === "/archidekt/card-ids") {
+      return handleArchidektCardIds(request, env, session);
+    }
+
+    if (request.method === "POST" && url.pathname === "/archidekt/decks") {
+      return handleArchidektDeckCreate(request, env, session);
     }
 
     if (url.pathname === "/deck-builder/builds" && ["GET", "POST", "DELETE"].includes(request.method)) {

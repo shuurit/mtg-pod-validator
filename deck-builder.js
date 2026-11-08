@@ -1195,6 +1195,186 @@ function typeOrder(type) {
   return i === -1 ? TYPE_ORDER.length : i;
 }
 
+// ---- Upgrade a deck you already have (My Decks) ----
+// The same builder, pointed at a deck that exists. The player's current
+// list counts as cards they already have in hand ("free"), so the builder
+// only replaces one when something on EDHREC's list for this commander and
+// bracket clearly beats it after the ownership bonus. What the build picks
+// that the deck doesn't run are the ins; what the deck runs that the build
+// left out are the outs. They're paired land for land and spell for spell,
+// best in against weakest out, and the clearest swaps come first.
+//
+// current: { commanders: [oracle ids], cards: [{ oracleId, name, qty, type,
+//   basic, gameChanger, massLandDenial, extraTurn, roles, price, cmc, uid }] }
+//   -- the relay's GET /my-decks/cards answer.
+// opts: buildDeck's opts, plus
+//   maxSwaps  how many swaps to suggest (default UPGRADE_DEFAULT_SWAPS)
+//   keep      oracle ids the player won't cut
+//   skip      oracle ids the player doesn't want added
+const UPGRADE_DEFAULT_SWAPS = 10;
+const UPGRADE_SWAP_CHOICES = [5, 10, 15, 25];
+
+// The deck's own cards as candidates the player holds a spare of: an
+// existing deck's cards are "in hand" for an upgrade, not spoken for.
+function upgradeData(data, current) {
+  const cards = { ...((data.collection && data.collection.cards) || {}) };
+  for (const c of (current && current.cards) || []) {
+    if (!c.oracleId) continue;
+    const had = cards[c.oracleId];
+    cards[c.oracleId] = { ...(had || {}), qty: Math.max(1, (had && had.qty) || 0, c.qty || 1), decks: [] };
+  }
+  return { ...data, collection: { ...(data.collection || {}), connected: true, cards } };
+}
+
+// Why a card in the current deck breaks the bracket, or null.
+function upgradeBreaks(card, currentChecks) {
+  if (!currentChecks) return null;
+  if (card.gameChanger && currentChecks.gameChangers && currentChecks.gameChangers.status === "fail") return "gameChangers";
+  if (card.massLandDenial && currentChecks.massLandDenial && currentChecks.massLandDenial.status === "fail") return "massLandDenial";
+  if (card.extraTurn && currentChecks.extraTurns && currentChecks.extraTurns.status === "fail") return "extraTurns";
+  return null;
+}
+
+function planUpgrade(data, current, opts = {}) {
+  const maxSwaps = Math.max(0, opts.maxSwaps == null ? UPGRADE_DEFAULT_SWAPS : Number(opts.maxSwaps) || 0);
+  const keep = new Set(opts.keep || []);
+  const skip = new Set(opts.skip || []);
+  const commanderIds = new Set([
+    ...((current && current.commanders) || []),
+    ...deckCommanders(data).map(c => c && c.oracleId).filter(Boolean),
+  ]);
+  const deckCards = ((current && current.cards) || []).filter(c => c && c.oracleId && !commanderIds.has(c.oracleId));
+  const spells = deckCards.filter(c => !c.basic);
+  const currentIds = new Set(spells.map(c => c.oracleId));
+  const tagsOk = tagsChecked(data);
+  const bracket = Number(data.bracket);
+
+  const kept = upgradeData(data, current);
+  const buildOpts = { ...opts, excluded: [...(opts.excluded || []), ...skip], pinned: [...(opts.pinned || []), ...keep].filter(id => !skip.has(id)) };
+  const build = buildDeck(kept, buildOpts);
+  const pool = new Map(candidatePool(kept, buildOpts).map(c => [c.oracleId, c]));
+  const inBuild = new Set(build.cards.map(c => c.oracleId));
+
+  const beforeChecks = bracketChecks(deckCards, bracket, { tagsChecked: tagsOk });
+  const isLand = c => c.type === "land";
+
+  // Ins: the build's cards the deck doesn't run, best score first.
+  const ins = build.cards
+    .filter(c => !currentIds.has(c.oracleId) && !c.basic)
+    .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+  // Outs: the deck's cards the build left out. One EDHREC doesn't list for
+  // this commander at this bracket has no score, and goes first; so does one
+  // that breaks the bracket.
+  const outs = spells
+    .filter(c => !inBuild.has(c.oracleId) && !keep.has(c.oracleId))
+    .map(c => {
+      const scored = pool.get(c.oracleId);
+      return {
+        ...c,
+        score: scored ? scored.score : null,
+        synergy: scored ? scored.synergy : null,
+        inclusion: scored ? scored.inclusion : null,
+        onEdhrec: !!scored,
+        breaks: upgradeBreaks(c, beforeChecks),
+      };
+    })
+    .sort((a, b) => (b.breaks ? 1 : 0) - (a.breaks ? 1 : 0) || (a.score ?? -Infinity) - (b.score ?? -Infinity) || a.name.localeCompare(b.name));
+
+  // Pair within lands and within spells, so the land count stays put.
+  const pairs = [];
+  for (const landGroup of [false, true]) {
+    const i = ins.filter(c => isLand(c) === landGroup);
+    const o = outs.filter(c => isLand(c) === landGroup);
+    for (let k = 0; k < Math.min(i.length, o.length); k++) {
+      const gain = o[k].score == null ? null : Math.round((i[k].score - o[k].score) * 10) / 10;
+      pairs.push({ in: i[k], out: o[k], gain, fixes: o[k].breaks || null });
+    }
+  }
+  pairs.sort((a, b) => (b.fixes ? 1 : 0) - (a.fixes ? 1 : 0)
+    || (a.gain == null ? -1 : 0) - (b.gain == null ? -1 : 0)
+    || (b.gain ?? 0) - (a.gain ?? 0)
+    || a.in.name.localeCompare(b.in.name));
+  // A swap that wouldn't improve anything isn't a suggestion.
+  const worthIt = pairs.filter(p => p.fixes || p.gain == null || p.gain > 0);
+  const swaps = worthIt.slice(0, maxSwaps);
+
+  // The deck with those swaps made.
+  const outIds = new Set(swaps.map(s => s.out.oracleId));
+  const after = [...deckCards.filter(c => !outIds.has(c.oracleId)), ...swaps.map(s => s.in)];
+  const afterChecks = bracketChecks(after, bracket, { tagsChecked: tagsOk });
+  const toGet = swaps.map(s => s.in).filter(c => c.status === "missing");
+  const cost = toGet.reduce((sum, c) => sum + (c.price || 0), 0);
+
+  return {
+    build,
+    swaps,
+    more: Math.max(0, worthIt.length - swaps.length),
+    maxSwaps,
+    before: { cards: deckCards, roles: roleCounts(deckCards), checks: beforeChecks },
+    after: { cards: after, roles: roleCounts(after), checks: afterChecks },
+    toGet: { count: toGet.length, cost: Math.round(cost * 100) / 100, unknownPrices: toGet.filter(c => c.price == null).length },
+    bracket,
+    bracketName: build.bracketName,
+  };
+}
+
+// ---- Writing a deck to Archidekt ----
+// The list the trading app's deck writer takes (POST /archidekt/decks on the
+// relay): one row per card with its quantity, commanders flagged. From a
+// Build a Deck result or an upgraded deck.
+function archidektDeckCards({ commanders = [], cards = [], basics = [] }) {
+  const out = [];
+  const seen = new Map();
+  const add = (c, qty, commander) => {
+    if (!c || !c.name) return;
+    const key = (c.oracleId || c.name).toLowerCase();
+    if (seen.has(key)) { seen.get(key).qty += qty; return; }
+    const row = { name: c.name, uid: c.uid || null, oracleId: c.oracleId || null, qty, commander: !!commander };
+    seen.set(key, row);
+    out.push(row);
+  };
+  for (const c of commanders) add(c, 1, true);
+  for (const c of cards) add(c, Math.max(1, Number(c.qty) || 1), false);
+  for (const b of basics) add({ name: b.name }, Math.max(1, Number(b.count) || 1), false);
+  return out;
+}
+
+// "Atraxa, Praetors' Voice (Bracket 3)" for a new build; "<pod deck> upgraded"
+// for an upgrade. Archidekt deck names stay under 100 characters here.
+function archidektDeckName(base, suffix) {
+  const name = `${String(base || "Untitled deck").trim()}${suffix ? ` ${suffix}` : ""}`;
+  return name.slice(0, 100);
+}
+
+// ---- My Decks ----
+// Struggling: won less than one game in four (a fair share in a 4-player
+// pod) with at least 3 games played this season -- the trading app's rule
+// when this lived there, kept the same.
+function isStrugglingDeck(d) {
+  const games = Number(d && d.gamesPlayed) || 0;
+  const wins = Number(d && d.wins) || 0;
+  return games >= 3 && wins / games < 0.25;
+}
+
+// The deck most in need of help: the lowest win rate among struggling decks,
+// more games breaking a tie.
+function featuredDeck(decks) {
+  const rate = d => d.wins / d.gamesPlayed;
+  return (decks || []).filter(isStrugglingDeck).sort((a, b) => rate(a) - rate(b) || b.gamesPlayed - a.gamesPlayed)[0] || null;
+}
+
+// Word overlap between a pod deck's name and an Archidekt deck's name, for
+// suggesting which Archidekt deck a pod deck is.
+function deckNameScore(a, b) {
+  const words = s => new Set(String(s || "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter(w => w.length > 1));
+  const A = words(a);
+  const B = words(b);
+  if (!A.size || !B.size) return 0;
+  let shared = 0;
+  for (const w of A) if (B.has(w)) shared++;
+  return shared / Math.max(A.size, B.size) + (String(b).toLowerCase() === String(a).toLowerCase() ? 1 : 0);
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     DECK_BUILDER_DECK_SIZE, parseDeckRequest, readingToRequest, mergeDeckRequests, requestedMinimum, humanizeThemeSlug, themeName, themeOptions, deckBuilderSlug, deckCommanders, deckSize, combinedIdentity, pairingOf, secondCommanderKind, canPair, pairOrder,
@@ -1203,5 +1383,6 @@ if (typeof module !== "undefined") {
     snapshotBuildOptions, snapshotBuild, savedBuildTitle, savedBuildGroups, savedBuildToText, savedComboVerdict, buildHintNotes,
     BRACKET_RULES, DEFAULT_WEIGHTS, ROLE_MINIMUMS, ROLE_LABELS, roleCounts, cardStatus, scoreCard, deckTemplate, splitBasics,
     buildDeck, candidatePool, swapOptions, applySwap, SWAP_OPTION_COUNT, bracketChecks, combosCheck, comboManaCost, comboRequest, tagsChecked, deckToText, typeOrder,
+    planUpgrade, upgradeData, UPGRADE_DEFAULT_SWAPS, UPGRADE_SWAP_CHOICES, archidektDeckCards, archidektDeckName, isStrugglingDeck, featuredDeck, deckNameScore,
   };
 }
