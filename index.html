@@ -17,7 +17,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="style.css?v=100">
+<link rel="stylesheet" href="style.css?v=101">
 
 <!-- Home-screen icon (iOS "Add to Home Screen" + Android/Chrome install).
      Generated from icon-source.png via scripts/generate_icons.py -- rerun
@@ -559,6 +559,29 @@
   </div>
 </div>
 
+<!-- Card sheet: one card's picture, rules text, EDHREC numbers, whether you
+     own it, and the actions that fit where it was opened (openCardSheet in
+     app.js). Swipe the picture, the arrows, or the arrow keys walk the list
+     it was opened from. -->
+<div id="card-sheet" class="modal-overlay" hidden>
+  <div class="modal-card card-sheet" aria-labelledby="cs-name">
+    <button id="card-sheet-close" class="icon-btn modal-close" aria-label="Close">&#10005;</button>
+    <div class="cs-stage">
+      <button type="button" class="cs-nav" id="cs-prev" aria-label="Previous card"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg></button>
+      <div class="cs-frame" id="cs-frame"><img id="cs-img" alt="" decoding="async" draggable="false"></div>
+      <button type="button" class="cs-nav" id="cs-next" aria-label="Next card"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg></button>
+    </div>
+    <p class="cs-pos" id="cs-pos" aria-live="polite"></p>
+    <h2 id="cs-name" class="cs-name"></h2>
+    <p class="cs-type" id="cs-type"></p>
+    <div class="cs-text" id="cs-text"></div>
+    <ul class="cs-facts" id="cs-facts" aria-label="What EDHREC and this app know about it"></ul>
+    <p class="cs-own" id="cs-own"></p>
+    <div class="row cs-actions" id="cs-actions"></div>
+    <p class="cs-links" id="cs-links"></p>
+  </div>
+</div>
+
 <!-- Create on Archidekt: a NEW deck on the player's own Archidekt account
      from a Build a Deck result or an upgraded My Decks deck -- see
      showArchidektCreate in app.js. Nothing is written until Create. -->
@@ -625,6 +648,6 @@
 
 <script src="deck-tally.js?v=2"></script>
 <script src="deck-builder.js?v=15"></script>
-<script src="app.js?v=111"></script>
+<script src="app.js?v=112"></script>
 </body>
 </html>

@@ -117,6 +117,8 @@
  *                bridge, POST /api/internal/archidekt-*, behind /my-decks* and /archidekt/*)
  * Outside APIs, no keys: EDHREC + Scryfall (GET /deck-builder/candidates),
  *              Commander Spellbook (POST /deck-builder/combos)
+ * Cron:        hourly (wrangler.toml [triggers]) -- refreshDeckSnapshots, the Decks
+ *              tab's stored deck copies
  * Bindings:    KV namespace bound as DECK_CACHE
  *              D1 database bound as DB
  */
@@ -3624,14 +3626,33 @@ async function deckBridge(env, session, path, body = {}) {
 async function handleMyDecks(env, session) {
   const noStore = { "Cache-Control": "no-store" };
   if (!session.playerId) return jsonResponse({ decks: [], archidekt: { connected: false, reason: "no-player" } }, 200, noStore);
-  const [decks, archidekt] = await Promise.all([playerDeckRecords(env, session.playerId), deckBridge(env, session, "archidekt-decks")]);
+  const [decks, archidekt, snapshots] = await Promise.all([
+    playerDeckRecords(env, session.playerId),
+    deckBridge(env, session, "archidekt-decks"),
+    deckSnapshotSummaries(env, session.playerId),
+  ]);
   const links = (archidekt && archidekt.links) || {};
+  const archidektDecks = Array.isArray(archidekt && archidekt.decks) ? archidekt.decks : [];
+  const updatedAtOf = new Map(archidektDecks.map(d => [Number(d.id), d.updatedAt || null]));
   return jsonResponse({
-    decks: decks.map(d => ({
-      ...d,
-      archidektDeckId: links[d.podDeckId] ? links[d.podDeckId].archidektDeckId : null,
-      commanderUid: links[d.podDeckId] ? links[d.podDeckId].commanderUid : null,
-    })),
+    decks: decks.map(d => {
+      const archidektDeckId = links[d.podDeckId] ? links[d.podDeckId].archidektDeckId : null;
+      const snap = archidektDeckId ? snapshots.get(Number(archidektDeckId)) : null;
+      return {
+        ...d,
+        archidektDeckId,
+        commanderUid: links[d.podDeckId] ? links[d.podDeckId].commanderUid : null,
+        // The stored copy, if there is one: when it was read, whether
+        // Archidekt has changed the deck since (deckSnapshotStale), and its
+        // commanders, so the page can ask EDHREC before the deck arrives.
+        snapshot: snap ? {
+          fetchedAt: snap.fetchedAt,
+          stale: deckSnapshotStale(snap, updatedAtOf.get(Number(archidektDeckId))),
+          commanders: snap.commanders,
+        } : null,
+        archidektUpdatedAt: archidektDeckId ? updatedAtOf.get(Number(archidektDeckId)) || null : null,
+      };
+    }),
     archidekt: {
       connected: !!(archidekt && archidekt.connected),
       reason: archidekt && archidekt.connected ? null : (archidekt && (archidekt.reason || (archidekt.error ? "unavailable" : null))) || "unavailable",
@@ -3661,13 +3682,13 @@ async function handleMyDeckLink(request, env, session) {
 // Deck has for its candidates (type, mana value, price, Game Changer, mass
 // land denial, extra turns, roles), so the upgrade can check the whole deck
 // against its bracket -- not only the cards EDHREC lists.
-async function handleMyDeckCards(env, ctx, session, url) {
-  const deckId = Number(url.searchParams.get("deckId"));
-  if (!Number.isInteger(deckId) || deckId <= 0) return jsonResponse({ error: "Which deck?" }, 400);
-  const noStore = { "Cache-Control": "no-store" };
+// Read live: the deck from Archidekt (through the deck bridge, as `session`'s
+// player), then Scryfall. Returns { payload, updatedAt } or { error, status }
+// or { connected: false, reason }. Never stores anything itself.
+async function readArchidektDeck(env, ctx, session, deckId) {
   const deck = await deckBridge(env, session, "archidekt-deck", { deckId });
-  if (deck.error) return jsonResponse({ error: deck.error }, deck.status === 404 ? 404 : 502);
-  if (!deck.connected) return jsonResponse({ connected: false, reason: deck.reason || "unavailable" }, 200, noStore);
+  if (deck.error) return { error: deck.error, status: deck.status === 404 ? 404 : 502 };
+  if (!deck.connected) return { connected: false, reason: deck.reason || "unavailable" };
 
   const uidOk = v => typeof v === "string" && DECK_BUILD_UUID_RE.test(v);
   const rows = (Array.isArray(deck.cards) ? deck.cards : []).filter(c => c && uidOk(c.uid)).slice(0, MY_DECK_MAX_CARDS);
@@ -3675,7 +3696,7 @@ async function handleMyDeckCards(env, ctx, session, url) {
   try {
     scry = await scryfallCollection([...new Set(rows.map(c => c.uid.toLowerCase()))]);
   } catch (err) {
-    return jsonResponse({ error: `Couldn't look the deck's cards up on Scryfall (${err.message}).` }, 502);
+    return { error: `Couldn't look the deck's cards up on Scryfall (${err.message}).`, status: 502 };
   }
   const commanderRows = rows.filter(r => r.commander);
   const commanderCards = commanderRows.map(r => scry.get(r.uid.toLowerCase())).filter(Boolean);
@@ -3711,7 +3732,7 @@ async function handleMyDeckCards(env, ctx, session, url) {
       roles: deckBuilderCardRoles(oracleId, edhrecRank, faces, roleInfo ? roleInfo.roles : null).roles,
     });
   }
-  return jsonResponse({
+  const payload = {
     connected: true,
     deckId,
     name: deck.name || null,
@@ -3723,7 +3744,139 @@ async function handleMyDeckCards(env, ctx, session, url) {
     // Cards Scryfall didn't know (a custom or very new card): left out of
     // the checks, and named so the page can say so.
     unknown: missing.slice(0, 20),
-  }, 200, noStore);
+  };
+  return { payload, updatedAt: typeof deck.updatedAt === "string" ? deck.updatedAt.slice(0, 40) : null };
+}
+
+// ---- Stored copies (deck_snapshots) ----
+// A deck opens from its stored copy at once. The copy is re-read when
+// Archidekt's deck list says the deck changed since (deckSnapshotStale), by
+// the page in the background, by the Decks tab warming the decks you're
+// likely to open, and by the hourly job for any copy over a day old.
+const DECK_SNAPSHOT_MAX_AGE_HOURS = 20;
+const DECK_SNAPSHOT_REFRESH_PER_RUN = 3;
+
+function parseTime(text) {
+  if (!text) return NaN;
+  const t = Date.parse(/Z$|[+-]\d\d:?\d\d$/.test(text) ? text : `${String(text).replace(" ", "T")}Z`);
+  return t;
+}
+
+// Out of date when Archidekt says the deck was edited at a different time
+// than the copy holds; when Archidekt didn't say, when it's over a day old.
+function deckSnapshotStale(snap, listUpdatedAt) {
+  if (!snap) return true;
+  const listed = parseTime(listUpdatedAt);
+  const held = parseTime(snap.archidektUpdatedAt);
+  if (Number.isFinite(listed)) return !Number.isFinite(held) || listed !== held;
+  const age = Date.now() - parseTime(snap.fetchedAt);
+  return !Number.isFinite(age) || age > DECK_SNAPSHOT_MAX_AGE_HOURS * 3600 * 1000;
+}
+
+// archidekt deck id -> { fetchedAt, archidektUpdatedAt, commanders } for
+// one player, without the card lists.
+async function deckSnapshotSummaries(env, playerId) {
+  const { results } = await env.DB.prepare(
+    `SELECT archidekt_deck_id, archidekt_updated_at, fetched_at, json_extract(payload_json, '$.commanders') AS commanders
+     FROM deck_snapshots WHERE player_id = ?`
+  ).bind(playerId).all();
+  const out = new Map();
+  for (const r of results) {
+    let commanders = [];
+    try { commanders = (JSON.parse(r.commanders || "[]") || []).map(c => c && c.name).filter(Boolean); } catch { commanders = []; }
+    out.set(Number(r.archidekt_deck_id), { fetchedAt: r.fetched_at, archidektUpdatedAt: r.archidekt_updated_at, commanders });
+  }
+  return out;
+}
+
+async function readDeckSnapshot(env, playerId, deckId) {
+  const row = await env.DB.prepare(
+    "SELECT payload_json, archidekt_updated_at, fetched_at FROM deck_snapshots WHERE player_id = ? AND archidekt_deck_id = ?"
+  ).bind(playerId, deckId).first();
+  if (!row) return null;
+  try {
+    return { payload: JSON.parse(row.payload_json), archidektUpdatedAt: row.archidekt_updated_at, fetchedAt: row.fetched_at };
+  } catch {
+    return null;
+  }
+}
+
+async function storeDeckSnapshot(env, playerId, deckId, payload, updatedAt) {
+  await env.DB.prepare(
+    `INSERT INTO deck_snapshots (player_id, archidekt_deck_id, payload_json, archidekt_updated_at, fetched_at)
+     VALUES (?, ?, ?, ?, datetime('now'))
+     ON CONFLICT(player_id, archidekt_deck_id) DO UPDATE SET payload_json = excluded.payload_json,
+       archidekt_updated_at = excluded.archidekt_updated_at, fetched_at = excluded.fetched_at`
+  ).bind(playerId, deckId, JSON.stringify(payload), updatedAt || null).run();
+}
+
+// GET /my-decks/cards?deckId=N[&refresh=1][&updatedAt=<Archidekt's>]
+// The stored copy when there is one (cached: true, with fetchedAt and
+// stale), else -- or with refresh=1 -- read live, stored, and answered
+// (cached: false). updatedAt is the deck list's last edit for this deck,
+// the page's to pass: it marks the copy stale, never changes what's stored.
+async function handleMyDeckCards(env, ctx, session, url) {
+  const deckId = Number(url.searchParams.get("deckId"));
+  if (!Number.isInteger(deckId) || deckId <= 0) return jsonResponse({ error: "Which deck?" }, 400);
+  const noStore = { "Cache-Control": "no-store" };
+  const listUpdatedAt = String(url.searchParams.get("updatedAt") || "").slice(0, 40) || null;
+  const playerId = session.playerId;
+  if (playerId && url.searchParams.get("refresh") !== "1") {
+    const snap = await readDeckSnapshot(env, playerId, deckId);
+    if (snap) {
+      return jsonResponse({
+        ...snap.payload,
+        cached: true,
+        fetchedAt: snap.fetchedAt,
+        stale: deckSnapshotStale(snap, listUpdatedAt),
+      }, 200, noStore);
+    }
+  }
+  const read = await readArchidektDeck(env, ctx, session, deckId);
+  if (read.error) return jsonResponse({ error: read.error }, read.status || 502);
+  if (read.connected === false) return jsonResponse(read, 200, noStore);
+  if (playerId) {
+    try {
+      await storeDeckSnapshot(env, playerId, deckId, read.payload, read.updatedAt || listUpdatedAt);
+    } catch (err) {
+      console.error(`deck snapshot store failed: ${err.message}`);
+    }
+  }
+  return jsonResponse({ ...read.payload, cached: false, fetchedAt: new Date().toISOString(), stale: false }, 200, noStore);
+}
+
+// The hourly job: re-read the few oldest copies over a day old, each as its
+// own player (their Discord id from players). A few per run keeps it well
+// inside the 50-subrequest limit (about 3 each, more when a colour
+// identity's role lists aren't cached yet). Failures are logged and the copy
+// is left as it was, to be tried again next hour.
+async function refreshDeckSnapshots(env, ctx) {
+  const { results } = await env.DB.prepare(
+    `SELECT s.player_id, s.archidekt_deck_id, p.discord_user_id
+     FROM deck_snapshots s JOIN players p ON p.id = s.player_id
+     WHERE s.fetched_at < datetime('now', ?) AND p.discord_user_id IS NOT NULL
+     ORDER BY s.fetched_at ASC LIMIT ?`
+  ).bind(`-${DECK_SNAPSHOT_MAX_AGE_HOURS} hours`, DECK_SNAPSHOT_REFRESH_PER_RUN).all();
+  let refreshed = 0;
+  for (const r of results) {
+    const session = { playerId: r.player_id, discordUserId: String(r.discord_user_id) };
+    try {
+      const read = await readArchidektDeck(env, ctx, session, Number(r.archidekt_deck_id));
+      if (read.payload) {
+        await storeDeckSnapshot(env, r.player_id, Number(r.archidekt_deck_id), read.payload, read.updatedAt);
+        refreshed++;
+      } else if (read.status === 404) {
+        // Deleted on Archidekt: drop the copy rather than retry it forever.
+        await env.DB.prepare("DELETE FROM deck_snapshots WHERE player_id = ? AND archidekt_deck_id = ?").bind(r.player_id, r.archidekt_deck_id).run();
+      } else {
+        // Not connected / expired session: push it to the back of the queue.
+        await env.DB.prepare("UPDATE deck_snapshots SET fetched_at = datetime('now') WHERE player_id = ? AND archidekt_deck_id = ?").bind(r.player_id, r.archidekt_deck_id).run();
+      }
+    } catch (err) {
+      console.error(`deck snapshot refresh ${r.archidekt_deck_id} failed: ${err.message}`);
+    }
+  }
+  return { checked: results.length, refreshed };
 }
 
 // Archidekt's numeric ids for up to 20 cards at a time (the page chunks a
@@ -6139,5 +6292,13 @@ export default {
     }
 
     return new Response("Not found", { status: 404, headers: corsHeaders() });
+  },
+
+  // Hourly (wrangler.toml [triggers]): keep the Decks tab's stored deck
+  // copies fresh (refreshDeckSnapshots).
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(
+      refreshDeckSnapshots(env, ctx).catch(err => console.error(`deck snapshot job failed: ${err.message}`))
+    );
   },
 };

@@ -11556,10 +11556,19 @@ function deckBuilderPicksSection(build) {
     : "From your Archidekt collection, matched by Archidekt's tags (the AI couldn't answer this time)."));
   const inDeck = new Map(build.cards.map(c => [c.oracleId, c]));
   const list = makeEl("ul", "db-pick-list");
-  for (const pick of picks) {
+  // The card sheet's "Add to deck" presses the row's own button, so both go
+  // through the same checks (bracket, replacement, already added).
+  const addButtons = [];
+  const openPick = i => openCardSheet(picks, i, {
+    actionsFor: (c, at) => {
+      const b = addButtons[at];
+      return b ? [{ label: b.textContent, primary: true, disabled: b.disabled, onClick: () => b.isConnected && b.click() }] : [];
+    },
+  });
+  for (const [pickIndex, pick] of picks.entries()) {
     const li = makeEl("li", "db-pick");
     const main = makeEl("div", "db-row-main");
-    main.append(deckBuilderName(pick), makeEl("span", "db-row-why", pick.why || ""));
+    main.append(deckBuilderName(pick, () => openPick(pickIndex)), makeEl("span", "db-row-why", pick.why || ""));
     const replaceCard = pick.replace && inDeck.get(pick.replace.oracleId);
     if (replaceCard) main.append(makeEl("span", "db-row-why", `Replaces ${replaceCard.name}`));
     const qty = Number(pick.qty) || 1;
@@ -11574,6 +11583,7 @@ function deckBuilderPicksSection(build) {
     const blocked = added ? null : pickBlockReason(build, pick, replaceCard || null);
     const btn = makeEl("button", "db-pick-add", added ? "In the deck" : "Add to deck");
     btn.type = "button";
+    addButtons[pickIndex] = btn;
     btn.dataset.focusKey = `pick|${pick.oracleId}`;
     if (added) btn.disabled = true;
     else if (blocked) {
@@ -12111,7 +12121,11 @@ function deckBuilderWhy(card) {
   return why.join(" · ");
 }
 
-function deckBuilderName(card) {
+// open: given, the name is a button into the card sheet (lists whose rows
+// aren't buttons themselves: binder, picks); otherwise plain text inside
+// the row's own button, which carries the hover preview instead.
+function deckBuilderName(card, open) {
+  if (open) return cardNameButton(card, open, "db-row-name");
   const name = makeEl("span", "db-row-name");
   if (card.gameChanger) {
     const gc = makeEl("span", "db-chip db-chip-gc", "GC");
@@ -12135,6 +12149,7 @@ function deckBuilderRow(card, section, ctx) {
   btn.setAttribute("aria-expanded", String(!!open));
   const panelId = `db-swap-${section}-${card.oracleId}`.replace(/[^\w-]/g, "-");
   btn.setAttribute("aria-controls", panelId);
+  cardPreviewAttrs(btn, card);
   const main = makeEl("span", "db-row-main");
   main.append(deckBuilderName(card), makeEl("span", "db-row-why", deckBuilderWhy(card)));
   const owners = deckBuilderCardOwners(card);
@@ -12164,6 +12179,19 @@ function deckBuilderSwapPanel(card, panelId, key, ctx) {
   panel.id = panelId;
   const typeLabel = (DECK_BUILDER_TYPE_LABELS[card.type] || card.type).toLowerCase();
   const roles = (card.roles || []).map(r => (ctx.build.roles[r] && ctx.build.roles[r].label || r).toLowerCase());
+  // The card itself first: its picture and text are a tap away, without
+  // leaving the swap the player opened this for.
+  const deckCards = ctx.build.cards;
+  const sheetCtx = { commanders: deckCommanders(ctx.data), bracket: ctx.build.bracket };
+  const details = makeEl("button", "db-swap-details");
+  details.type = "button";
+  details.append(cardInfoIcon(), "Card details");
+  details.setAttribute("aria-label", `${card.name}: card details`);
+  details.addEventListener("click", () => openCardSheet(deckCards, Math.max(0, deckCards.findIndex(c => c.oracleId === card.oracleId)), {
+    ownersFor: deckBuilderCardOwners,
+    actionsFor: c => cardGetActions(c, sheetCtx),
+  }));
+  panel.append(details);
   panel.append(makeEl("p", "db-swap-title", `Swap ${card.name} for`));
   // A card to get that a friend has: say so where the player decides about
   // it, with the way to ask for it.
@@ -12184,10 +12212,18 @@ function deckBuilderSwapPanel(card, panelId, key, ctx) {
     return panel;
   }
   const list = makeEl("ul", "db-swap-list");
+  const doSwap = opt => {
+    deckBuilderUi.swaps = applySwap(deckBuilderUi.swaps, card.oracleId, opt.oracleId);
+    deckBuilderUi.openSwap = null;
+    deckBuilderUi.focusKey = `${opt.type === card.type ? key.split("|")[0] : opt.type}|${opt.oracleId}`;
+    setDeckBuilderStatus(`Swapped ${card.name} for ${opt.name}.`);
+    renderDeckBuild();
+  };
   options.forEach((opt, i) => {
-    const li = makeEl("li");
+    const li = makeEl("li", "db-swap-item");
     const btn = makeEl("button", "db-swap-btn");
     btn.type = "button";
+    cardPreviewAttrs(btn, opt);
     const main = makeEl("span", "db-row-main");
     main.append(deckBuilderName(opt), makeEl("span", "db-row-why", deckBuilderWhy(opt)));
     btn.append(main, deckBuilderChip(opt));
@@ -12199,16 +12235,21 @@ function deckBuilderSwapPanel(card, panelId, key, ctx) {
       btn.append(note);
     }
     if (opt.blocked) btn.disabled = true;
-    else {
-      btn.addEventListener("click", () => {
-        deckBuilderUi.swaps = applySwap(deckBuilderUi.swaps, card.oracleId, opt.oracleId);
-        deckBuilderUi.openSwap = null;
-        deckBuilderUi.focusKey = `${opt.type === card.type ? key.split("|")[0] : opt.type}|${opt.oracleId}`;
-        setDeckBuilderStatus(`Swapped ${card.name} for ${opt.name}.`);
-        renderDeckBuild();
-      });
-    }
-    li.append(btn);
+    else btn.addEventListener("click", () => doSwap(opt));
+    // Beside the swap, never inside it: details for the option, with
+    // "Swap in" as the sheet's own action.
+    const info = makeEl("button", "db-swap-info");
+    info.type = "button";
+    info.append(cardInfoIcon());
+    info.setAttribute("aria-label", `${opt.name}: card details`);
+    info.addEventListener("click", () => openCardSheet(options, i, {
+      ownersFor: deckBuilderCardOwners,
+      actionsFor: c => [
+        { label: `Swap in for ${card.name}`, primary: true, disabled: !!c.blocked, note: c.blocked ? `Not allowed: ${c.blocked}.` : null, onClick: () => doSwap(c) },
+        ...cardGetActions(c, sheetCtx),
+      ],
+    }));
+    li.append(btn, info);
     list.append(li);
   });
   panel.append(list);
@@ -12465,11 +12506,17 @@ function renderSavedBuildView(saved) {
   tally.append(cell(t.free, "in your binder"), cell(t.deck, "in other decks"), cell(t.missing, `to get${t.missing ? ` · ${formatDollars(t.missingCost || 0)}${t.unknownPrices ? "+" : ""}` : ""}`));
 
   const groups = makeEl("div", "db-groups");
+  // The sheet walks the saved list in the order it's shown.
+  const savedCards = savedBuildGroups(saved).flatMap(g => g.cards);
+  const savedCommanders = (saved.commanders || []).map(name => ({ name }));
+  const openSaved = c => openCardSheet(savedCards, Math.max(0, savedCards.indexOf(c)), {
+    actionsFor: card => cardGetActions(card, { commanders: savedCommanders, bracket: saved.bracket }),
+  });
   for (const group of savedBuildGroups(saved)) {
     const rows = group.cards.map(c => {
       const li = makeEl("li", "db-row");
       const main = makeEl("div", "db-row-main");
-      main.append(makeEl("div", "db-row-name", c.name));
+      main.append(cardNameButton(c, () => openSaved(savedCards.find(x => x.oracleId === c.oracleId && x.name === c.name) || c), "db-row-name"));
       li.append(main, savedBuildChip(c));
       return li;
     });
@@ -12661,12 +12708,20 @@ function deckBuilderBinderSection(data, build, buildOpts) {
   section.append(makeEl("p", "hint db-picks-note", "Cards you own that fit this commander but EDHREC's list doesn't suggest, by how widely they're played. The builder never adds these itself."));
   const shown = state.expanded ? gems : gems.slice(0, DECK_BUILDER_GEMS_SHOWN);
   const list = makeEl("ul", "db-pick-list");
-  for (const gem of shown) {
+  const addGem = gem => {
+    deckBuilderUi.swaps = applySwap(deckBuilderUi.swaps, null, gem.oracleId);
+    setDeckBuilderStatus(`Added ${gem.name} from your binder.`);
+    renderDeckBuild();
+  };
+  const openGem = i => openCardSheet(shown, i, {
+    actionsFor: c => [{ label: "Add to deck", primary: true, disabled: !!c.blocked, note: c.blocked ? `Not allowed: ${c.blocked}.` : null, onClick: () => addGem(c) }],
+  });
+  shown.forEach((gem, gemIndex) => {
     const li = makeEl("li", "db-pick");
     const main = makeEl("div", "db-row-main");
     const typeLabel = gem.type && gem.type !== "other" ? gem.type[0].toUpperCase() + gem.type.slice(1) : "";
     const bits = [typeLabel, gem.edhrecRank != null ? `#${gem.edhrecRank} on EDHREC` : "not ranked on EDHREC"];
-    main.append(deckBuilderName(gem), makeEl("span", "db-row-why", bits.filter(Boolean).join(" · ")));
+    main.append(deckBuilderName(gem, () => openGem(gemIndex)), makeEl("span", "db-row-why", bits.filter(Boolean).join(" · ")));
     const head = makeEl("div", "db-pick-head");
     head.append(main, deckBuilderChip(gem));
     li.append(head);
@@ -12680,15 +12735,11 @@ function deckBuilderBinderSection(data, build, buildOpts) {
       btn.setAttribute("aria-describedby", note.id);
       li.append(note);
     } else {
-      btn.addEventListener("click", () => {
-        deckBuilderUi.swaps = applySwap(deckBuilderUi.swaps, null, gem.oracleId);
-        setDeckBuilderStatus(`Added ${gem.name} from your binder.`);
-        renderDeckBuild();
-      });
+      btn.addEventListener("click", () => addGem(gem));
     }
     li.append(btn);
     list.append(li);
-  }
+  });
   section.append(list);
   if (gems.length > shown.length) {
     const more = makeEl("button", "db-picks-search", `Show all ${gems.length}`);
@@ -13148,6 +13199,396 @@ function deckBuilderArchidektButton(build) {
   return btn;
 }
 
+// ---------- Card sheet (tap a card name anywhere in Decks or Build a Deck) ----------
+// One card's picture, rules text and what this app knows about it (EDHREC
+// numbers, roles, Game Changer, whether you own it, which friends have one),
+// with the actions that fit where it was opened from, plus Scryfall and
+// EDHREC links. Swipe sideways (or the arrows, or the arrow keys) to walk
+// the list it was opened from. With a mouse, hovering a name previews the
+// card (initCardHoverPreview).
+//
+// Card text and pictures come from Scryfall straight from the browser, as
+// the commander art and autocomplete already do: by print id when the card
+// has one, else by exact name (a saved build's cards). Cached for the page.
+const SCRYFALL_CARDS_URL = "https://api.scryfall.com/cards";
+const scryfallCardCache = new Map(); // "id:<uid>" | "name:<name>" -> Promise<card | null>
+const cardSheetUi = { list: [], index: 0, actionsFor: null, ownersFor: null, token: 0, busy: false };
+
+function fetchScryfallCard(card) {
+  const key = card.uid ? `id:${card.uid}` : `name:${String(card.name || "").toLowerCase()}`;
+  if (!scryfallCardCache.has(key)) {
+    const url = card.uid
+      ? `${SCRYFALL_CARDS_URL}/${encodeURIComponent(card.uid)}`
+      : `${SCRYFALL_CARDS_URL}/named?exact=${encodeURIComponent(card.name || "")}`;
+    scryfallCardCache.set(key, fetch(url).then(r => (r.ok ? r.json() : null)).catch(() => null));
+  }
+  return scryfallCardCache.get(key);
+}
+
+// A picture URL for a card without a lookup first: Scryfall answers an
+// image request with a redirect to the picture itself.
+function scryfallImageUrl(card, version = "normal") {
+  return card.uid
+    ? `${SCRYFALL_CARDS_URL}/${encodeURIComponent(card.uid)}?format=image&version=${version}`
+    : `${SCRYFALL_CARDS_URL}/named?exact=${encodeURIComponent(card.name || "")}&format=image&version=${version}`;
+}
+
+// Rules text with its {T}, {2}{G} symbols as small marked spans, built as
+// nodes (never innerHTML: the text is Scryfall's).
+function cardTextNodes(text) {
+  const p = makeEl("p", "cs-rules");
+  for (const part of String(text || "").split(/(\{[^}]+\})/)) {
+    if (!part) continue;
+    if (/^\{[^}]+\}$/.test(part)) {
+      const sym = makeEl("abbr", "cs-sym", part.slice(1, -1));
+      sym.title = part;
+      p.append(sym);
+    } else p.append(part);
+  }
+  return p;
+}
+
+// Card names that open the sheet: a real button, with the hover preview's
+// attributes. `open` is called on click.
+function cardNameButton(card, open, cls = "") {
+  const btn = makeEl("button", `cs-name-btn ${cls}`.trim());
+  btn.type = "button";
+  if (card.gameChanger) {
+    const gc = makeEl("span", "db-chip db-chip-gc", "GC");
+    gc.title = "Game Changer";
+    btn.append(gc, " ");
+  }
+  btn.append(card.name);
+  btn.setAttribute("aria-label", `${card.name}: card details`);
+  cardPreviewAttrs(btn, card);
+  btn.addEventListener("click", e => {
+    e.stopPropagation();
+    open();
+  });
+  return btn;
+}
+
+// A drawn "i" in a circle (same stroke as the app's other icons).
+function cardInfoIcon() {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.8");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("aria-hidden", "true");
+  svg.classList.add("cs-info-icon");
+  svg.innerHTML = '<circle cx="12" cy="12" r="9"></circle><path d="M12 11v5.5M12 7.6v.2"></path>';
+  return svg;
+}
+
+function cardPreviewAttrs(el, card) {
+  el.dataset.cardPreview = card.uid || "";
+  el.dataset.cardName = card.name || "";
+}
+
+// The actions every sheet can offer for a card you'd have to get: ask a
+// friend for it in the trading app (its Card Viewer has "In the circle" and
+// Ask), or put it on a want list there. Both open the trading app; nothing
+// is written from here. ctx: { commanders, bracket }.
+function cardGetActions(card, ctx = {}) {
+  if (card.status !== "missing") return [];
+  const out = [];
+  const uid = card.uid || card.scryUid;
+  if (uid) {
+    out.push({
+      label: "Ask a friend",
+      href: `${TRADING_APP_URL}#view-card=${encodeURIComponent(JSON.stringify({ n: card.name, u: uid, o: card.oracleId || undefined }))}`,
+    });
+  }
+  const wants = wantsHandoffUrl({ cards: [{ ...card, status: "missing" }], bracket: ctx.bracket || 3 }, ctx.commanders || []);
+  if (wants) out.push({ label: "Add to wants", href: wants });
+  return out;
+}
+
+// list: the cards to walk, in order; index: the one to open. opts:
+//   actionsFor(card, index) -> [{ label, primary, onClick | href, disabled, note }]
+//   ownersFor(card) -> [{ name, upForTrade }] | null  (friends who have one)
+function openCardSheet(list, index = 0, opts = {}) {
+  const overlay = document.getElementById("card-sheet");
+  if (!overlay || !list || !list.length) return;
+  hideCardHoverPreview();
+  cardSheetUi.list = list;
+  cardSheetUi.index = Math.max(0, Math.min(list.length - 1, index));
+  cardSheetUi.actionsFor = opts.actionsFor || null;
+  cardSheetUi.ownersFor = opts.ownersFor || null;
+  renderCardSheet(0);
+  presentModal(overlay);
+}
+
+function closeCardSheet() {
+  cardSheetUi.token++;
+  dismissModal(document.getElementById("card-sheet"));
+}
+
+function cardSheetFacts(card) {
+  const facts = [];
+  if (card.gameChanger) facts.push("Game Changer");
+  if (card.inclusion != null) facts.push(`In ${card.inclusion}% of EDHREC decks`);
+  if (card.synergy != null) facts.push(`Synergy ${card.synergy > 0 ? "+" : ""}${card.synergy}`);
+  if (card.edhrecRank != null) facts.push(`#${card.edhrecRank} on EDHREC`);
+  for (const r of card.roles || []) if (ROLE_LABELS[r]) facts.push(ROLE_LABELS[r]);
+  if (card.massLandDenial) facts.push("Mass land denial");
+  if (card.extraTurn) facts.push("Extra turn");
+  return facts;
+}
+
+function cardSheetOwnership(card) {
+  if (card.inThisDeck) return "In this deck now.";
+  const owners = cardSheetUi.ownersFor ? cardSheetUi.ownersFor(card) : null;
+  if (card.status === "free") return "In your binder.";
+  if (card.status === "deck") return (card.decks || []).length ? `You own it, in ${card.decks.join(", ")}.` : "You own it, in another deck.";
+  if (card.status === "missing") {
+    const price = card.price != null ? ` About ${formatDollars(card.price)}.` : "";
+    return owners && owners.length ? `You'd need to get it.${price} ${deckBuilderOwnersText(owners)}.` : `You'd need to get it.${price}`;
+  }
+  return "";
+}
+
+// direction: -1 came from the left, 1 from the right, 0 opened.
+function renderCardSheet(direction) {
+  const card = cardSheetUi.list[cardSheetUi.index];
+  if (!card) return;
+  const token = ++cardSheetUi.token;
+  const n = cardSheetUi.list.length;
+  const $ = id => document.getElementById(id);
+  $("cs-name").textContent = card.name;
+  $("cs-type").textContent = card.typeLine || "";
+  $("cs-text").replaceChildren();
+  $("cs-pos").textContent = n > 1 ? `${cardSheetUi.index + 1} of ${n}` : "";
+  $("cs-prev").hidden = $("cs-next").hidden = n < 2;
+  $("cs-prev").disabled = cardSheetUi.index === 0;
+  $("cs-next").disabled = cardSheetUi.index === n - 1;
+
+  const facts = $("cs-facts");
+  facts.replaceChildren(...cardSheetFacts(card).map(f => makeEl("li", "cs-fact", f)));
+  facts.hidden = !facts.childNodes.length;
+  const own = $("cs-own");
+  own.textContent = cardSheetOwnership(card);
+  own.hidden = !own.textContent;
+
+  // The picture: shown as soon as it decodes, never half-drawn.
+  const frame = $("cs-frame");
+  const img = $("cs-img");
+  frame.classList.remove("is-loaded");
+  img.alt = card.name;
+  img.onload = () => { if (token === cardSheetUi.token) frame.classList.add("is-loaded"); };
+  img.src = scryfallImageUrl(card, "normal");
+  if (direction && !REDUCED_MOTION.matches && frame.animate) {
+    frame.animate(
+      [{ transform: `translateX(${direction * 28}%)`, opacity: 0 }, { transform: "none", opacity: 1 }],
+      { duration: 220, easing: "cubic-bezier(0.23, 1, 0.32, 1)" },
+    );
+  }
+
+  renderCardSheetActions(card);
+  const links = $("cs-links");
+  links.replaceChildren();
+
+  fetchScryfallCard(card).then(scry => {
+    if (token !== cardSheetUi.token || !scry) return;
+    const faces = scry.card_faces && scry.card_faces.length && !scry.oracle_text ? scry.card_faces : [scry];
+    const cost = scry.mana_cost || (faces[0] && faces[0].mana_cost) || "";
+    $("cs-type").replaceChildren(...(cost ? [...cardTextNodes(cost).childNodes, "  ·  "] : []), scry.type_line || "");
+    $("cs-text").replaceChildren(...faces.map((f, i) => {
+      const wrap = makeEl("div", "cs-face");
+      if (faces.length > 1) wrap.append(makeEl("p", "cs-face-name", f.name));
+      wrap.append(cardTextNodes(f.oracle_text || ""));
+      return wrap;
+    }));
+    if (card.price == null && card.status === "missing") {
+      const usd = Number(scry.prices && (scry.prices.usd || scry.prices.usd_foil));
+      if (Number.isFinite(usd)) own.textContent = cardSheetOwnership({ ...card, price: usd });
+    }
+    // A saved build's card has no print id: Ask a friend needs Scryfall's.
+    if (!card.uid && scry.id) {
+      card.scryUid = scry.id;
+      renderCardSheetActions(card);
+    }
+    const add = (href, text) => {
+      if (!href) return;
+      const a = makeEl("a", null, text);
+      a.href = href;
+      a.target = "_blank";
+      a.rel = "noopener";
+      links.append(a);
+    };
+    add(scry.scryfall_uri, "Scryfall");
+    add(scry.related_uris && scry.related_uris.edhrec, "EDHREC");
+  });
+}
+
+function renderCardSheetActions(card) {
+  const box = document.getElementById("cs-actions");
+  const actions = cardSheetUi.actionsFor ? cardSheetUi.actionsFor(card, cardSheetUi.index) || [] : [];
+  box.replaceChildren(...actions.map(a => {
+    const el = a.href ? makeEl("a", `cs-action${a.primary ? " primary" : ""}`, a.label) : makeEl("button", a.primary ? "primary" : "", a.label);
+    if (a.href) {
+      el.href = a.href;
+      el.target = "_blank";
+      el.rel = "noopener";
+    } else {
+      el.type = "button";
+      el.disabled = !!a.disabled;
+      el.addEventListener("click", () => {
+        closeCardSheet();
+        a.onClick(card);
+      });
+    }
+    if (a.note) el.title = a.note;
+    return el;
+  }));
+  box.hidden = !actions.length;
+}
+
+function stepCardSheet(delta) {
+  const next = cardSheetUi.index + delta;
+  if (next < 0 || next >= cardSheetUi.list.length) return false;
+  cardSheetUi.index = next;
+  renderCardSheet(delta);
+  return true;
+}
+
+// Sideways swipe on the picture: 1:1 with the finger past a 10px intent
+// threshold, rubber-banding at the ends of the list; released, it moves on
+// if the flick would carry it past a third of the width, else settles back. Vertical drags stay the sheet's own
+// (wireSheetDrag ignores sideways ones).
+function wireCardSheetSwipe(frame) {
+  let start = null;
+  let dragging = false;
+  const tracker = createVelocityTracker();
+  frame.addEventListener("pointerdown", e => {
+    if (e.pointerType === "mouse" || cardSheetUi.list.length < 2) return;
+    start = { x: e.clientX, y: e.clientY, id: e.pointerId };
+    dragging = false;
+    tracker.reset();
+  });
+  frame.addEventListener("pointermove", e => {
+    if (!start || e.pointerId !== start.id) return;
+    const dx = e.clientX - start.x;
+    const dy = e.clientY - start.y;
+    if (!dragging) {
+      if (Math.hypot(dx, dy) < 10) return;
+      if (Math.abs(dy) > Math.abs(dx)) { start = null; return; }
+      dragging = true;
+      frame.setPointerCapture(e.pointerId);
+    }
+    const atEnd = (dx > 0 && cardSheetUi.index === 0) || (dx < 0 && cardSheetUi.index === cardSheetUi.list.length - 1);
+    const shown = atEnd ? (dx > 0 ? 1 : -1) * rubberband(Math.abs(dx), frame.offsetWidth || 300) : dx;
+    tracker.add(e.clientX, e.timeStamp);
+    frame.style.transform = `translateX(${shown}px)`;
+  });
+  const end = e => {
+    if (!start || (e && e.pointerId !== start.id)) return;
+    const dx = e ? e.clientX - start.x : 0;
+    const wasDragging = dragging;
+    start = null;
+    dragging = false;
+    if (!wasDragging) return;
+    // Decide from where the flick would coast to (projectMomentum), so a
+    // short fast flick moves on and a slow long drag released early doesn't.
+    const projected = dx + projectMomentum(tracker.velocity());
+    const width = frame.offsetWidth || 300;
+    const go = Math.abs(projected) > width / 3 ? (projected < 0 ? 1 : -1) : 0;
+    const from = frame.style.transform;
+    frame.style.transform = "";
+    if (go && stepCardSheet(go)) return;
+    if (!REDUCED_MOTION.matches && frame.animate) {
+      frame.animate([{ transform: from }, { transform: "none" }], { duration: 200, easing: "cubic-bezier(0.23, 1, 0.32, 1)" });
+    }
+  };
+  frame.addEventListener("pointerup", end);
+  frame.addEventListener("pointercancel", () => {
+    start = null;
+    dragging = false;
+    frame.style.transform = "";
+  });
+}
+
+function initCardSheet() {
+  const overlay = document.getElementById("card-sheet");
+  if (!overlay) return;
+  document.getElementById("card-sheet-close").addEventListener("click", closeCardSheet);
+  overlay.addEventListener("click", e => { if (e.target === overlay) closeCardSheet(); });
+  document.getElementById("cs-prev").addEventListener("click", () => stepCardSheet(-1));
+  document.getElementById("cs-next").addEventListener("click", () => stepCardSheet(1));
+  document.addEventListener("keydown", e => {
+    if (overlay.hidden || isTextEntryFocused()) return;
+    if (e.key === "ArrowLeft" && stepCardSheet(-1)) e.preventDefault();
+    else if (e.key === "ArrowRight" && stepCardSheet(1)) e.preventDefault();
+  });
+  wireCardSheetSwipe(document.getElementById("cs-frame"));
+  initCardHoverPreview();
+}
+
+// ---- Hover preview (mouse only) ----
+// Hovering a card name shows its picture beside the pointer: after a short
+// pause for the first, at once for the next ones while you move along a
+// list (the tooltip rule), gone on scroll, click or leaving the name.
+// Decorative: the name itself opens the full sheet for keyboard and touch.
+const CARD_PREVIEW_DELAY_MS = 350;
+const CARD_PREVIEW_WARM_MS = 600;
+const cardPreviewUi = { el: null, img: null, timer: null, current: null, lastHidden: 0 };
+
+function hideCardHoverPreview() {
+  const ui = cardPreviewUi;
+  clearTimeout(ui.timer);
+  if (ui.el && !ui.el.hidden) {
+    ui.el.hidden = true;
+    ui.lastHidden = performance.now();
+  }
+  ui.current = null;
+}
+
+function placeCardHoverPreview(x, y) {
+  const el = cardPreviewUi.el;
+  if (!el || el.hidden) return;
+  const w = el.offsetWidth || 244;
+  const h = el.offsetHeight || 340;
+  let left = x + 18;
+  if (left + w > innerWidth - 8) left = x - w - 18;
+  let top = Math.min(Math.max(8, y - h / 2), innerHeight - h - 8);
+  el.style.transform = `translate3d(${Math.max(8, left)}px, ${top}px, 0)`;
+}
+
+function initCardHoverPreview() {
+  if (!window.matchMedia("(hover: hover) and (pointer: fine)").matches) return;
+  const ui = cardPreviewUi;
+  ui.el = makeEl("div", "card-hover-preview");
+  ui.el.hidden = true;
+  ui.el.setAttribute("aria-hidden", "true");
+  ui.img = document.createElement("img");
+  ui.img.alt = "";
+  ui.img.decoding = "async";
+  ui.el.append(ui.img);
+  document.body.append(ui.el);
+  let pointer = { x: 0, y: 0 };
+  document.addEventListener("mousemove", e => {
+    pointer = { x: e.clientX, y: e.clientY };
+    placeCardHoverPreview(e.clientX, e.clientY);
+  }, { passive: true });
+  document.addEventListener("mouseover", e => {
+    const target = e.target.closest && e.target.closest("[data-card-name]");
+    if (target === ui.current) return;
+    if (!target || target.closest(".modal-overlay")) { hideCardHoverPreview(); return; }
+    clearTimeout(ui.timer);
+    ui.current = target;
+    const warm = !ui.el.hidden || performance.now() - ui.lastHidden < CARD_PREVIEW_WARM_MS;
+    ui.timer = setTimeout(() => {
+      if (ui.current !== target) return;
+      ui.img.src = scryfallImageUrl({ uid: target.dataset.cardPreview || null, name: target.dataset.cardName }, "normal");
+      ui.el.hidden = false;
+      placeCardHoverPreview(pointer.x, pointer.y);
+    }, warm ? 0 : CARD_PREVIEW_DELAY_MS);
+  });
+  for (const type of ["scroll", "mousedown", "keydown"]) document.addEventListener(type, hideCardHoverPreview, { passive: true, capture: true });
+}
+
 // ---------- My Decks ----------
 // The signed-in player's pod decks (GET /my-decks: this season's record,
 // bracket, and the Archidekt deck each is linked to), and for any of them an
@@ -13174,6 +13615,15 @@ const myDecksUi = {
   skip: new Set(),
   owners: new Map(), // oracle id -> [{ name, upForTrade }] from /deck-builder/owners
   ownersAsked: new Set(),
+  // Decks read this visit, by Archidekt deck id (GET /my-decks/cards), and
+  // EDHREC's candidates by "<commanders>|<bracket>" as promises, so a deck
+  // the tab already warmed (warmMyDecks) opens with no request at all.
+  cardsCache: new Map(),
+  candidatesCache: new Map(),
+  warmed: new Set(),
+  // What the header says about the deck's stored copy: { state: "cached" |
+  // "checking" | "fresh" | "updated" | "failed", fetchedAt, changes }.
+  freshness: null,
 };
 
 function setMyDecksStatus(text, tone) {
@@ -13195,6 +13645,7 @@ async function loadMyDecks() {
     if (!res.ok) throw new Error(answer.error || `HTTP ${res.status}`);
     myDecksUi.data = answer;
     setMyDecksStatus("");
+    myDecksUi.warmPending = true;
   } catch (err) {
     setMyDecksStatus(`Couldn't load your decks (${err.message}). Pull down to try again.`, "error");
     if (!myDecksUi.data && body) body.replaceChildren();
@@ -13202,6 +13653,10 @@ async function loadMyDecks() {
     myDecksUi.loading = false;
   }
   if (myDecksUi.view === "list") renderMyDecks();
+  if (myDecksUi.warmPending) {
+    myDecksUi.warmPending = false;
+    warmMyDecks();
+  }
 }
 
 function myDeckRecordText(d, short = false) {
@@ -13472,9 +13927,68 @@ async function linkMyDeck(deck, btn) {
   }
   deck.archidektDeckId = Number(chosen.value);
   deck.commanderUid = null;
+  deck.snapshot = null;
+  deck.archidektUpdatedAt = null;
   myDecksUi.cards = null;
   myDecksUi.candidates = null;
   openMyDeckUpgrade(deck.podDeckId);
+}
+
+// The deck's cards: this visit's copy if there is one, else the relay's
+// stored copy (or a live read, the first time). refresh: read it live from
+// Archidekt now. Passes Archidekt's last edit so the relay can say whether
+// the stored copy is out of date.
+async function getMyDeckCards(deck, { refresh = false } = {}) {
+  if (!refresh && myDecksUi.cardsCache.has(deck.archidektDeckId)) return myDecksUi.cardsCache.get(deck.archidektDeckId);
+  const params = new URLSearchParams({ deckId: String(deck.archidektDeckId) });
+  if (refresh) params.set("refresh", "1");
+  if (deck.archidektUpdatedAt) params.set("updatedAt", deck.archidektUpdatedAt);
+  const res = await fetch(`${MY_DECKS_URL}/cards?${params}`, { cache: "no-store", headers: authHeaders() });
+  const answer = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(answer.error || `HTTP ${res.status}`);
+  if (answer.connected === false) throw Object.assign(new Error(archidektReasonText(answer.reason)), { plain: true });
+  myDecksUi.cardsCache.set(deck.archidektDeckId, answer);
+  if (!answer.stale) {
+    deck.snapshot = { ...(deck.snapshot || {}), fetchedAt: answer.fetchedAt, stale: false, commanders: (answer.commanders || []).map(c => c.name) };
+  }
+  return answer;
+}
+
+// EDHREC's candidates for these commanders at this bracket, once per visit
+// (a pair EDHREC has no page for falls back to the first commander's page).
+function getMyDeckCandidates(names, bracket) {
+  const key = `${names.join("|")}|${bracket}`;
+  if (!myDecksUi.candidatesCache.has(key)) {
+    const job = (async () => {
+      const params = new URLSearchParams({ commander: names[0], bracket: String(bracket) });
+      if (names[1]) params.set("commander2", names[1]);
+      let answer = await fetchCandidates(params);
+      if (answer.reason === "no-edhrec-pair") {
+        params.set("pairFallback", "1");
+        answer = await fetchCandidates(params);
+      }
+      if (answer.reason) throw Object.assign(new Error(`EDHREC has no Bracket ${bracket} page for ${names.join(" and ")}. Try another bracket.`), { plain: true, keepBracket: true });
+      return answer;
+    })();
+    job.catch(() => myDecksUi.candidatesCache.delete(key));
+    myDecksUi.candidatesCache.set(key, job);
+  }
+  return myDecksUi.candidatesCache.get(key);
+}
+
+// How many different cards were added, removed or changed in number
+// between two reads of a deck (10 Forests to 9 is one change, not ten).
+function deckCardChanges(before, after) {
+  const count = list => {
+    const m = new Map();
+    for (const c of list || []) m.set(c.oracleId || c.name, (m.get(c.oracleId || c.name) || 0) + (c.qty || 1));
+    return m;
+  };
+  const a = count(before && before.cards);
+  const b = count(after && after.cards);
+  let changes = 0;
+  for (const k of new Set([...a.keys(), ...b.keys()])) if ((a.get(k) || 0) !== (b.get(k) || 0)) changes++;
+  return changes;
 }
 
 async function loadMyDeckUpgrade(token) {
@@ -13486,14 +14000,19 @@ async function loadMyDeckUpgrade(token) {
   skeleton.setAttribute("aria-hidden", "true");
   renderSkeletonCards(skeleton, 3, ["medium", "short"]);
   body.replaceChildren(myDeckArt(deck, "md-head-art"), makeEl("h3", "md-sub-name", deck.name), skeleton);
-  setMyDecksStatus("Reading your Archidekt deck…");
+  const hasCopy = myDecksUi.cardsCache.has(deck.archidektDeckId) || (deck.snapshot && deck.snapshot.fetchedAt);
+  setMyDecksStatus(hasCopy ? "" : "Reading your Archidekt deck for the first time…");
   try {
+    // The stored copy names the commanders, so EDHREC is asked at the same
+    // time as the deck instead of after it.
+    const knownNames = deck.snapshot && deck.snapshot.commanders && deck.snapshot.commanders.length ? deck.snapshot.commanders : null;
+    const early = knownNames ? getMyDeckCandidates(knownNames, myDecksUi.bracket) : null;
+    if (early) early.catch(() => {});
     if (!myDecksUi.cards || myDecksUi.cards.deckId !== deck.archidektDeckId) {
-      const res = await fetch(`${MY_DECKS_URL}/cards?deckId=${deck.archidektDeckId}`, { cache: "no-store", headers: authHeaders() });
-      const answer = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(answer.error || `HTTP ${res.status}`);
-      if (answer.connected === false) throw Object.assign(new Error(archidektReasonText(answer.reason)), { plain: true });
-      myDecksUi.cards = answer;
+      myDecksUi.cards = await getMyDeckCards(deck);
+      myDecksUi.freshness = myDecksUi.cards.cached
+        ? { state: myDecksUi.cards.stale ? "checking" : "cached", fetchedAt: myDecksUi.cards.fetchedAt }
+        : { state: "fresh", fetchedAt: myDecksUi.cards.fetchedAt };
     }
     if (token !== myDecksUi.token) return;
     const commanders = myDecksUi.cards.commanders || [];
@@ -13509,29 +14028,100 @@ async function loadMyDeckUpgrade(token) {
     const names = commanders.map(c => c.name);
     const key = `${names.join("|")}|${myDecksUi.bracket}`;
     if (!myDecksUi.candidates || myDecksUi.candidates.key !== key) {
-      setMyDecksStatus(`Reading EDHREC for ${names.join(" and ")} at Bracket ${myDecksUi.bracket}…`);
-      const params = new URLSearchParams({ commander: names[0], bracket: String(myDecksUi.bracket) });
-      if (names[1]) params.set("commander2", names[1]);
-      let answer = await fetchCandidates(params);
-      // A pair EDHREC has no page for: the first commander's own page.
-      if (answer.reason === "no-edhrec-pair") {
-        params.set("pairFallback", "1");
-        answer = await fetchCandidates(params);
-      }
-      if (answer.reason) throw Object.assign(new Error(`EDHREC has no Bracket ${myDecksUi.bracket} page for ${names.join(" and ")}. Try another bracket.`), { plain: true, keepBracket: true });
-      myDecksUi.candidates = { key, data: answer };
+      if (!myDecksUi.candidatesCache.has(key)) setMyDecksStatus(`Reading EDHREC for ${names.join(" and ")} at Bracket ${myDecksUi.bracket}…`);
+      const data = await getMyDeckCandidates(names, myDecksUi.bracket);
+      myDecksUi.candidates = { key, data };
       myDecksUi.owners = new Map();
       myDecksUi.ownersAsked = new Set();
     }
     if (token !== myDecksUi.token) return;
     setMyDecksStatus("");
     renderMyDeckUpgrade();
+    // The stored copy is older than the deck on Archidekt: show it now, read
+    // the deck again behind it.
+    if (myDecksUi.cards.cached && myDecksUi.cards.stale) refreshMyDeckInBackground(deck, token);
   } catch (err) {
     if (token !== myDecksUi.token) return;
     body.querySelector(".md-skeleton")?.remove();
     setMyDecksStatus(err.plain ? err.message : `Couldn't put the upgrade together (${err.message}). Try again in a moment.`, "error");
     if (err.keepBracket) body.append(myDeckBracketToggle());
   }
+}
+
+// Re-reads the open deck from Archidekt while its stored copy is on screen,
+// then redraws with what changed (and asks EDHREC again only if the
+// commanders did).
+async function refreshMyDeckInBackground(deck, token) {
+  const before = myDecksUi.cards;
+  myDecksUi.freshness = { state: "checking", fetchedAt: before.fetchedAt };
+  renderMyDeckUpgrade();
+  let fresh;
+  try {
+    fresh = await getMyDeckCards(deck, { refresh: true });
+  } catch {
+    if (token !== myDecksUi.token) return;
+    myDecksUi.freshness = { state: "failed", fetchedAt: before.fetchedAt };
+    renderMyDeckUpgrade();
+    return;
+  }
+  if (token !== myDecksUi.token || myDecksUi.deck !== deck) return;
+  const changes = deckCardChanges(before, fresh);
+  const sameCommanders = (before.commanders || []).map(c => c.oracleId).join("|") === (fresh.commanders || []).map(c => c.oracleId).join("|");
+  myDecksUi.cards = fresh;
+  myDecksUi.freshness = { state: changes || !sameCommanders ? "updated" : "fresh", fetchedAt: fresh.fetchedAt, changes };
+  if (!sameCommanders) {
+    myDecksUi.candidates = null;
+    loadMyDeckUpgrade(token);
+    return;
+  }
+  renderMyDeckUpgrade();
+}
+
+// When the Decks tab loads: re-read in the background the decks you're
+// likely to open next -- the struggling one, and any whose stored copy is
+// missing or out of date -- a few at a time, and ask EDHREC for the
+// struggling one, so opening them needs no request. Once per deck a visit,
+// and never while a deck is open (it would compete with it).
+const MY_DECKS_WARM_MAX = 3;
+async function warmMyDecks() {
+  const data = myDecksUi.data;
+  if (!data || !data.archidekt || !data.archidekt.connected) return;
+  const linked = data.decks.filter(d => d.archidektDeckId);
+  const featured = featuredDeck(data.decks);
+  const targets = [];
+  if (featured && featured.archidektDeckId) targets.push(featured);
+  for (const d of linked) if ((!d.snapshot || d.snapshot.stale) && !targets.includes(d)) targets.push(d);
+  for (const d of targets.slice(0, MY_DECKS_WARM_MAX)) {
+    if (myDecksUi.view !== "list") return;
+    if (myDecksUi.warmed.has(d.podDeckId)) continue;
+    myDecksUi.warmed.add(d.podDeckId);
+    try {
+      if (!d.snapshot || d.snapshot.stale) await getMyDeckCards(d, { refresh: true });
+      const names = d.snapshot && d.snapshot.commanders;
+      if (d === featured && names && names.length) getMyDeckCandidates(names, d.bracket || 3).catch(() => {});
+    } catch {
+      // Warming is a head start, never a requirement: opening reads it anyway.
+    }
+  }
+}
+
+// "From your copy saved 2 hours ago" and how the check against Archidekt
+// went, under the deck's name.
+function myDeckFreshnessLine() {
+  const f = myDecksUi.freshness;
+  if (!f) return null;
+  const ago = formatSyncedAgo(f.fetchedAt);
+  const text = {
+    cached: `Up to date with Archidekt${ago ? `, read ${ago}` : ""}.`,
+    checking: `Showing your saved copy${ago ? ` from ${ago}` : ""}. Checking Archidekt for changes…`,
+    fresh: "Up to date with Archidekt.",
+    updated: f.changes ? `Updated from Archidekt: ${f.changes} card${f.changes === 1 ? "" : "s"} changed.` : "Updated from Archidekt.",
+    failed: `Couldn't reach Archidekt, so this is your saved copy${ago ? ` from ${ago}` : ""}.`,
+  }[f.state];
+  if (!text) return null;
+  const p = makeEl("p", `db-sub md-fresh md-fresh-${f.state}`, text);
+  p.setAttribute("aria-live", "polite");
+  return p;
 }
 
 async function fetchCandidates(params) {
@@ -13599,11 +14189,13 @@ function mdDismissSwap(li, apply) {
   setTimeout(finish, 260);
 }
 
-function myDeckSwapRow(swap) {
+// sheet: { list, open(index) } -- every card in the plan, Cut and Add in
+// order, so the card sheet can walk them all.
+function myDeckSwapRow(swap, sheet, at) {
   const li = makeEl("li", "md-swap");
   if (swap.fixes) li.classList.add("md-swap-fix");
   const out = makeEl("div", "md-swap-side md-swap-out");
-  out.append(makeEl("span", "md-swap-tag", "Cut"), makeEl("span", "db-row-name", swap.out.name), makeEl("span", "db-row-why", myDeckCardWhy(swap.out, "out")));
+  out.append(makeEl("span", "md-swap-tag", "Cut"), cardNameButton(swap.out, () => sheet.open(at), "db-row-name"), makeEl("span", "db-row-why", myDeckCardWhy(swap.out, "out")));
   const keep = makeEl("button", "md-swap-btn", "Keep");
   keep.type = "button";
   keep.setAttribute("aria-label", `Keep ${swap.out.name}`);
@@ -13612,7 +14204,7 @@ function myDeckSwapRow(swap) {
 
   const inn = makeEl("div", "md-swap-side md-swap-in");
   const nameLine = makeEl("span", "md-swap-name");
-  nameLine.append(makeEl("span", "db-row-name", swap.in.name), deckBuilderChip(swap.in));
+  nameLine.append(cardNameButton(swap.in, () => sheet.open(at + 1), "db-row-name"), deckBuilderChip(swap.in));
   inn.append(makeEl("span", "md-swap-tag", "Add"), nameLine, makeEl("span", "db-row-why", myDeckCardWhy(swap.in, "in")));
   const owners = swap.in.status === "missing" ? myDecksUi.owners.get(swap.in.oracleId) : null;
   if (owners && owners.length) inn.append(makeEl("span", "db-row-why md-swap-owners", deckBuilderOwnersText(owners)));
@@ -13683,6 +14275,8 @@ function renderMyDeckUpgrade() {
   change.addEventListener("click", () => openMyDeckUpgrade(deck.podDeckId, { relink: true }));
   sub.append(change, ")");
   titles.append(sub);
+  const freshLine = myDeckFreshnessLine();
+  if (freshLine) titles.append(freshLine);
   head.append(titles);
 
   const lead = makeEl("p", "db-note", `Swaps toward what Bracket ${myDecksUi.bracket} decks with this commander run on EDHREC. Your current cards count as owned, so a swap only shows up when the new card is clearly better.`);
@@ -13795,7 +14389,22 @@ function renderMyDeckUpgrade() {
     title.tabIndex = -1;
     out.push(title);
     const ul = makeEl("ul", "md-swaps");
-    ul.append(...plan.swaps.map(myDeckSwapRow));
+    // The card sheet walks every card here, Cut then Add, swap by swap,
+    // with the same Keep / Not this as the rows.
+    const sheetList = plan.swaps.flatMap(sw => [{ ...sw.out, inThisDeck: true, swapSide: "out" }, { ...sw.in, swapSide: "in" }]);
+    const sheet = {
+      list: sheetList,
+      open: i => openCardSheet(sheetList, i, {
+        ownersFor: c => (c.status === "missing" ? myDecksUi.owners.get(c.oracleId) : null),
+        actionsFor: c => c.swapSide === "out"
+          ? [{ label: "Keep", primary: true, onClick: () => { myDecksUi.keep.add(c.oracleId); myDecksUi.focusId = "md-swaps-title"; renderMyDeckUpgrade(); } }]
+          : [
+            { label: "Not this", onClick: () => { myDecksUi.skip.add(c.oracleId); myDecksUi.focusId = "md-swaps-title"; renderMyDeckUpgrade(); } },
+            ...cardGetActions(c, { commanders: cards.commanders, bracket: myDecksUi.bracket }),
+          ],
+      }),
+    };
+    ul.append(...plan.swaps.map((sw, i) => myDeckSwapRow(sw, sheet, i * 2)));
     out.push(ul);
   }
   if (myDecksUi.keep.size || myDecksUi.skip.size) {
@@ -13858,6 +14467,7 @@ function renderMyDeckUpgrade() {
 
 function initMyDecks() {
   initArchidektCreate();
+  initCardSheet();
 }
 
 // Runs before anything else in this section so there's no flash of the
