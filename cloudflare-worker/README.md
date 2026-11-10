@@ -349,6 +349,21 @@ Or from the command line, from this folder: `npx wrangler deploy`.
 That's it for any change that's just new endpoint logic — no new secrets,
 no new bindings, same `DECK_CACHE`/`DB` bindings as before.
 
+### Decks tab: stored deck copies and the hourly job (Nov 2026)
+
+The Decks tab keeps a copy of each Archidekt deck a player opens in D1
+(`deck_snapshots`), so a deck opens at once and is re-read in the
+background only when Archidekt says it changed. Deploying that needs two
+things the dashboard's **Edit code** path doesn't do, so use the command
+line, from this folder, in this order:
+
+1. `npx wrangler d1 execute mtg-pod-validator-db --remote --file=migration_2026_11_deck_snapshots.sql`
+   (a new table only; nothing existing changes).
+2. `npx wrangler deploy` — this also registers the hourly cron from
+   `wrangler.toml` (`[triggers]`), which re-reads the three oldest copies
+   over 20 hours old each hour (`refreshDeckSnapshots` in `relay.js`).
+   Check it under the Worker's **Settings → Triggers**.
+
 ## Fresh setup (if starting from scratch)
 
 1. **GitHub token**: https://github.com/settings/personal-access-tokens/new

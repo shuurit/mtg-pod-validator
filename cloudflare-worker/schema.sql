@@ -465,3 +465,19 @@ CREATE TABLE deck_builds (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX idx_deck_builds_player ON deck_builds(player_id, updated_at);
+
+-- The Decks tab's stored copy of each Archidekt deck a player opens (see
+-- migration_2026_11_deck_snapshots.sql and readDeckSnapshot in relay.js):
+-- the GET /my-decks/cards answer as JSON, the deck's own last edit on
+-- Archidekt when it was read, and when that was. A deck opens from here at
+-- once; the page re-reads it in the background when Archidekt says it
+-- changed, and the hourly job (scheduled in relay.js) keeps old copies fresh.
+CREATE TABLE deck_snapshots (
+  player_id INTEGER NOT NULL REFERENCES players(id),
+  archidekt_deck_id INTEGER NOT NULL,
+  payload_json TEXT NOT NULL,
+  archidekt_updated_at TEXT,
+  fetched_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (player_id, archidekt_deck_id)
+);
+CREATE INDEX idx_deck_snapshots_fetched ON deck_snapshots(fetched_at);

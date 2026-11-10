@@ -16,3 +16,9 @@ database_id = "033e3773-25f9-4f6a-ba86-9cb8bbcc5b8e"
 # player's own collection (handleDeckBuilderCollectionPicks in relay.js).
 [ai]
 binding = "AI"
+
+# The Decks tab's stored deck copies: refresh_deck_snapshots (scheduled in
+# relay.js) re-reads the few oldest each hour, so a deck rarely opens from a
+# copy more than a day old even if nobody's looked at it.
+[triggers]
+crons = ["23 * * * *"]
