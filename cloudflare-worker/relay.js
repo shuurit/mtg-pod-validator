@@ -2459,6 +2459,17 @@ function deckBuilderNameKey(name) {
 
 // Cards by Scryfall id, plus (names) cards looked up by exact name in the
 // same requests, kept on the result's byName map.
+// A failed Scryfall request as an Error the handlers can answer plainly: a
+// rate limit (429) is "busy, try again in a minute" with status 503 and
+// reason "scryfall-busy", never a bare HTTP code.
+function scryfallError(status) {
+  const busy = status === 429;
+  return Object.assign(
+    new Error(busy ? "Scryfall is busy right now (too many requests). Try again in a minute." : `Scryfall didn't answer (HTTP ${status}).`),
+    { scryfallStatus: status, busy },
+  );
+}
+
 async function scryfallCollection(uids, names = []) {
   const byId = new Map();
   byId.byName = new Map();
@@ -2470,7 +2481,7 @@ async function scryfallCollection(uids, names = []) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ identifiers: identifiers.slice(i, i + 75) }),
     }, { essential: true });
-    if (!res.ok) throw new Error(`Scryfall didn't answer (HTTP ${res.status})`);
+    if (!res.ok) throw scryfallError(res.status);
     const data = await res.json();
     for (const c of data.data || []) {
       byId.set(c.id, c);
@@ -2501,11 +2512,14 @@ async function scryfallSearchOracleIds(query) {
 
 // { massLandDenial: Set, extraTurn: Set } of oracle ids, or null if Scryfall
 // couldn't be read. Cached in KV for a week once both searches succeed.
-async function deckBuilderTags(env, ctx) {
+// opts.cacheOnly: answer from KV or not at all -- never search Scryfall
+// (reading a player's deck; Build a Deck's candidates fill the cache).
+async function deckBuilderTags(env, ctx, opts = {}) {
   const cached = await kvGetJson(env, DECK_BUILDER_TAGS_CACHE_KEY, null);
   if (cached && Array.isArray(cached.massLandDenial) && Array.isArray(cached.extraTurn)) {
     return { massLandDenial: new Set(cached.massLandDenial), extraTurn: new Set(cached.extraTurn) };
   }
+  if (opts.cacheOnly) return null;
   if (await scryfallBackingOff(env)) return null;
   try {
     const out = {};
@@ -2564,7 +2578,12 @@ function deckBuilderIdentityKey(colorIdentity) {
 // once all five are in. Cached per role; fetches at most
 // DECK_BUILDER_ROLE_PAGE_BUDGET pages per call, stops at the first failure,
 // and fetches nothing while Scryfall is rate-limiting the relay.
-async function deckBuilderRoleTags(env, ctx, colorIdentity) {
+// opts.cacheOnly: the role lists already in KV, and keyword rules for the
+// rest -- never a Scryfall search. Reading a player's deck (the Decks tab,
+// its warming, the hourly job) uses this: those reads used to spend up to 8
+// search pages each on roles a cold colour identity didn't have yet, and
+// several at once tripped Scryfall's rate limit for everyone's builds.
+async function deckBuilderRoleTags(env, ctx, colorIdentity, opts = {}) {
   const id = deckBuilderIdentityKey(colorIdentity);
   const roles = {};
   const keyFor = role => `${DECK_BUILDER_ROLES_CACHE_PREFIX}:${id}:${role}`;
@@ -2575,7 +2594,7 @@ async function deckBuilderRoleTags(env, ctx, colorIdentity) {
       : null;
   }
   const missing = Object.keys(DECK_BUILDER_ROLE_TAGS).filter(r => !roles[r]);
-  if (missing.length && !(await scryfallBackingOff(env))) {
+  if (missing.length && !opts.cacheOnly && !(await scryfallBackingOff(env))) {
     let budget = DECK_BUILDER_ROLE_PAGE_BUDGET;
     for (const role of missing) {
       if (budget < DECK_BUILDER_ROLE_PAGES) break;
@@ -2943,6 +2962,7 @@ async function handleDeckBuilderCandidates(env, ctx, session, url) {
         identity => deckBuilderRoleTags(env, ctx, identity),
         { ...(slug2 ? { commanderNames: [commander, commander2], pairSource: pairFallback ? "first-commander" : "pair" } : {}), theme: theme || null });
     } catch (err) {
+      if (err.busy) return jsonResponse({ error: err.message, reason: "scryfall-busy" }, 503, { "Retry-After": "60" });
       return jsonResponse({ error: err.message }, 502);
     }
     if (!data) {
@@ -3696,13 +3716,16 @@ async function readArchidektDeck(env, ctx, session, deckId) {
   try {
     scry = await scryfallCollection([...new Set(rows.map(c => c.uid.toLowerCase()))]);
   } catch (err) {
-    return { error: `Couldn't look the deck's cards up on Scryfall (${err.message}).`, status: 502 };
+    if (err.busy) return { error: err.message, status: 503, reason: "scryfall-busy" };
+    return { error: `Couldn't look the deck's cards up on Scryfall: ${err.message}`, status: 502 };
   }
   const commanderRows = rows.filter(r => r.commander);
   const commanderCards = commanderRows.map(r => scry.get(r.uid.toLowerCase())).filter(Boolean);
   const identity = "WUBRG".split("").filter(l => commanderCards.some(c => (c.color_identity || []).includes(l))).join("");
-  const tags = await deckBuilderTags(env, ctx);
-  const roleInfo = await deckBuilderRoleTags(env, ctx, identity);
+  // From the caches only: a deck read spends Scryfall requests on its cards
+  // (scryfallCollection, one per 75), nothing else.
+  const tags = await deckBuilderTags(env, ctx, { cacheOnly: true });
+  const roleInfo = await deckBuilderRoleTags(env, ctx, identity, { cacheOnly: true });
   const num = v => (v != null && Number.isFinite(Number(v)) ? Number(v) : null);
 
   const cards = [];
@@ -3833,7 +3856,7 @@ async function handleMyDeckCards(env, ctx, session, url) {
     }
   }
   const read = await readArchidektDeck(env, ctx, session, deckId);
-  if (read.error) return jsonResponse({ error: read.error }, read.status || 502);
+  if (read.error) return jsonResponse({ error: read.error, ...(read.reason ? { reason: read.reason } : {}) }, read.status || 502);
   if (read.connected === false) return jsonResponse(read, 200, noStore);
   if (playerId) {
     try {

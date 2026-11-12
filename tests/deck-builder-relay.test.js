@@ -84,7 +84,7 @@ function sandbox(fetchImpl, kv = new Map()) {
     "deckBuilderSearchTags", "deckBuilderPicksPrompt", "deckBuilderValidatePicks", "deckBuilderFallbackPicks", "handleDeckBuilderCollectionPicks", "deckBuilderCheckOwnedCards", "handleDeckBuilderGems",
     "deckBuilderReadingPrompt", "deckBuilderValidateReading", "handleDeckBuilderReadRequest",
     "handleDeckBuilderOwners",
-    "scryfallFetch", "scryfallBackingOff", "recordScryfallBackoff", "kvGetJson",
+    "scryfallFetch", "scryfallBackingOff", "recordScryfallBackoff", "kvGetJson", "scryfallError",
     "edhrecJson", "deckBuilderThemes", "hasCardlists", "deckBuilderPages", "deckBuilderPrimaryType", "deckBuilderNameKey", "scryfallCollection", "buildDeckBuilderCandidates", "scryfallSearchOracleIds", "deckBuilderTags", "parseSpellbookCombos",
     "scryfallRoleSearch", "deckBuilderIdentityKey", "deckBuilderRoleTags", "deckBuilderKeywordRoles", "deckBuilderCardRoles",
   ].map(source).join("\n"), ctx);
@@ -326,6 +326,35 @@ test("roles fill in over a few builds: two per build, each cached on its own", a
   assert.equal(calls.length, 20, "all five from KV now");
   assert.equal(fourth.complete, true);
   assert.equal(s.deckBuilderIdentityKey(""), "c");
+});
+
+test("reading a deck (cacheOnly) never searches Scryfall: cached roles and tags, keywords for the rest", async () => {
+  const kv = new Map();
+  const calls = [];
+  const s = sandbox(roleSearchFetch(calls), kv);
+  // One role already cached for this identity; the rest aren't.
+  kv.set("deckbuilder:roles:v2:r:ramp", JSON.stringify({ ids: ["ramp-1"], throughRank: 100, complete: false }));
+  const roles = await s.deckBuilderRoleTags(s.env, s.ctx, "R", { cacheOnly: true });
+  const tags = await s.deckBuilderTags(s.env, s.ctx, { cacheOnly: true });
+  assert.equal(calls.length, 0, "no Scryfall request at all");
+  assert.ok(roles.roles.ramp.ids.has("ramp-1"));
+  assert.equal(roles.roles.draw, null, "not cached: the keyword rules answer it");
+  assert.equal(roles.complete, false);
+  assert.equal(tags, null, "no tag lists cached: not checked, rather than searched");
+});
+
+test("a rate limit reads as 'Scryfall is busy', not a bare HTTP code", async () => {
+  const s = sandbox(async () => json(429, {}), new Map());
+  s.SCRYFALL_THROTTLE.backoffUntil = 0;
+  await assert.rejects(s.scryfallCollection(["00000000-0000-4000-8000-000000000001"]), err => {
+    assert.equal(err.busy, true);
+    assert.equal(err.scryfallStatus, 429);
+    assert.match(err.message, /Scryfall is busy right now/);
+    return true;
+  });
+  const other = s.scryfallError(500);
+  assert.equal(other.busy, false);
+  assert.match(other.message, /HTTP 500/);
 });
 
 test("a rate-limited role search stops the rest and starts a backoff every isolate sees", async () => {
