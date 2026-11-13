@@ -5162,6 +5162,34 @@ function renderPodSlots() {
 // ---------- reveal modal (Scryfall commander art) ----------
 
 const SCRYFALL_NAMED_URL = "https://api.scryfall.com/cards/named";
+
+// Every call this page makes to Scryfall's API goes through here: one at a
+// time, at least SCRYFALL_BROWSER_GAP_MS apart (Scryfall asks for 50-100 ms
+// between requests, and counts them per IP -- the player's own connection),
+// and after a 429 none at all for a minute, answered as { status: 429 }
+// without a request. The card sheet, hover preview, commander art and Build
+// a Deck's partner check all share it, so a fast flick through cards can't
+// get the player's connection rate limited and break their next build.
+// Pictures don't come through here: they load from Scryfall's image
+// server, which isn't rate limited (scryfallImageUrl).
+const SCRYFALL_BROWSER_GAP_MS = 120;
+const SCRYFALL_BROWSER_BACKOFF_MS = 60 * 1000;
+const scryfallGate = { chain: Promise.resolve(), last: 0, backoffUntil: 0 };
+
+function scryfallBrowserFetch(url) {
+  const run = async () => {
+    if (Date.now() < scryfallGate.backoffUntil) return { ok: false, status: 429, json: async () => ({}) };
+    const wait = scryfallGate.last + SCRYFALL_BROWSER_GAP_MS - Date.now();
+    if (wait > 0) await new Promise(r => setTimeout(r, wait));
+    scryfallGate.last = Date.now();
+    const res = await fetch(url);
+    if (res.status === 429) scryfallGate.backoffUntil = Date.now() + SCRYFALL_BROWSER_BACKOFF_MS;
+    return res;
+  };
+  const job = scryfallGate.chain.then(run, run);
+  scryfallGate.chain = job.catch(() => {});
+  return job;
+}
 // cardName -> { imageUrl } | null (lookup failed) -- so re-opening the
 // modal for the same commanders across pods/checks doesn't re-hit
 // Scryfall every time.
@@ -5187,7 +5215,8 @@ async function fetchCommanderArt(cardName) {
   if (commanderArtCache.has(cardName)) return commanderArtCache.get(cardName);
   let result = null;
   try {
-    const res = await fetch(`${SCRYFALL_NAMED_URL}?fuzzy=${encodeURIComponent(cardName)}`);
+    const res = await scryfallBrowserFetch(`${SCRYFALL_NAMED_URL}?fuzzy=${encodeURIComponent(cardName)}`);
+    if (res.status === 429) return null; // busy, not missing: try again next time
     if (res.ok) {
       const card = await res.json();
       // Double-faced/split cards have no top-level image_uris -- the front
@@ -11648,13 +11677,16 @@ async function deckBuilderPairing(name) {
   if (!key) return null;
   if (deckBuilderPairingCache.has(key)) return deckBuilderPairingCache.get(key);
   let result = null;
+  let res;
   try {
-    const res = await fetch(`${SCRYFALL_NAMED_URL}?exact=${encodeURIComponent(name.trim())}`);
-    if (res.ok) result = pairingOf(await res.json());
-    else if (res.status !== 404) return null; // a hiccup: don't cache it
+    res = await scryfallBrowserFetch(`${SCRYFALL_NAMED_URL}?exact=${encodeURIComponent(name.trim())}`);
   } catch {
-    return null;
+    throw Object.assign(new Error("Couldn't reach Scryfall to check the commander. Check your connection and try again."), { plain: true });
   }
+  // Busy or broken is not "Scryfall doesn't know that card": say which.
+  if (res.status === 429) throw Object.assign(new Error("Scryfall is busy right now (too many requests). Try again in a minute."), { plain: true });
+  if (res.ok) result = pairingOf(await res.json());
+  else if (res.status !== 404) throw Object.assign(new Error(`Scryfall didn't answer (HTTP ${res.status}). Try again in a moment.`), { plain: true });
   deckBuilderPairingCache.set(key, result);
   return result;
 }
@@ -11667,8 +11699,9 @@ async function updateSecondCommanderField() {
   const input = document.getElementById("db-commander2");
   const name = document.getElementById("db-commander").value.trim();
   const seq = ++deckBuilderUi.pairingSeq;
-  const pairing = name.length >= 2 ? await deckBuilderPairing(name) : null;
-  if (seq !== deckBuilderUi.pairingSeq) return;
+  // A failed check here just leaves the field as it is; Build says why.
+  const pairing = name.length >= 2 ? await deckBuilderPairing(name).catch(() => undefined) : null;
+  if (seq !== deckBuilderUi.pairingSeq || pairing === undefined) return;
   const kind = secondCommanderKind(pairing);
   field.hidden = !kind;
   if (!kind) return;
@@ -11868,7 +11901,7 @@ async function runDeckBuild(opts = {}) {
       headers: authHeaders(),
     });
     const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+    if (!res.ok) throw Object.assign(new Error(body.error || `HTTP ${res.status}`), { plain: body.reason === "scryfall-busy" });
     if (body.reason === "no-edhrec-pair") {
       setDeckBuilderStatus(
         `EDHREC has no Bracket ${bracket} page for ${names[0]} and ${names[1]} together. You can build from ${firstName}'s own page instead: the deck keeps both commanders, but EDHREC's picks won't account for the other one.`,
@@ -11936,7 +11969,7 @@ async function runDeckBuild(opts = {}) {
     // The request box: look through the player's own collection for it.
     requestCollectionPicks();
   } catch (err) {
-    setDeckBuilderStatus(`Couldn't build the deck (${err.message}). Try again in a moment.`, "error");
+    setDeckBuilderStatus(err.plain ? err.message : `Couldn't build the deck (${err.message}). Try again in a moment.`, "error");
   } finally {
     deckBuilderUi.busy = false;
     btn.disabled = false;
@@ -13220,17 +13253,25 @@ function fetchScryfallCard(card) {
     const url = card.uid
       ? `${SCRYFALL_CARDS_URL}/${encodeURIComponent(card.uid)}`
       : `${SCRYFALL_CARDS_URL}/named?exact=${encodeURIComponent(card.name || "")}`;
-    scryfallCardCache.set(key, fetch(url).then(r => (r.ok ? r.json() : null)).catch(() => null));
+    const job = scryfallBrowserFetch(url).then(r => (r.ok ? r.json() : null)).catch(() => null);
+    scryfallCardCache.set(key, job);
+    // Nothing back (busy, or a hiccup): let the next look try again.
+    job.then(card => { if (!card) scryfallCardCache.delete(key); });
   }
   return scryfallCardCache.get(key);
 }
 
-// A picture URL for a card without a lookup first: Scryfall answers an
-// image request with a redirect to the picture itself.
+// A card's picture. With its print id, straight from Scryfall's image
+// server (cards.scryfall.io/<version>/front/<a>/<b>/<id>.jpg, the address
+// every card's image_uris use), which isn't rate limited -- so hovering
+// down a list or flicking through the sheet costs no API requests. Without
+// one (a saved build's cards have names only), the API's image redirect,
+// which is: those are the rare case.
+const SCRYFALL_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function scryfallImageUrl(card, version = "normal") {
-  return card.uid
-    ? `${SCRYFALL_CARDS_URL}/${encodeURIComponent(card.uid)}?format=image&version=${version}`
-    : `${SCRYFALL_CARDS_URL}/named?exact=${encodeURIComponent(card.name || "")}&format=image&version=${version}`;
+  const id = String(card.uid || card.scryUid || "").toLowerCase();
+  if (SCRYFALL_UUID_RE.test(id)) return `https://cards.scryfall.io/${version}/front/${id[0]}/${id[1]}/${id}.jpg`;
+  return `${SCRYFALL_CARDS_URL}/named?exact=${encodeURIComponent(card.name || "")}&format=image&version=${version}`;
 }
 
 // Rules text with its {T}, {2}{G} symbols as small marked spans, built as
@@ -13378,7 +13419,8 @@ function renderCardSheet(direction) {
   frame.classList.remove("is-loaded");
   img.alt = card.name;
   img.onload = () => { if (token === cardSheetUi.token) frame.classList.add("is-loaded"); };
-  img.src = scryfallImageUrl(card, "normal");
+  if (card.uid || card.scryUid) img.src = scryfallImageUrl(card, "normal");
+  else img.removeAttribute("src");
   if (direction && !REDUCED_MOTION.matches && frame.animate) {
     frame.animate(
       [{ transform: `translateX(${direction * 28}%)`, opacity: 0 }, { transform: "none", opacity: 1 }],
@@ -13405,8 +13447,10 @@ function renderCardSheet(direction) {
       const usd = Number(scry.prices && (scry.prices.usd || scry.prices.usd_foil));
       if (Number.isFinite(usd)) own.textContent = cardSheetOwnership({ ...card, price: usd });
     }
-    // A saved build's card has no print id: Ask a friend needs Scryfall's.
+    // A saved build's card has no print id: its picture and Ask a friend
+    // need Scryfall's.
     if (!card.uid && scry.id) {
+      if (!card.scryUid) img.src = scryfallImageUrl({ uid: scry.id }, "normal");
       card.scryUid = scry.id;
       renderCardSheetActions(card);
     }
@@ -13581,7 +13625,15 @@ function initCardHoverPreview() {
     const warm = !ui.el.hidden || performance.now() - ui.lastHidden < CARD_PREVIEW_WARM_MS;
     ui.timer = setTimeout(() => {
       if (ui.current !== target) return;
-      ui.img.src = scryfallImageUrl({ uid: target.dataset.cardPreview || null, name: target.dataset.cardName }, "normal");
+      const uid = target.dataset.cardPreview || null;
+      if (uid) ui.img.src = scryfallImageUrl({ uid }, "normal");
+      else {
+        // Name only: one gated lookup (cached), then the image server.
+        ui.img.removeAttribute("src");
+        fetchScryfallCard({ name: target.dataset.cardName }).then(c => {
+          if (ui.current === target && c && c.id) ui.img.src = scryfallImageUrl({ uid: c.id }, "normal");
+        });
+      }
       ui.el.hidden = false;
       placeCardHoverPreview(pointer.x, pointer.y);
     }, warm ? 0 : CARD_PREVIEW_DELAY_MS);
@@ -13945,7 +13997,7 @@ async function getMyDeckCards(deck, { refresh = false } = {}) {
   if (deck.archidektUpdatedAt) params.set("updatedAt", deck.archidektUpdatedAt);
   const res = await fetch(`${MY_DECKS_URL}/cards?${params}`, { cache: "no-store", headers: authHeaders() });
   const answer = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(answer.error || `HTTP ${res.status}`);
+  if (!res.ok) throw Object.assign(new Error(answer.error || `HTTP ${res.status}`), { plain: answer.reason === "scryfall-busy" });
   if (answer.connected === false) throw Object.assign(new Error(archidektReasonText(answer.reason)), { plain: true });
   myDecksUi.cardsCache.set(deck.archidektDeckId, answer);
   if (!answer.stale) {
@@ -14083,6 +14135,9 @@ async function refreshMyDeckInBackground(deck, token) {
 // struggling one, so opening them needs no request. Once per deck a visit,
 // and never while a deck is open (it would compete with it).
 const MY_DECKS_WARM_MAX = 3;
+// Between warm reads, so they never land as one burst on Scryfall (each is
+// a relay read of the deck's cards) while the player is doing something.
+const MY_DECKS_WARM_GAP_MS = 2500;
 async function warmMyDecks() {
   const data = myDecksUi.data;
   if (!data || !data.archidekt || !data.archidekt.connected) return;
@@ -14091,8 +14146,10 @@ async function warmMyDecks() {
   const targets = [];
   if (featured && featured.archidektDeckId) targets.push(featured);
   for (const d of linked) if ((!d.snapshot || d.snapshot.stale) && !targets.includes(d)) targets.push(d);
-  for (const d of targets.slice(0, MY_DECKS_WARM_MAX)) {
-    if (myDecksUi.view !== "list") return;
+  for (const [i, d] of targets.slice(0, MY_DECKS_WARM_MAX).entries()) {
+    await new Promise(r => setTimeout(r, i ? MY_DECKS_WARM_GAP_MS : 800));
+    // Gives way to anything the player starts: a deck, or a build.
+    if (myDecksUi.view !== "list" || deckBuilderUi.busy || document.getElementById("tab-my-decks").hidden) return;
     if (myDecksUi.warmed.has(d.podDeckId)) continue;
     myDecksUi.warmed.add(d.podDeckId);
     try {
@@ -14127,7 +14184,7 @@ function myDeckFreshnessLine() {
 async function fetchCandidates(params) {
   const res = await fetch(`${DECK_BUILDER_RELAY_URL}?${params}`, { cache: "no-store", headers: authHeaders() });
   const answer = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(answer.error || `HTTP ${res.status}`);
+  if (!res.ok) throw Object.assign(new Error(answer.error || `HTTP ${res.status}`), { plain: answer.reason === "scryfall-busy" });
   return answer;
 }
 
