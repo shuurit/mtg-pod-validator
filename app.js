@@ -1432,7 +1432,7 @@ function renderTrophyCompare(a, b) {
   root.appendChild(grid);
 }
 
-// One binder page per category, in the order relay.js sends them.
+// One shelf per category, in the order relay.js sends them.
 function renderTrophyCaseShelves(d) {
   const root = document.getElementById("trophy-case-list");
   if (!root) return;
@@ -1443,7 +1443,7 @@ function renderTrophyCaseShelves(d) {
     if (!slots.length) continue;
     const won = slots.filter(s => s.won).length;
     const cards = slots.map(slot => buildTrophyCaseCard(slot, d, `${String(d.slots.indexOf(slot) + 1).padStart(3, "0")}/${total}`));
-    root.appendChild(buildBinderPage(cat.label, { text: `${won}/${slots.length}`, full: won === slots.length }, cards));
+    root.appendChild(buildTrophyShelf(cat.label, { text: `${won}/${slots.length}`, full: won === slots.length }, cards));
   }
 }
 
@@ -1479,7 +1479,7 @@ function trophyCaseCardData(slot, d, collector) {
 // The slot as a card in its pocket. Opens showTrophyDetailModal via the
 // delegated handler in initAchievementsTab.
 function buildTrophyCaseCard(slot, d, collector) {
-  const card = buildMtgCard(trophyCaseCardData(slot, d, collector));
+  const card = buildTrophyMedal(trophyCaseCardData(slot, d, collector));
   card.classList.add("tc-card");
   card.tabIndex = 0;
   card.setAttribute("role", "button");
@@ -1508,7 +1508,7 @@ function showTrophyDetailModal(id) {
 
   const tier = trophyPrestigeTier(slot.count);
   const art = tcEl("div", "tc-detail-art");
-  const big = buildMtgCard(trophyCaseCardData(slot, d, document.querySelector(`#trophy-case-list .tc-card[data-id="${CSS.escape(slot.id)}"] .mtg-footer span`)?.textContent || ""));
+  const big = buildTrophyMedal(trophyCaseCardData(slot, d, document.querySelector(`#trophy-case-list .tc-card[data-id="${CSS.escape(slot.id)}"]`)?.dataset.collector || ""));
   big.classList.add("is-inspected");
   art.appendChild(big);
   body.appendChild(art);
@@ -1896,24 +1896,25 @@ function renderAchievementsSeasonSelect(seasons, seasonId) {
 // data yet" for an already-concluded season -- two different states that
 // both arrive as winner: null, so the message has to come from
 // seasonActive, not from the achievement itself.
-// ---------- The Binder: trophies as Magic cards ----------
-// Every trophy is drawn as a card in the modern frame: name and cost in the
-// title bar, the emblem as the art, a type line with a set symbol in the
-// trophy's rarity, rules text, flavor text naming who holds it, and a
-// collector line. Built in HTML/CSS (see .mtg-card in style.css), not from
-// Wizards' own frame artwork. Small in the binder's pockets; the full card
-// opens on a tap.
+// ---------- The medal case: trophies as medals under glass ----------
+// Every trophy is its emblem -- already a struck, framed medallion -- set on
+// a small glass plinth: lit from above in its category's colour, named
+// underneath, with who holds it. A shelf per category. Winning one again
+// changes the plinth's edge (silver at two, gold at three) and adds a
+// count; one you hold catches the foil. A tap lifts it out: the same medal
+// at full size with its description, the story of who won it, its rarity
+// and its number in the set (see .medal in style.css). No card frame
+// anywhere -- these are objects in a case, not cards in a binder.
 
-// Frame colour per trophy category, the way a card's colour says what it
-// does: Standings in white, Combat in red, Survival in green, Playstyle in
-// blue, Table in black, Draws & Tempo in multicolour gold. Presentation
-// only -- which trophy sits in which category still comes from relay.js.
-const MTG_FRAME_BY_CATEGORY = {
-  standings: "w", combat: "r", survival: "g", playstyle: "u", table: "b", tempo: "m",
+// Light per trophy category, the way the case is lit: Standings in white,
+// Combat in red, Survival in green, Playstyle in blue, Table in violet,
+// Draws & Tempo in gold. Presentation only -- which trophy sits in which
+// category still comes from relay.js -- and never the only cue: the shelf
+// heading and the medal's own "Trophy · Category" line name it.
+const TROPHY_CATEGORY_LIGHT = {
+  standings: "var(--mana-w)", combat: "var(--mana-r)", survival: "var(--mana-g)",
+  playstyle: "var(--mana-u)", table: "var(--mana-b)", tempo: "var(--foil)",
 };
-const MTG_PIP_VAR = { w: "--pip-w", u: "--pip-u", b: "--pip-b", r: "--pip-r", g: "--pip-g" };
-// The set symbol: a little trophy, filled in its rarity's colour.
-const MTG_SET_SYMBOL_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v4.5a6 6 0 0 1-4.5 5.8V16h3v2.5H7.5V16h3v-2.7A6 6 0 0 1 6 7.5z"></path><path d="M3 4.5h3v3.2A3 3 0 0 1 3 4.5zM21 4.5h-3v3.2a3 3 0 0 0 3-3.2z"></path><rect x="5.5" y="19.5" width="13" height="2.5" rx="1"></rect></svg>';
 // id -> category, learned from any Trophy Case response (the season list
 // from GET /achievements doesn't carry categories).
 const trophyCategoryById = new Map();
@@ -1944,96 +1945,70 @@ function categoryLabel(id) {
 
 // card: { id, title, description, emblem, category, flavor, rarity
 //   ({tier,label}|null), count, held (foil: it's yours), locked, sealed,
-//   collector, prestige (0/2/3), status, pinned }
-function buildMtgCard(card) {
-  const frame = MTG_FRAME_BY_CATEGORY[card.category] || "c";
-  const el = tcEl("div", `mtg-card frame-${frame}`);
-  if (card.held) el.classList.add("is-foil");
+//   collector, prestige (0/2/3), status, pinned, holder }
+// The same element serves both sizes: on a shelf only the emblem, name and
+// holder show; .is-inspected (the detail sheet) shows the rest.
+function buildTrophyMedal(card) {
+  const el = tcEl("div", "medal");
+  if (card.held) el.classList.add("is-held");
   if (card.locked) el.classList.add("is-locked");
-  if (card.prestige) el.classList.add(`border-${card.prestige === 3 ? "gold" : "silver"}`);
+  if (card.sealed) el.classList.add("is-sealed");
+  if (card.prestige) el.classList.add(`prestige-${card.prestige}`);
   el.dataset.id = card.id;
+  el.dataset.collector = card.collector || "";
+  el.style.setProperty("--cat", TROPHY_CATEGORY_LIGHT[card.category] || "var(--mana-c)");
 
-  const face = tcEl("div", "mtg-face");
-
-  const titleBar = tcEl("div", "mtg-titlebar");
-  titleBar.appendChild(tcEl("span", "mtg-name", card.title));
-  const cost = tcEl("span", "mtg-cost");
-  cost.setAttribute("aria-hidden", "true");
-  if (card.count >= 2) cost.appendChild(tcEl("span", "mtg-mana mtg-mana-generic", String(card.count)));
-  const pips = frame === "m" ? ["r", "u"] : MTG_PIP_VAR[frame] ? [frame] : [];
-  for (const p of pips) {
-    const pip = tcEl("span", `mtg-mana mtg-mana-${p}`);
-    pip.style.setProperty("--pip", `var(${MTG_PIP_VAR[p]})`);
-    cost.appendChild(pip);
-  }
-  if (!pips.length && card.count < 2) cost.appendChild(tcEl("span", "mtg-mana mtg-mana-generic", "0"));
-  titleBar.appendChild(cost);
-  face.appendChild(titleBar);
-
-  const art = tcEl("div", "mtg-art");
-  art.appendChild(trophyEmblemNode(card));
-  if (card.status) art.appendChild(tcEl("span", `tc-status tc-status-${card.status}`, TROPHY_STATUS_LABEL[card.status]));
+  const stage = tcEl("div", "medal-stage");
+  stage.appendChild(trophyEmblemNode(card));
+  if (card.status) stage.appendChild(tcEl("span", `tc-status tc-status-${card.status}`, TROPHY_STATUS_LABEL[card.status]));
   if (card.pinned) {
     const pin = tcEl("span", "tc-pin-marker");
     pin.title = "Pinned to Standings";
     pin.innerHTML = PIN_ICON_SVG;
-    art.appendChild(pin);
+    stage.appendChild(pin);
   }
-  face.appendChild(art);
+  if (card.count >= 2) {
+    const count = tcEl("span", "medal-count", `×${card.count}`);
+    count.title = `Won ${card.count} times`;
+    stage.appendChild(count);
+  }
+  el.appendChild(stage);
 
-  const typeLine = tcEl("div", "mtg-typeline");
+  const body = tcEl("div", "medal-body");
   const label = categoryLabel(card.category);
-  typeLine.appendChild(tcEl("span", "mtg-type", label ? `Trophy — ${label}` : "Trophy"));
-  const set = tcEl("span", `mtg-set rarity-${card.rarity ? card.rarity.tier : "none"}`);
-  set.innerHTML = MTG_SET_SYMBOL_SVG;
-  if (card.rarity) set.title = card.rarity.label;
-  typeLine.appendChild(set);
-  face.appendChild(typeLine);
-
-  const text = tcEl("div", "mtg-textbox");
-  text.appendChild(tcEl("p", "mtg-rules", card.description));
-  if (card.flavor) text.appendChild(tcEl("p", "mtg-flavor", card.flavor));
-  // The holder's name stands in for the text box on the pocket-sized
-  // card, where rules text is too small to read (see .mtg-card in
-  // style.css).
-  text.appendChild(tcEl("div", "mtg-holder", card.holder || (card.locked ? "Not yet held" : card.sealed ? "Sealed" : "")));
-
-  face.appendChild(text);
-  if (card.count >= 2) face.appendChild(tcEl("div", "mtg-pt", `×${card.count}`));
-  el.appendChild(face);
-
-  const footer = tcEl("div", "mtg-footer");
-  footer.appendChild(tcEl("span", null, card.collector || ""));
-  footer.appendChild(tcEl("span", null, "Amass a Gathering"));
-  el.appendChild(footer);
+  body.appendChild(tcEl("span", "medal-kind", label ? `Trophy · ${label}` : "Trophy"));
+  body.appendChild(tcEl("span", "medal-name", card.title));
+  body.appendChild(tcEl("span", "medal-holder", card.holder || (card.locked ? "Not yet held" : card.sealed ? "Sealed" : "")));
+  const chips = tcEl("div", "medal-chips");
+  if (card.rarity) chips.appendChild(tcEl("span", `tc-rarity tc-rarity-${card.rarity.tier}`, card.rarity.label));
+  if (card.prestige) chips.appendChild(tcEl("span", "tc-tier-label", trophyTierLabel(card.count)));
+  if (chips.childNodes.length) body.appendChild(chips);
+  body.appendChild(tcEl("p", "medal-rules", card.description));
+  if (card.flavor) body.appendChild(tcEl("p", "medal-flavor", card.flavor));
+  if (card.collector) body.appendChild(tcEl("span", "medal-collector", card.collector));
+  el.appendChild(body);
   return el;
 }
 
-// A binder page: up to nine pockets, three by three, like the real thing.
-function buildBinderPage(title, count, cards) {
-  const page = tcEl("section", "binder-page");
+// A shelf of the case: a category's medals under its name, with how many
+// are held. count: { text: "3/6", full } or null.
+function buildTrophyShelf(title, count, medals) {
+  const shelf = tcEl("section", "trophy-shelf");
   if (title) {
-    const head = tcEl("div", "binder-page-head");
-    head.appendChild(tcEl("h3", "binder-page-title", title));
-    if (count) head.appendChild(tcEl("span", "binder-page-count" + (count.full ? " is-full" : ""), count.text));
-    page.appendChild(head);
+    const head = tcEl("div", "trophy-shelf-head");
+    head.appendChild(tcEl("h3", "trophy-shelf-title", title));
+    if (count) head.appendChild(tcEl("span", "trophy-shelf-count" + (count.full ? " is-full" : ""), count.full ? `${count.text} · complete` : count.text));
+    shelf.appendChild(head);
   }
-  const pockets = tcEl("div", "binder-pockets");
-  for (const c of cards) {
-    const pocket = tcEl("div", "binder-pocket");
-    pocket.appendChild(c);
-    pockets.appendChild(pocket);
-  }
-  // Empty sleeves fill out the last row, so the page still reads as a page.
-  const empties = (3 - (cards.length % 3)) % 3;
-  for (let i = 0; i < empties; i++) pockets.appendChild(tcEl("div", "binder-pocket is-empty"));
-  page.appendChild(pockets);
-  return page;
+  const grid = tcEl("div", "medal-grid");
+  for (const m of medals) grid.appendChild(m);
+  shelf.appendChild(grid);
+  return shelf;
 }
 
-// A tap on any card in the binder opens it full size. Season cards have no
-// Trophy Case detail behind them, so they open this: just the card.
-function showBinderCardModal(cardEl) {
+// A tap on any medal lifts it out at full size. Season medals have no
+// Trophy Case detail behind them, so they open this: just the medal.
+function showTrophyMedalModal(cardEl) {
   const modal = document.getElementById("trophy-detail-modal");
   const body = document.getElementById("trophy-detail-body");
   if (!modal || !body || !cardEl) return;
@@ -2044,14 +2019,17 @@ function showBinderCardModal(cardEl) {
   big.removeAttribute("role");
   big.removeAttribute("aria-label");
   big.style.transform = "";
-  const title = tcEl("h2", "visually-hidden", cardEl.querySelector(".mtg-name")?.textContent || "Trophy");
+  // The clone's emblem may have been hidden mid-flight by an earlier zoom.
+  const bigEmblem = trophyEmblemIn(big);
+  if (bigEmblem) bigEmblem.style.visibility = "";
+  const title = tcEl("h2", "visually-hidden", cardEl.querySelector(".medal-name")?.textContent || "Trophy");
   body.append(title, big);
   const opening = modal.hidden;
   presentModal(modal);
   if (opening) zoomTrophyDetail(modal, cardEl.dataset.id, cardEl);
 }
 
-// The season's trophies as binder pages, one page per category (in the
+// The season's trophies as shelves of medals, one shelf per category (in the
 // order relay.js gives them) once categories are known, otherwise nine to
 // a page in list order. Before the season closes every card is sealed:
 // rules text, no holder.
@@ -2076,7 +2054,7 @@ function renderAchievements(achievements, seasonActive) {
   const total = String(achievements.length).padStart(3, "0");
   const cardFor = (a, i) => {
     const winner = a.winner;
-    const el = buildMtgCard({
+    const el = buildTrophyMedal({
       id: a.id,
       title: a.title,
       description: a.description,
@@ -2092,7 +2070,7 @@ function renderAchievements(achievements, seasonActive) {
     el.classList.add("tc-card");
     el.tabIndex = 0;
     el.setAttribute("role", "button");
-    el.setAttribute("aria-label", `${a.title}${winner ? `, held by ${winner.name}` : ""}. Show the card.`);
+    el.setAttribute("aria-label", `${a.title}${winner ? `, held by ${winner.name}` : ""}. Show the medal.`);
     return el;
   };
 
@@ -2102,13 +2080,13 @@ function renderAchievements(achievements, seasonActive) {
     for (const cat of known) {
       const inCat = cards.filter(({ a }) => trophyCategoryById.get(a.id) === cat.id);
       const held = inCat.filter(({ a }) => a.winner).length;
-      container.appendChild(buildBinderPage(cat.label, seasonActive ? null : { text: `${held}/${inCat.length}` }, inCat.map(c => c.el)));
+      container.appendChild(buildTrophyShelf(cat.label, seasonActive ? null : { text: `${held}/${inCat.length}` }, inCat.map(c => c.el)));
     }
     const rest = cards.filter(({ a }) => !known.some(c => c.id === trophyCategoryById.get(a.id)));
-    if (rest.length) container.appendChild(buildBinderPage("More", null, rest.map(c => c.el)));
+    if (rest.length) container.appendChild(buildTrophyShelf("More", null, rest.map(c => c.el)));
   } else {
     for (let i = 0; i < cards.length; i += 9) {
-      container.appendChild(buildBinderPage(null, null, cards.slice(i, i + 9).map(c => c.el)));
+      container.appendChild(buildTrophyShelf(null, null, cards.slice(i, i + 9).map(c => c.el)));
     }
     // Learn the categories once, then lay the pages out by them.
     const pending = ensureTrophyCategories();
@@ -2199,7 +2177,7 @@ function initAchievementsTab() {
   if (seasonList) {
     const openCard = target => {
       const card = target.closest(".tc-card");
-      if (card) showBinderCardModal(card);
+      if (card) showTrophyMedalModal(card);
     };
     seasonList.addEventListener("click", e => openCard(e.target));
     seasonList.addEventListener("keydown", e => onCardKey(e, () => openCard(e.target)));
@@ -7239,7 +7217,7 @@ function trophyEmblemIn(root) {
 function zoomTrophyDetail(modal, id, from) {
   const card = from || document.querySelector(`.tc-card[data-id="${CSS.escape(String(id))}"]`);
   const source = trophyEmblemIn(card);
-  const detailEmblem = () => trophyEmblemIn(document.querySelector("#trophy-detail-body .mtg-card.is-inspected"));
+  const detailEmblem = () => trophyEmblemIn(document.querySelector("#trophy-detail-body .medal.is-inspected"));
   if (!source || !detailEmblem()) return;
   // While the detail is open the card's emblem is "in" the sheet.
   source.style.visibility = "hidden";

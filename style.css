@@ -6584,7 +6584,8 @@ button.wr-card.is-leader {
   .md-tile-art::after,
   .vet-plate::after,
   .verdict::after,
-  .tonight-action::after {
+  .tonight-action::after,
+  .medal.is-held::after {
     display: none;
   }
   body {
@@ -6939,14 +6940,14 @@ button.dossier-back svg { width: 18px; height: 18px; }
 }
 .dossier-trophy img { width: 44px; height: 44px; object-fit: contain; }
 
-/* ---------- The Binder: trophies as Magic cards ----------
-   See buildMtgCard in app.js. The modern card frame, recreated in CSS:
-   black border, a frame in the trophy category's colour, the title bar
-   with its mana cost, the art box, the type line with a set symbol in the
-   trophy's rarity, the text box, the P/T box and the collector line. All
-   sizes are in cqw (the card is its own container), so the same card
-   works at pocket size and full size. Fixed material like the playmat and
-   the pips: a card looks the same in either theme. */
+/* ---------- The medal case: trophies as medals under glass ----------
+   See buildTrophyMedal in app.js. A trophy's emblem is already a struck,
+   framed medallion, so it is the object: it stands on a small glass plinth
+   lit from above in its category's colour (--cat), with its name and
+   holder beneath. One element, two sizes -- on a shelf it shows emblem,
+   name and holder; lifted out (.is-inspected, in the detail sheet) it
+   shows its kind, rarity, description, story and number too. Theme
+   surfaces, not a fixed material: the case is glass, like every panel. */
 .visually-hidden {
   position: absolute !important;
   width: 1px;
@@ -6956,345 +6957,311 @@ button.dossier-back svg { width: 18px; height: 18px; }
   white-space: nowrap;
 }
 
-.binder-page {
-  padding: 10px 8px 12px;
-  border-radius: var(--radius-lg);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 30%),
-    #1a1820;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07), var(--shadow-md);
-  color: #efe6d2;
+/* Spaced by the lists they sit in (#achievements-list, #trophy-case-list
+   are grids with a gap). */
+.trophy-shelf {
+  min-width: 0;
 }
-.binder-page-head {
+.trophy-shelf-head {
   display: flex;
-  justify-content: space-between;
   align-items: baseline;
-  gap: 10px;
-  padding: 0 4px 8px;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border-soft);
 }
-.card .binder-page-title {
+.card .trophy-shelf-title {
   margin: 0;
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 1.1rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: #efe6d2;
+  font-family: var(--font-title);
+  font-optical-sizing: auto;
+  font-size: 1.3rem;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.1;
 }
-.binder-page-count {
+.trophy-shelf-count {
+  flex: none;
   font-family: var(--font-display);
-  font-weight: 700;
-  color: var(--foil);
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
   font-variant-numeric: tabular-nums;
+  color: var(--muted);
 }
-.binder-page-count.is-full { color: #74d39c; }
-.binder-pockets {
+/* A full shelf says so in words as well as colour ("6/6 · complete"). */
+.trophy-shelf-count.is-full { color: var(--good); }
+
+/* Three to a row on a phone: big enough that an emblem reads, small
+   enough that a shelf of six is two rows. minmax(0, ...) so a long name
+   wraps inside its column instead of widening it. */
+.medal-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
+  gap: 10px;
 }
-@media (min-width: 720px) {
-  .binder-pockets { gap: 10px; }
+@media (min-width: 600px) {
+  .medal-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 }
-/* A clear plastic sleeve: a faint edge and a sheen across the top. */
-.binder-pocket {
-  padding: 3px;
-  border-radius: 7px;
-  background: linear-gradient(170deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.015) 40%);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+@media (min-width: 800px) {
+  .medal-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 }
-.binder-pocket.is-empty { aspect-ratio: 63 / 88; }
+/* With room, the emblems grow rather than the gaps. */
+@media (min-width: 600px) {
+  .medal:not(.is-inspected) { padding: 16px 10px 14px; gap: 8px; }
+  .medal:not(.is-inspected) .trophy-emblem { width: min(100%, 124px); }
+  .medal:not(.is-inspected) .medal-name { font-size: 0.98rem; }
+  .medal:not(.is-inspected) .medal-holder { font-size: 0.8rem; }
+}
 
-.mtg-card {
-  /* Frame colours, overridden per colour below. */
-  --frame-hi: #b9bec3;
-  --frame-lo: #7c8288;
-  --bar: #e3e6e8;
-  --box: #e9ebec;
-  --art: #2a2e33;
-  --edge: #121212;
+.medal {
+  --cat: var(--mana-c);
+  --medal-edge: var(--border);
   position: relative;
-  container-type: inline-size;
-  aspect-ratio: 63 / 88;
   display: flex;
   flex-direction: column;
-  padding: 3.6% 3.6% 0;
-  border-radius: 4.6% / 3.3%;
-  background: var(--edge);
-  color: #15120d;
-  font-family: Georgia, "Times New Roman", serif;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
-  text-align: left;
-  user-select: none;
-  -webkit-user-select: none;
-}
-.mtg-card.frame-w { --frame-hi: #f1ead2; --frame-lo: #cfc39e; --bar: #f7f3e6; --box: #f6f2e6; --art: #5d5440; }
-.mtg-card.frame-u { --frame-hi: #4a8fd0; --frame-lo: #1c5793; --bar: #cfe0f1; --box: #e2ebf3; --art: #13304f; }
-.mtg-card.frame-b { --frame-hi: #4a4440; --frame-lo: #1d1a18; --bar: #c2b8af; --box: #dcd6d0; --art: #1b1715; }
-.mtg-card.frame-r { --frame-hi: #e0664a; --frame-lo: #9e321d; --bar: #f2cfbd; --box: #f6e4d9; --art: #4a1a10; }
-.mtg-card.frame-g { --frame-hi: #4f9b61; --frame-lo: #225a35; --bar: #c9e0c8; --box: #e0ebdc; --art: #12321d; }
-.mtg-card.frame-m { --frame-hi: #e6c763; --frame-lo: #b08523; --bar: #f4e6b0; --box: #f6eed2; --art: #4a3812; }
-/* Repeat wins: a silver border for two, gold for three or more -- the
-   special-edition borders, in place of the black one. */
-.mtg-card.border-silver { --edge: linear-gradient(150deg, #e4e8ec, #8f979f 45%, #d3d8dd 70%, #7d858d); }
-.mtg-card.border-gold { --edge: linear-gradient(150deg, #f6e3a1, #b98d2c 45%, #ebd28a 70%, #9c7524); }
-
-.mtg-face {
-  position: relative;
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1.6cqw;
-  padding: 2.2cqw 2.2cqw 2.6cqw;
-  border-radius: 2.4cqw 2.4cqw 1cqw 1cqw;
-  background:
-    radial-gradient(120% 60% at 30% 20%, rgba(255, 255, 255, 0.25), transparent 60%),
-    linear-gradient(160deg, var(--frame-hi), var(--frame-lo));
-  box-shadow: inset 0 0 0 0.5cqw rgba(0, 0, 0, 0.35);
-  overflow: hidden;
-}
-
-/* Title and type lines: the bevelled bars with rounded ends. */
-.mtg-titlebar,
-.mtg-typeline {
-  flex: 0 0 auto;
-  display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 1.5cqw;
-  min-height: 9cqw;
-  padding: 0.6cqw 2.2cqw;
-  border-radius: 2.4cqw / 50%;
-  background: linear-gradient(180deg, var(--bar), color-mix(in srgb, var(--bar) 82%, #000));
-  box-shadow:
-    0 0 0 0.6cqw rgba(0, 0, 0, 0.55),
-    inset 0 0.5cqw 0 rgba(255, 255, 255, 0.55),
-    inset 0 -0.5cqw 0 rgba(0, 0, 0, 0.18);
-  position: relative;
-  z-index: 1;
-}
-.mtg-name {
+  gap: 6px;
   min-width: 0;
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 7.2cqw;
-  line-height: 1.05;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.mtg-cost {
-  flex: 0 0 auto;
-  display: inline-flex;
-  gap: 0.8cqw;
-}
-.mtg-mana {
-  width: 5.6cqw;
-  height: 5.6cqw;
-  border-radius: 50%;
-  background: var(--pip, #cac5c0);
-  box-shadow: inset 0 0 0 0.35cqw rgba(0, 0, 0, 0.45), -0.3cqw 0.4cqw 0 rgba(0, 0, 0, 0.8);
-  display: grid;
-  place-items: center;
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 4.4cqw;
-  line-height: 1;
-  color: #15120d;
-}
-
-.mtg-art {
-  position: relative;
-  flex: 1 1 auto;
-  min-height: 0;
-  margin: -0.6cqw 1.2cqw 0;
-  display: grid;
-  place-items: center;
+  padding: 12px 6px 10px;
+  border: 1px solid var(--medal-edge);
+  border-radius: var(--radius-lg);
+  /* The plinth: level-1 glass with the category's light falling on it
+     from above. */
   background:
-    radial-gradient(70% 70% at 50% 45%, color-mix(in srgb, var(--art) 55%, #fff), var(--art) 75%);
-  box-shadow: 0 0 0 0.7cqw rgba(0, 0, 0, 0.6), inset 0 0 6cqw rgba(0, 0, 0, 0.45);
+    radial-gradient(120% 62% at 50% 0%, color-mix(in srgb, var(--cat) 22%, transparent), transparent 72%),
+    var(--glass-1);
+  box-shadow: inset 0 1px 0 var(--rim-top);
+  text-align: center;
   overflow: hidden;
 }
-.mtg-art .trophy-emblem {
-  width: auto;
-  height: 88%;
-  max-width: 88%;
-  max-height: none;
-  object-fit: contain;
-  filter: drop-shadow(0 1.5cqw 2cqw rgba(0, 0, 0, 0.5));
+.medal-stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
 }
-.mtg-art .trophy-icon {
-  width: 45%;
-  color: color-mix(in srgb, var(--bar) 80%, #fff);
+/* A pool of the category's light under the emblem, so the medal sits on
+   something instead of floating on the tile. */
+.medal-stage::before {
+  content: "";
+  position: absolute;
+  left: 14%;
+  right: 14%;
+  bottom: -2px;
+  height: 14%;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--cat) 55%, transparent), transparent);
+  pointer-events: none;
 }
-.mtg-art .trophy-icon svg { width: 100%; height: auto; display: block; }
-.mtg-art .tc-status { top: 2cqw; left: 2cqw; font-size: max(8px, 4.4cqw); }
-.mtg-art .tc-pin-marker { top: 2cqw; right: 2cqw; width: max(16px, 9cqw); height: max(16px, 9cqw); }
-.mtg-art .tc-pin-marker svg { width: 60%; height: 60%; }
-
-.mtg-type {
-  min-width: 0;
+.medal .trophy-emblem {
+  position: relative;
+  width: min(100%, 96px);
+  max-width: none;
+  height: auto;
+  filter: drop-shadow(0 6px 8px rgba(0, 0, 0, 0.45));
+}
+.medal .trophy-icon {
+  position: relative;
+  width: min(72%, 72px);
+  padding: 12% 0;
+  color: color-mix(in srgb, var(--cat) 60%, var(--muted));
+}
+.medal .trophy-icon svg { width: 100%; height: auto; display: block; }
+.medal .tc-status { top: 0; left: 2px; font-size: 0.6rem; padding: 3px 6px 2px; }
+.medal .tc-pin-marker { top: 0; right: 2px; width: 20px; height: 20px; }
+.medal .tc-pin-marker svg { width: 12px; height: 12px; }
+/* Won more than once: the count, struck on a small plate at the foot. */
+.medal-count {
+  position: absolute;
+  right: 2px;
+  bottom: 0;
+  padding: 2px 6px 1px;
+  border-radius: 999px;
+  background: var(--card-bg);
+  border: 1px solid var(--medal-edge);
   font-family: var(--font-display);
-  font-weight: 600;
-  font-size: 5.8cqw;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-size: 0.86rem;
+  font-weight: 700;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
 }
-.mtg-set {
-  flex: 0 0 auto;
-  width: 6.4cqw;
-  height: 6.4cqw;
-}
-.mtg-set svg { width: 100%; height: 100%; display: block; }
-.mtg-set path,
-.mtg-set rect { stroke: #111; stroke-width: 1.3; paint-order: stroke; }
-.mtg-set.rarity-none path, .mtg-set.rarity-none rect,
-.mtg-set.rarity-common path, .mtg-set.rarity-common rect { fill: #1a1a1a; stroke: rgba(255, 255, 255, 0.7); }
-.mtg-set.rarity-uncommon path, .mtg-set.rarity-uncommon rect { fill: #b7c1cb; }
-.mtg-set.rarity-rare path, .mtg-set.rarity-rare rect { fill: #d7b24a; }
-.mtg-set.rarity-unclaimed path, .mtg-set.rarity-unclaimed rect { fill: #e3772b; }
 
-.mtg-textbox {
-  flex: 0 0 34%;
-  min-height: 0;
-  margin: -0.6cqw 1.2cqw 0;
-  padding: 2.4cqw 3cqw;
+.medal-body {
   display: flex;
   flex-direction: column;
-  gap: 1.6cqw;
-  background: linear-gradient(180deg, var(--box), color-mix(in srgb, var(--box) 90%, #000));
-  box-shadow: 0 0 0 0.7cqw rgba(0, 0, 0, 0.55), inset 0 0 3cqw rgba(0, 0, 0, 0.08);
-  overflow: hidden;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+  min-width: 0;
 }
-.mtg-rules {
-  margin: 0;
-  font-size: 5.6cqw;
-  line-height: 1.22;
+.medal-name {
+  font-family: var(--font-title);
+  font-optical-sizing: auto;
+  font-size: 0.86rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.12;
+  text-wrap: balance;
+  overflow-wrap: anywhere;
 }
-.mtg-flavor {
-  margin: 0;
-  padding-top: 1.4cqw;
-  border-top: 0.3cqw solid rgba(0, 0, 0, 0.18);
-  font-size: 5.2cqw;
-  font-style: italic;
+.medal-holder {
+  font-size: 0.74rem;
   line-height: 1.2;
+  color: var(--muted);
+  overflow-wrap: anywhere;
 }
-.mtg-holder { display: none; }
-
-.mtg-pt {
-  position: absolute;
-  right: 2.6cqw;
-  bottom: 1cqw;
-  min-width: 17cqw;
-  padding: 0.8cqw 2cqw;
-  border-radius: 1.6cqw;
-  background: linear-gradient(180deg, var(--bar), color-mix(in srgb, var(--bar) 82%, #000));
-  box-shadow: 0 0 0 0.6cqw rgba(0, 0, 0, 0.6), inset 0 0.5cqw 0 rgba(255, 255, 255, 0.5);
-  font-family: var(--font-display);
-  font-weight: 700;
-  font-size: 7cqw;
-  line-height: 1;
-  text-align: center;
-  z-index: 1;
+.medal-holder:empty { display: none; }
+/* Only when lifted out. */
+.medal-kind,
+.medal-chips,
+.medal-rules,
+.medal-flavor,
+.medal-collector {
+  display: none;
 }
 
-.mtg-footer {
-  flex: 0 0 auto;
-  display: flex;
-  justify-content: space-between;
-  gap: 2cqw;
-  padding: 1.2cqw 2cqw 2.2cqw;
-  font-family: var(--font-body);
-  font-size: 3.4cqw;
-  line-height: 1;
-  color: rgba(255, 255, 255, 0.82);
-  white-space: nowrap;
-  overflow: hidden;
-}
-.mtg-card.border-silver .mtg-footer,
-.mtg-card.border-gold .mtg-footer { color: #1b1405; }
-
-/* Pocket size: too small to read rules text, so the text box shows who
-   holds the trophy instead, and the title gets a size you can read. */
-@container (max-width: 200px) {
-  .mtg-name { font-size: max(9px, 8.6cqw); }
-  .mtg-cost .mtg-mana:not(:last-child) { display: none; }
-  .mtg-type { display: none; }
-  .mtg-typeline { justify-content: flex-end; min-height: 7cqw; }
-  .mtg-rules, .mtg-flavor { display: none; }
-  .mtg-textbox { flex-basis: 24%; justify-content: center; align-items: center; padding: 1cqw 2cqw; }
-  .mtg-holder {
-    display: block;
-    max-width: 100%;
-    font-family: var(--font-display);
-    font-weight: 700;
-    font-size: max(9px, 9cqw);
-    line-height: 1.1;
-    text-align: center;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .mtg-pt { font-size: max(8px, 8cqw); right: 2cqw; bottom: 0.6cqw; }
-  .mtg-footer { display: none; }
-  .mtg-card { padding-bottom: 3.6%; }
+/* Prestige: the plinth's edge is the metal. Said in words by the tier
+   label on the lifted-out medal and by the count on the shelf. */
+.medal.prestige-2 { --medal-edge: var(--silver); }
+.medal.prestige-3 { --medal-edge: var(--foil); }
+.medal.prestige-2,
+.medal.prestige-3 {
+  box-shadow: inset 0 1px 0 var(--rim-top), inset 0 0 0 1px var(--medal-edge);
 }
 
-/* Not yet won: the card in the binder, but greyed, like a proxy. */
-.mtg-card.is-locked .mtg-face { filter: grayscale(1) contrast(0.92); opacity: 0.6; }
-.mtg-card.is-locked .mtg-holder { font-weight: 600; color: #4a4a4a; }
-
-/* Yours: a foil. A rainbow sheen over the whole face, and the light
-   sweeping across it now and then (the reveal's sweep). */
-.mtg-card.is-foil .mtg-face::before {
+/* Yours: the holder line takes ink and weight, and the plinth catches the
+   foil -- a still glint at rest, following the pointer when the medal
+   tilts (--foil-x, set by initTrophyTilt). Transform only; no loop, since
+   a shelf is a list (web-animation rule 6). */
+.medal.is-held .medal-holder {
+  color: var(--ink);
+  font-weight: 600;
+}
+.medal.is-held::after {
   content: "";
   position: absolute;
-  inset: 0;
+  inset: 0 -60%;
   pointer-events: none;
-  z-index: 2;
-  background: linear-gradient(125deg,
-    rgba(255, 0, 132, 0.16), rgba(255, 210, 0, 0.14) 25%, rgba(0, 255, 170, 0.14) 50%,
-    rgba(0, 160, 255, 0.16) 75%, rgba(200, 0, 255, 0.14));
-  mix-blend-mode: color-dodge;
+  background: var(--foil-holo);
+  mix-blend-mode: screen;
+  opacity: 0.22;
+  transform: translateX(calc(var(--foil-x, -0.3) * 45%));
+  transition: opacity 0.2s ease;
 }
-.mtg-card.is-foil .mtg-face::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 2;
-  background: linear-gradient(115deg, transparent 38%, rgba(255, 255, 255, 0.5) 50%, transparent 62%);
-  mix-blend-mode: overlay;
-  transform: translateX(-160%);
-  animation: reveal-foil-sweep 3.6s ease-in-out infinite;
-}
+.medal.is-held.is-tilting::after { opacity: 0.6; }
 @media (prefers-reduced-motion: reduce) {
-  .mtg-card.is-foil .mtg-face::after { animation: none; display: none; }
+  .medal.is-held::after { transition: none; transform: translateX(-14%); }
 }
 
-/* In the binder, a card is something to pick up. */
-.mtg-card.tc-card {
-  cursor: pointer;
-  border: 0;
-  transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.2s ease;
+/* Not held by anyone yet: the emblem is there to want, but unlit, and the
+   plinth is an empty outline. "Not yet held" says it in words. */
+.medal.is-locked {
+  border-style: dashed;
+  background: transparent;
+  box-shadow: none;
+}
+.medal.is-locked .medal-stage::before { display: none; }
+.medal.is-locked .trophy-emblem,
+.medal.is-locked .trophy-icon {
+  filter: grayscale(1);
+  opacity: 0.38;
+}
+
+/* On a shelf a medal is a button. */
+.medal.tc-card {
+  transition: border-color 0.15s ease;
 }
 @media (hover: hover) and (pointer: fine) {
-  .mtg-card.tc-card:hover { box-shadow: 0 0 0 2px var(--foil), 0 6px 14px rgba(0, 0, 0, 0.5); }
+  .medal.tc-card:hover { border-color: var(--accent); }
 }
-.mtg-card.tc-card:focus-visible { outline: 2px solid var(--foil); outline-offset: 3px; }
-.mtg-card.tc-card.is-tilting { background-image: none; }
+.medal.tc-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+/* initTrophyTilt's generic pointer light would replace the plinth's own
+   background; the medal has its foil instead. */
+.medal.tc-card.is-tilting {
+  background-image:
+    radial-gradient(circle at var(--sheen-x, 50%) var(--sheen-y, 50%), var(--chrome-edge), transparent 55%),
+    radial-gradient(120% 62% at 50% 0%, color-mix(in srgb, var(--cat) 22%, transparent), transparent 72%);
+}
 
-/* The full-size card at the top of the detail sheet. */
+/* Lifted out (the detail sheet): the same medal, large, with everything
+   it has to say. No tile -- the sheet is its surface -- just the light. */
 .tc-detail-art {
-  width: min(100%, 300px);
+  width: 100%;
 }
-.mtg-card.is-inspected {
-  width: min(100%, 300px);
-  margin: 0 auto;
-  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.45);
+.medal.is-inspected {
+  gap: var(--space-3);
+  padding: var(--space-4) 0 0;
+  border: 0;
+  border-radius: 0;
+  background: radial-gradient(70% 46% at 50% 0%, color-mix(in srgb, var(--cat) 26%, transparent), transparent 74%);
+  box-shadow: none;
+  overflow: visible;
 }
+.medal.is-inspected::after { display: none; }
+.medal.is-inspected .trophy-emblem { width: min(62%, 220px); }
+.medal.is-inspected .trophy-icon { width: min(46%, 150px); }
+.medal.is-inspected .tc-status { top: 4px; left: 12%; font-size: 0.72rem; padding: 4px 8px 3px; }
+.medal.is-inspected .tc-pin-marker { top: 4px; right: 12%; width: 26px; height: 26px; }
+.medal.is-inspected .medal-count { right: 16%; font-size: 1.2rem; padding: 3px 10px 2px; }
+.medal.is-inspected .medal-body { gap: 6px; }
+.medal.is-inspected .medal-kind {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 0.86rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.medal.is-inspected .medal-name {
+  font-size: clamp(1.7rem, 7vw, 2.1rem);
+  letter-spacing: -0.02em;
+  line-height: 1.02;
+}
+.medal.is-inspected .medal-holder { font-size: 0.95rem; }
+.medal.is-inspected .medal-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+}
+.medal.is-inspected .medal-chips .tc-rarity { margin-top: 0; }
+.medal.is-inspected .medal-rules {
+  display: block;
+  margin: 4px 0 0;
+  max-width: 38ch;
+  font-size: 0.98rem;
+  line-height: 1.4;
+  text-wrap: pretty;
+}
+.medal.is-inspected .medal-flavor {
+  display: block;
+  margin: 0;
+  max-width: 38ch;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-soft);
+  font-style: italic;
+  font-size: 0.95rem;
+  line-height: 1.35;
+  color: var(--muted);
+  text-wrap: pretty;
+}
+.medal.is-inspected .medal-collector {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--font-display);
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+/* The Trophy Case sheet puts its own heading and chips under the medal
+   (showTrophyDetailModal), so the medal doesn't say them twice there. */
+.tc-detail-art .medal.is-inspected .medal-name,
+.tc-detail-art .medal.is-inspected .medal-chips { display: none; }
 
 /* ---------- The Vault (Players & Decks) ----------
    See the Vault section in app.js. Deck boxes in each player's sleeve
