@@ -2686,6 +2686,7 @@ button.deck-plate-open:active { transform: none; }
 
 .result-row .name {
   font-weight: 600;
+  min-width: 0;
 }
 
 /* Revealed only once the whole pod passes -- see runValidation's allInRange
@@ -2698,6 +2699,91 @@ button.deck-plate-open:active { transform: none; }
 .result-row .power {
   font-variant-numeric: tabular-nums;
   font-weight: 700;
+  /* "In range" used to break across two lines beside a long deck name. */
+  flex: none;
+  margin-left: 12px;
+  white-space: nowrap;
+}
+
+/* The verdict at the top of the results card (renderPodCheckResults): what
+   was decided, then the rule it was judged by as three figures -- the
+   spread, what's allowed, and how many decks landed inside it. */
+.verdict {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  margin-bottom: 10px;
+}
+.verdict.good { background: var(--good-bg); border-color: var(--good-border); color: var(--good); }
+.verdict.bad { background: var(--bad-bg); border-color: var(--bad-border); color: var(--bad); }
+.verdict.warn { background: var(--warn-bg); border-color: var(--warn-border); color: var(--warn); }
+.verdict-mark {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid currentColor;
+}
+.verdict-mark svg { width: 22px; height: 22px; }
+.verdict-text { min-width: 0; }
+.verdict-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+.verdict-detail { margin: 5px 0 0; font-size: 0.86rem; line-height: 1.35; color: var(--ink); }
+.verdict-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 0 16px;
+}
+.verdict-stat {
+  padding: 10px 8px 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  text-align: center;
+}
+.verdict-stat dt {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.verdict-stat dd {
+  margin: 3px 0 0;
+  font-family: var(--font-display);
+  font-size: 1.45rem;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.verdict-stat.is-bad { border-color: var(--bad-border); background: var(--bad-bg); }
+.verdict-stat.is-bad dd { color: var(--bad); }
+/* A new verdict landing (.results-fresh, added only for a check this phone
+   hasn't shown yet): the card's contents deal in from the top, the mark
+   stamps down. Content inside the .card, never the card itself. */
+.results-fresh > * { animation: tab-content-in 0.26s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.results-fresh > .verdict-stats { animation-delay: 60ms; }
+.results-fresh > .gauge-wrap, .results-fresh > .gauge-key { animation-delay: 120ms; }
+.results-fresh > .result-row, .results-fresh > .suggestions { animation-delay: calc(180ms + min(var(--i, 0), 8) * 40ms); }
+.results-fresh .verdict-mark { animation: verdict-stamp 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) 0.1s both; }
+@keyframes verdict-stamp { from { opacity: 0; transform: scale(1.7); } }
+@media (prefers-reduced-motion: reduce) {
+  .results-fresh > *, .results-fresh .verdict-mark { animation: none; }
 }
 
 /* Power spread, drawn -- see buildPowerGauge in app.js. Sits between the
@@ -2705,7 +2791,7 @@ button.deck-plate-open:active { transform: none; }
    as the accessible summary, this is purely additive. */
 .gauge-wrap {
   padding: 34px 8px 0;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 .gauge-track {
   position: relative;
@@ -2719,7 +2805,34 @@ button.deck-plate-open:active { transform: none; }
   bottom: 0;
   left: 0;
   border-radius: 999px;
-  background: var(--good-bg);
+  /* --good-bg alone all but vanished on the track in the dark theme. */
+  background: color-mix(in srgb, var(--good) 38%, var(--good-bg));
+}
+/* Where the allowed band ends, when a deck is past it. */
+.gauge-limit {
+  position: absolute;
+  top: -5px;
+  bottom: -5px;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--muted);
+}
+/* The gauge's key, under it. */
+.gauge-key {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 14px;
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+.gauge-key-swatch {
+  flex: none;
+  width: 18px;
+  height: 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--good) 38%, var(--good-bg));
 }
 .gauge-marker {
   position: absolute;
@@ -4294,6 +4407,8 @@ input.gtu-in-prefilled {
   transform: rotate(var(--a, 90deg)) translateX(var(--hub-r));
   transition: transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1), background-color 0.3s ease, box-shadow 0.3s ease;
 }
+/* On a verdict the lines light in seat order, with the markers. */
+.mat-track.is-measured { transition-delay: 0s, calc(var(--i, 0) * 70ms), calc(var(--i, 0) * 70ms); }
 /* A deck is in: its line takes the seat's sleeve colour (lightened, so the
    dark sleeves still show on leather), and the table reads at a glance. */
 .mat-track.is-sealed { background: color-mix(in srgb, var(--sleeve, #8a8f97) 55%, #e9dcc0); box-shadow: 0 0 5px color-mix(in srgb, var(--sleeve, #8a8f97) 60%, transparent); }
@@ -4446,6 +4561,8 @@ input.gtu-in-prefilled {
   text-overflow: ellipsis;
 }
 .mat-box .ui-icon { width: 11px; height: 11px; flex: none; }
+/* A phone-width zone: "Re-check" and its lock only just fit. */
+.mat.is-narrow .mat-box { gap: 4px; padding: 3px 7px; }
 /* The narrow zone fits "Sealed" or the icon, not both. */
 .mat.is-dense .mat-box .ui-icon { display: none; }
 .mat-box .id-coin { flex: none; width: 12px; height: 12px; }
@@ -4463,13 +4580,26 @@ input.gtu-in-prefilled {
    once a check that still describes the pod has placed a marker on it. */
 .mat-range {
   position: relative;
-  width: 72%;
-  height: 4px;
-  border-radius: 2px;
-  background: linear-gradient(90deg, rgba(201, 161, 63, 0.6) 0 50%, rgba(226, 85, 63, 0.5) 50% 100%);
+  width: 76%;
+  height: 5px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, rgba(201, 161, 63, 0.75) 0 50%, rgba(226, 85, 63, 0.55) 50% 100%);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
   visibility: hidden;
 }
 .mat-range.is-measured { visibility: visible; }
+/* The limit: a notch where gold ends and red begins. */
+.mat-range::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--mat-ink);
+}
 /* The marker is a full-width rail slid by a transform (--m is a % of the
    gauge), with the diamond on its left end: it used to transition `left`,
    a layout property, on every seat at once when a check landed. */
@@ -4477,7 +4607,10 @@ input.gtu-in-prefilled {
   position: absolute;
   inset: 0;
   transform: translateX(var(--m, 0%));
-  transition: transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+  /* Each seat's marker lands a beat after the one before it (--i is the
+     seat's place at the table), so the verdict runs round the mat. */
+  transition: transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) calc(var(--i, 0) * 70ms);
+  z-index: 1;
 }
 .mat-marker::before {
   content: "";
@@ -4494,6 +4627,41 @@ input.gtu-in-prefilled {
 .mat-range.is-over .mat-marker::before { background: #e2553f; box-shadow: 0 0 8px rgba(226, 85, 63, 0.85); }
 @media (prefers-reduced-motion: reduce) {
   .mat-marker { transition: none; }
+}
+
+/* The seat's verdict badge on its top corner: a tick in range, a bang
+   over (shape as well as colour). Pops in a seat at a time with the
+   markers; hidden until a check that still describes the pod. */
+.mat-verdict {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--foil);
+  box-shadow: 0 0 0 2px #150f0b, 0 2px 6px rgba(0, 0, 0, 0.6);
+  color: #1b1405;
+  opacity: 0;
+  scale: 0.4;
+  transition: opacity 0.2s ease, scale 0.32s cubic-bezier(0.34, 1.56, 0.64, 1);
+  pointer-events: none;
+}
+.mat-verdict svg { width: 13px; height: 13px; }
+.mat-verdict-over { display: none; }
+.mat-zone.is-over-range .mat-verdict { background: #e2553f; color: #fff4ee; }
+.mat-zone.is-over-range .mat-verdict-ok { display: none; }
+.mat-zone.is-over-range .mat-verdict-over { display: inline; }
+.mat-zone.is-in-range .mat-verdict, .mat-zone.is-over-range .mat-verdict {
+  opacity: 1;
+  scale: 1;
+  transition-delay: calc(120ms + var(--i, 0) * 70ms);
+}
+@media (prefers-reduced-motion: reduce) {
+  .mat-verdict { transition: none; }
 }
 
 .mat-zone.entering { animation: mat-zone-in 0.28s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
@@ -4550,8 +4718,9 @@ input.gtu-in-prefilled {
 }
 .mat-emblem.is-failed {
   --fire-outer: #a3120c; --fire-mid: #ff3a1c; --fire-core: #ffb08a;
-  --glow: 0.5;
-  --metal: brightness(0.5) sepia(0.5) saturate(1.6) hue-rotate(-18deg);
+  --glow: 0.6;
+  /* Charred, but still readable as the goblet from above. */
+  --metal: brightness(0.62) sepia(0.45) saturate(1.5) hue-rotate(-18deg) drop-shadow(0 0 9px rgba(226, 60, 40, 0.55));
 }
 .mat-emblem:focus-visible { outline: 2px solid var(--foil); outline-offset: 4px; }
 /* The fire's light on the mat, under the goblet. */
@@ -4570,19 +4739,9 @@ input.gtu-in-prefilled {
   pointer-events: none;
 }
 .gob { position: absolute; inset: 0; display: block; }
-/* The two views share the button; .is-top (renderPodHub) shows the one
-   from above. Changing view tilts the bowl away as the standing goblet
-   rises into place. Both pivot on the goblet's centre (108px down). */
-.gob-view {
-  position: absolute;
-  inset: 0;
-  transform-origin: 50% 108px;
-  transition: opacity 0.5s ease, transform 0.7s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-.mat-emblem:not(.is-top) .gob-top { opacity: 0; transform: perspective(420px) rotateX(58deg) scale(0.86); }
-.mat-emblem.is-top .gob-side { opacity: 0; transform: translateY(16px) scale(0.9); }
-
-/* From above: the painting, with the fire laid over its bowl opening. */
+/* Always from above: the painting, with the fire laid over its bowl
+   opening. It doesn't move for the verdict -- the fire, the plaque and the
+   seats tell it (renderPodHub). */
 .gob-top-box {
   position: absolute;
   left: 50%;
@@ -4638,24 +4797,6 @@ input.gtu-in-prefilled {
 .mat-emblem.is-flaring::after { animation: gob-flare 0.9s cubic-bezier(0.2, 0.8, 0.2, 1); }
 @keyframes gob-flare { from { transform: scale(0.35); opacity: 0.95; } to { transform: scale(2.7); opacity: 0; } }
 
-/* Standing: the fire behind the painting, its base inside the bowl. */
-.gob-side .gob-fire-canvas {
-  position: absolute;
-  left: 50%;
-  bottom: 98px;
-  width: 104px;
-  height: 116px;
-  translate: -50% 0;
-}
-/* The painting, its foot on the button's bottom edge. */
-.gob-cup {
-  position: absolute;
-  left: 50%;
-  bottom: 0;
-  height: 124px;
-  aspect-ratio: 183 / 372;
-  translate: -50% 0;
-}
 .gob-art {
   width: 100%;
   height: 100%;
@@ -4664,19 +4805,6 @@ input.gtu-in-prefilled {
   -webkit-user-drag: none;
   user-select: none;
   transition: filter 0.6s ease;
-}
-/* Firelight in the bowl: over its open mouth, stronger as the fire grows. */
-.gob-mouth {
-  position: absolute;
-  left: 8%;
-  right: 8%;
-  top: 0.5%;
-  height: 10%;
-  border-radius: 50%;
-  background: radial-gradient(closest-side, var(--fire-core), color-mix(in srgb, var(--fire-mid) 70%, transparent) 55%, transparent);
-  mix-blend-mode: screen;
-  opacity: min(1, calc(var(--flame) * 0.9));
-  transition: opacity 0.5s ease;
 }
 /* Each set gem: dimmed until its deck is in, then lit in its own colour. */
 .gob-gem {
@@ -4722,14 +4850,14 @@ input.gtu-in-prefilled {
   box-shadow: 0 0 10px 3px color-mix(in srgb, var(--orb) 50%, rgba(255, 240, 210, 0.4));
 }
 @media (prefers-reduced-motion: reduce) {
-  .gob-view, .gob-gem, .gob-mouth, .gob-art, .mat-emblem::before { transition: none; }
+  .gob-gem, .gob-art, .mat-emblem::before { transition: none; }
   .mat-emblem.is-ready::before, .mat-emblem.is-absorbing .gob-ripple, .mat-emblem.is-absorbing .gob-top-box, .mat-emblem.is-flaring::after { animation: none; }
 }
 /* An engraved plaque under the goblet: bare text here sat on the painted
-   rune ring and couldn't be read. One line, tucked up under the rim seen
-   from above (the button is taller than that view of the goblet). */
+   rune ring and couldn't be read. One line, tucked up under the rim (the
+   button is taller than the goblet seen from above). */
 .mat-hub-label {
-  margin-top: 4px;
+  margin-top: calc(var(--gob) / 2 - 56px);
   padding: 5px 11px 4px;
   border-radius: 999px;
   background: rgba(14, 9, 7, 0.82);
@@ -4746,7 +4874,7 @@ input.gtu-in-prefilled {
   color: var(--mat-ink);
   transition: color 0.3s ease, box-shadow 0.3s ease;
 }
-.mat-emblem.is-top + .mat-hub-label { margin-top: calc(var(--gob) / 2 - 56px); }
+
 /* Ready: the plaque is the call to action's caption, so it takes the foil. */
 .mat-emblem.is-ready + .mat-hub-label { color: #f3dc9b; box-shadow: inset 0 0 0 1px rgba(201, 161, 63, 0.7), 0 4px 12px rgba(0, 0, 0, 0.5); }
 .mat-emblem.is-passed + .mat-hub-label { color: #f3dc9b; box-shadow: inset 0 0 0 1px rgba(201, 161, 63, 0.7), 0 4px 12px rgba(0, 0, 0, 0.5); }

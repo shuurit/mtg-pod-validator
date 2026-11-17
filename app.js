@@ -3733,32 +3733,22 @@ const POD_MAT_ART_HTML = '<div class="mat-art" aria-hidden="true">' +
   POD_MAT_MEDALS.map(([c, x, y]) => `<span class="mat-medal" style="--c:var(--pip-${c});left:${x}%;top:${y}%"></span>`).join("") +
   "</div>";
 
-// The goblet in the middle of the mat, in two paintings made for this mat.
-// While decks go in the table looks straight down into it (goblet-top.webp):
-// a fire in the bowl that grows with each sealed deck, and an orb that flies
-// in from a seat each time one seals (launchPodOrb). Once the check has a
-// result it turns to stand on the mat (goblet.webp), burning gold on a
-// pass or guttering crimson on a fail. Both fires are canvas particle fires
-// (createGobletFire); the set gems light one per sealed deck.
-const POD_GOBLET_GEMS = {
-  // Gem centres on each painting, % of its box: W U B R G.
-  side: [["w", 13.7, 20.5], ["u", 29.6, 21.9], ["b", 50, 21.6], ["r", 71.1, 21.8], ["g", 87.7, 21]],
-  top: [["w", 50, 7], ["u", 89, 33.3], ["b", 79.7, 78.1], ["r", 20.1, 78.1], ["g", 11, 33.3]],
-};
-const POD_GOBLET_HTML = (() => {
-  const gems = (view) => POD_GOBLET_GEMS[view].map(([c, x, y], k) =>
-    `<span class="gob-gem" data-i="${k}" style="--c:var(--pip-${c});--i:${k};left:${x}%;top:${y}%"></span>`).join("");
-  return '<span class="gob" aria-hidden="true">' +
-    // From above: the fire is laid over the painting's bowl opening.
-    '<span class="gob-view gob-top"><span class="gob-top-box">' +
-    '<img class="gob-art" src="goblet-top.webp" alt="" draggable="false" decoding="async">' +
-    '<span class="gob-bowl"><canvas class="gob-fire-canvas" data-mode="top"></canvas><span class="gob-ripple"></span></span>' +
-    `${gems("top")}</span></span>` +
-    // Standing: the fire is behind the painting, rising out of the bowl.
-    '<span class="gob-view gob-side"><canvas class="gob-fire-canvas" data-mode="side"></canvas>' +
-    '<span class="gob-cup"><img class="gob-art" src="goblet.webp" alt="" draggable="false" decoding="async">' +
-    `<span class="gob-mouth"></span>${gems("side")}</span></span></span>`;
-})();
+// The goblet in the middle of the mat (goblet-top.webp, painted for it),
+// always seen from straight above: a fire in the bowl that grows with each
+// sealed deck, and an orb that flies in from a seat each time one seals
+// (launchPodOrb). It stays put when the check lands -- the verdict is told
+// by the fire (gold on a pass, guttering crimson on a fail), the plaque
+// under it, and each seat's own gauge and badge. The fire is a canvas
+// particle fire (createGobletFire); the set gems light one per sealed deck.
+// Gem centres on the painting, % of its box: W U B R G.
+const POD_GOBLET_GEMS = [["w", 50, 7], ["u", 89, 33.3], ["b", 79.7, 78.1], ["r", 20.1, 78.1], ["g", 11, 33.3]];
+const POD_GOBLET_HTML = '<span class="gob gob-top" aria-hidden="true"><span class="gob-top-box">' +
+  '<img class="gob-art" src="goblet-top.webp" alt="" draggable="false" decoding="async">' +
+  // The fire is laid over the painting's bowl opening.
+  '<span class="gob-bowl"><canvas class="gob-fire-canvas" data-mode="top"></canvas><span class="gob-ripple"></span></span>' +
+  POD_GOBLET_GEMS.map(([c, x, y], k) =>
+    `<span class="gob-gem" data-i="${k}" style="--c:var(--pip-${c});--i:${k};left:${x}%;top:${y}%"></span>`).join("") +
+  "</span></span>";
 
 // Fire colours per state, hot core to cool edge, as "r,g,b".
 const GOBLET_FIRE_PALETTES = {
@@ -3769,9 +3759,10 @@ const GOBLET_FIRE_PALETTES = {
 };
 
 // A particle fire on a canvas: soft, additive embers that age from a white
-// core through orange to red and fade. "side" rises from the canvas's
-// bottom edge into a flame; "top" is the same fire seen from above, burning
-// outward in a slow swirl from the bowl's floor. Runs only while it's on
+// core through orange to red and fade. The mat uses "top": the fire seen
+// from above, burning outward in a slow swirl from the bowl's floor. ("side"
+// is the same fire as a standing flame, rising from the canvas's bottom
+// edge -- unused since the goblet stopped standing up for the verdict.) Runs only while it's on
 // screen (IntersectionObserver) and the fire's lit; under reduced motion it
 // draws one still frame per change instead.
 function createGobletFire(canvas) {
@@ -4016,7 +4007,7 @@ function launchPodOrb(playerId) {
     void emblem.offsetWidth;
     emblem.classList.add("is-absorbing");
     setTimeout(() => emblem.classList.remove("is-absorbing"), 800);
-    podUi.fires.top.surge();
+    podUi.fire.surge();
   };
   // A timer, not finish events: those never fire in a hidden tab.
   setTimeout(land, duration + 3 * 45);
@@ -4069,12 +4060,8 @@ function buildPodTable(container) {
   ui.tracks = mat.querySelector(".mat-tracks");
   ui.zones = mat.querySelector(".mat-zones");
   ui.emblem = mat.querySelector(".mat-emblem");
-  ui.gems = [...mat.querySelectorAll(".gob-top .gob-gem")];
-  ui.sideGems = [...mat.querySelectorAll(".gob-side .gob-gem")];
-  ui.fires = {
-    top: createGobletFire(mat.querySelector('.gob-fire-canvas[data-mode="top"]')),
-    side: createGobletFire(mat.querySelector('.gob-fire-canvas[data-mode="side"]')),
-  };
+  ui.gems = [...mat.querySelectorAll(".gob-gem")];
+  ui.fire = createGobletFire(mat.querySelector(".gob-fire-canvas"));
   ui.hubLabel = mat.querySelector(".mat-hub-label");
   ui.empty = mat.querySelector(".mat-empty");
   // Beside the card's heading rather than on the mat, where a seven- or
@@ -4482,7 +4469,11 @@ function buildPodZone(playerId) {
   zone.innerHTML =
     '<span class="mat-zone-name"></span>' +
     '<span class="mat-box"><span class="mat-box-text"></span></span>' +
-    '<span class="mat-range" aria-hidden="true"><span class="mat-marker"></span></span>';
+    '<span class="mat-range" aria-hidden="true"><span class="mat-marker"></span></span>' +
+    // The seat's verdict at a glance, by shape as well as colour: a tick in
+    // range, a bang over it (.is-in-range / .is-over-range, updatePodZone).
+    '<span class="mat-verdict" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">' +
+    '<path class="mat-verdict-ok" d="M5.5 12.5l4.5 4.5L18.5 7.5"></path><path class="mat-verdict-over" d="M12 5.5v8M12 18.2v.1"></path></svg></span>';
   zone.addEventListener("click", () => tapPodSeat(playerId));
   const track = document.createElement("span");
   track.className = "mat-track";
@@ -4555,6 +4546,10 @@ function updatePodZone(entry, slot, i) {
     el.classList.toggle("is-measured", measured);
     el.classList.toggle("is-over", over);
   }
+  zone.classList.toggle("is-in-range", measured && !over);
+  zone.classList.toggle("is-over-range", over);
+  // Seat order: the verdict runs round the table a seat at a time.
+  zone.style.setProperty("--i", i);
   if (measured) {
     // 0% is the pod's lightest deck; each point of relative power walks the
     // marker half the gauge. Past the halfway line is over the range.
@@ -4709,9 +4704,9 @@ function removePodZone(id, entry) {
 
 // The goblet in the middle: its fire tracks the table. Each sealed deck
 // lights another gem and lifts the flame; once every deck is in it's the
-// check itself (same action as the button under the mat); then it burns
-// white-gold on a pass or gutters crimson on a fail, and the mat's sigil
-// lights with it.
+// check itself (same action as the button under the mat); then, without
+// moving, it burns white-gold on a pass or gutters crimson on a fail, the
+// mat's sigil lights with it, and the plaque names the spread.
 function renderPodHub() {
   const n = podSelections.length;
   const emblem = podUi.emblem;
@@ -4721,8 +4716,12 @@ function renderPodHub() {
   const failed = !passed && !ready && !podPendingCheck && !!liveTableCheck && !liveTableStale && !liveTableCheck.passed;
   const share = n ? sealed / n : 0;
   let label, action = null, aria, flame, lit;
+  // The spread itself is public (the results card prints it too); only a
+  // deck's own power never is.
+  const spread = liveTableCheck && !liveTableCheck.allExempt && liveTableCheck.spread != null
+    ? `Spread ${formatPower(liveTableCheck.spread)} · ` : "";
   if (passed) {
-    label = "Power spread passes";
+    label = `${spread}${spread ? "passes" : "Pod passes"}`;
     aria = "The goblet burns gold: the power spread passes";
     flame = 1.25;
     lit = 5;
@@ -4738,7 +4737,7 @@ function renderPodHub() {
     flame = 0.9;
     lit = 5;
   } else if (failed) {
-    label = "Spread too wide";
+    label = `${spread}${spread ? "too wide" : "Spread too wide"}`;
     aria = "The goblet gutters: a deck is over this pod's range";
     flame = 0.6;
     lit = 0;
@@ -4754,14 +4753,7 @@ function renderPodHub() {
   emblem.setAttribute("aria-label", aria);
   emblem.style.setProperty("--flame", flame.toFixed(2));
   podUi.gems.forEach((g, i) => g.classList.toggle("is-lit", i < lit));
-  podUi.sideGems.forEach((g, i) => g.classList.toggle("is-lit", i < lit));
-  // From above until the check has a result; then it stands on the mat.
-  const top = !passed && !failed;
-  emblem.classList.toggle("is-top", top);
-  // Only the view on show burns; the other dies down.
-  const fire = { flame, palette: passed ? "pass" : failed ? "fail" : ready || podPendingCheck ? "ready" : "ember", sparks: passed || podPendingCheck, smoke: failed };
-  podUi.fires.top.set(top ? fire : { ...fire, flame: 0 });
-  podUi.fires.side.set(top ? { ...fire, flame: 0 } : fire);
+  podUi.fire.set({ flame, palette: passed ? "pass" : failed ? "fail" : ready || podPendingCheck ? "ready" : "ember", sparks: passed || podPendingCheck, smoke: failed });
   emblem.classList.toggle("is-cold", flame === 0);
   emblem.classList.toggle("is-ready", ready);
   emblem.classList.toggle("is-passed", passed);
@@ -4784,7 +4776,7 @@ function renderPodHub() {
       void emblem.offsetWidth;
       emblem.classList.add("is-flaring");
       setTimeout(() => emblem.classList.remove("is-flaring"), 1200);
-      podUi.fires.side.surge();
+      podUi.fire.surge();
     }
   } else if (!resultKey) podUi.litFor = null;
 }
@@ -5983,6 +5975,13 @@ function buildPowerGauge(judgedEntries, floor, ceiling) {
   zone.className = "gauge-zone";
   zone.style.width = `${Math.min(100, (span / totalSpan) * 100)}%`;
   track.appendChild(zone);
+  // The limit itself, where the band ends -- only when something's past it.
+  if (totalSpan > span) {
+    const limit = document.createElement("span");
+    limit.className = "gauge-limit";
+    limit.style.left = zone.style.width;
+    track.appendChild(limit);
+  }
 
   // Decks close together used to print their names on top of each other
   // ("Red Becca Mate Michelle"). Each label takes the lowest row where it
@@ -6038,6 +6037,8 @@ function buildPowerGauge(judgedEntries, floor, ceiling) {
 // passes it names players and whether they're in range, never their decks
 // or raw power -- the gauge plots each deck's distance above the floor
 // (the relay's `rel`), which is all the gauge ever showed.
+let podResultsShownCheckId; // undefined until the first render with a check
+let podResultsFreshTimer = null;
 function renderPodCheckResults() {
   const resultsSection = document.getElementById("results-section");
   const resultsDiv = document.getElementById("results");
@@ -6051,27 +6052,80 @@ function renderPodCheckResults() {
   resultsDiv.dataset.signature = signature;
   resultsDiv.innerHTML = "";
   resultsSection.hidden = !check;
-  if (!check) return;
-
-  const banner = document.createElement("div");
-  if (check.allExempt) {
-    banner.className = "banner warn";
-    banner.textContent = "Every deck here is new — nothing to validate yet. Go ahead and play!";
-  } else {
-    const exemptNote = check.exemptCount > 0
-      ? ` (${check.exemptCount} new deck${check.exemptCount === 1 ? "" : "s"} exempt — no games logged yet.)`
-      : "";
-    banner.className = "banner " + (check.passed ? "good" : "bad");
-    banner.textContent = (check.passed
-      ? `All decks are within range (spread: ${formatPower(check.spread)}).`
-      : `Spread is ${formatPower(check.spread)} — outside the ±${check.tolerance} target. Some decks need to change.`) + exemptNote;
+  if (!check) {
+    // Seen "no check": the next one to land is new, and deals in.
+    if (liveTableLoaded) podResultsShownCheckId = null;
+    return;
   }
-  resultsDiv.appendChild(banner);
+
+  // A new verdict landing on this phone deals the card in (.results-fresh);
+  // opening the app onto an old one, or a poll's rebuild, doesn't.
+  const fresh = podResultsShownCheckId !== undefined && podResultsShownCheckId !== check.id;
+  podResultsShownCheckId = check.id;
+  resultsDiv.classList.remove("results-fresh");
+  if (fresh && !REDUCED_MOTION.matches) {
+    void resultsDiv.offsetWidth;
+    resultsDiv.classList.add("results-fresh");
+    clearTimeout(podResultsFreshTimer);
+    podResultsFreshTimer = setTimeout(() => resultsDiv.classList.remove("results-fresh"), 1200);
+  }
 
   const nameOf = id => podPlayers.find(p => String(p.id) === String(id))?.name || "A player";
   const entries = check.entries.map(e => ({ ...e, playerName: nameOf(e.playerId) }));
   const judged = entries.filter(e => !e.exempt).map(e => ({ ...e, power: e.rel }));
-  if (judged.length > 0) resultsDiv.appendChild(buildPowerGauge(judged, 0, check.tolerance));
+
+  // The verdict and the rule it was judged by: the spread against the
+  // allowed range, and how many decks landed inside it.
+  const tone = check.allExempt ? "warn" : check.passed ? "good" : "bad";
+  const verdict = document.createElement("div");
+  verdict.className = `verdict ${tone}`;
+  const exemptNote = check.exemptCount > 0
+    ? ` ${check.exemptCount} new deck${check.exemptCount === 1 ? " is" : "s are"} exempt (no games logged yet).`
+    : "";
+  const title = check.allExempt ? "Nothing to check" : check.passed ? "Pod passes" : "Spread too wide";
+  const detail = check.allExempt
+    ? "Every deck here is new, so there's nothing to validate yet. Go ahead and play!"
+    : (check.passed
+      ? "Every deck is within range of the lightest one."
+      : "Some decks need to change before this pod plays.") + exemptNote;
+  const mark = tone === "good" ? '<path d="M5.5 12.5l4.5 4.5L18.5 7.5"></path>'
+    : tone === "bad" ? '<path d="M12 5.5v8M12 18.2v.1"></path>'
+    : '<path d="M12 6v6l3.5 2"></path>';
+  verdict.innerHTML =
+    `<span class="verdict-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">${mark}</svg></span>` +
+    '<div class="verdict-text"><p class="verdict-title"></p><p class="verdict-detail"></p></div>';
+  verdict.querySelector(".verdict-title").textContent = title;
+  verdict.querySelector(".verdict-detail").textContent = detail;
+  resultsDiv.appendChild(verdict);
+
+  if (!check.allExempt) {
+    const inRange = judged.filter(e => e.compatible).length;
+    const stats = document.createElement("dl");
+    stats.className = "verdict-stats";
+    for (const [label, value, bad] of [
+      ["Spread", formatPower(check.spread), !check.passed],
+      ["Allowed", `±${check.tolerance}`, false],
+      ["In range", `${inRange} of ${judged.length}`, inRange < judged.length],
+    ]) {
+      const stat = document.createElement("div");
+      stat.className = "verdict-stat" + (bad ? " is-bad" : "");
+      const dt = document.createElement("dt");
+      dt.textContent = label;
+      const dd = document.createElement("dd");
+      dd.textContent = value;
+      stat.append(dt, dd);
+      stats.appendChild(stat);
+    }
+    resultsDiv.appendChild(stats);
+  }
+
+  if (judged.length > 0) {
+    resultsDiv.appendChild(buildPowerGauge(judged, 0, check.tolerance));
+    const key = document.createElement("p");
+    key.className = "gauge-key";
+    key.innerHTML = `<span class="gauge-key-swatch" aria-hidden="true"></span>In range: within ${check.tolerance} of the lightest deck`;
+    resultsDiv.appendChild(key);
+  }
 
   for (const entry of entries) {
     const row = document.createElement("div");
@@ -6102,6 +6156,8 @@ function renderPodCheckResults() {
     power.textContent = entry.exempt
       ? "🆕 New deck — exempt this game"
       : (entry.compatible ? "✓ In range" : `⚠ Over by ${formatPower(entry.overBy)}`);
+    // Deal-in order on a fresh verdict (.results-fresh).
+    row.style.setProperty("--i", entries.indexOf(entry));
 
     row.appendChild(name);
     row.appendChild(power);
