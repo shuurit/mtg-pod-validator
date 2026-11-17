@@ -232,8 +232,8 @@
     --rim-top: rgba(255, 244, 214, 0.16);
     --rim-glow: rgba(255, 244, 214, 0.045);
     --glass-1: rgba(239, 230, 210, 0.055);
-    --glass-tint: 13%;
-    --ambient-mix: 30%;
+    --glass-tint: 10%;
+    --ambient-mix: 22%;
     --lift-1: 0 1px 2px rgba(0, 0, 0, 0.4);
     --lift-2: 0 16px 40px -18px rgba(0, 0, 0, 0.7);
     --lift-3: 0 32px 70px -24px rgba(0, 0, 0, 0.85);
@@ -281,8 +281,8 @@
   --rim-top: rgba(255, 244, 214, 0.16);
   --rim-glow: rgba(255, 244, 214, 0.045);
   --glass-1: rgba(239, 230, 210, 0.055);
-  --glass-tint: 13%;
-  --ambient-mix: 30%;
+  --glass-tint: 10%;
+  --ambient-mix: 22%;
   --lift-1: 0 1px 2px rgba(0, 0, 0, 0.4);
   --lift-2: 0 16px 40px -18px rgba(0, 0, 0, 0.7);
   --lift-3: 0 32px 70px -24px rgba(0, 0, 0, 0.85);
@@ -396,7 +396,7 @@ body {
   background:
     radial-gradient(900px 520px at 10% -8%, color-mix(in srgb, var(--id-1) var(--ambient-mix), transparent), transparent 62%),
     radial-gradient(820px 480px at 100% 2%, color-mix(in srgb, var(--id-2) var(--ambient-mix), transparent), transparent 60%),
-    radial-gradient(700px 620px at 50% 46%, color-mix(in srgb, var(--id-3) 9%, transparent), transparent 66%);
+    radial-gradient(1200px 900px at 50% 50%, color-mix(in srgb, var(--id-3) 6%, transparent), transparent 70%);
   background-repeat: no-repeat;
   color: var(--ink);
   line-height: 1.5;
@@ -6381,6 +6381,160 @@ header h1,
   text-wrap: pretty;
 }
 
+/* ---------- Foil Glass: Tonight, Standings, shared inner surfaces ----------
+   The same tokens applied to the screens that aren't a deck or a verdict.
+   Each gets one thing made big: Tonight's is the call to build a pod,
+   Standings' is the leader. Everything else here is the level-1 glass
+   (--glass-1: a tint and a lit rim, no blur) that rows and wells inside
+   a panel are made of. */
+
+/* Rows and wells that used to be an outline on nothing. */
+.gtu-game-card,
+.proposal-card,
+.tonight-item:not(.tonight-item-done):not(.tonight-item-loading),
+.tonight-stat,
+.tonight-board {
+  background: var(--glass-1);
+  box-shadow: inset 0 1px 0 var(--rim-top);
+}
+@media (hover: hover) and (pointer: fine) {
+  .tonight-item:not(.tonight-item-done):not(.tonight-item-loading):hover,
+  .tonight-board:hover {
+    background: var(--glass-1);
+  }
+}
+
+/* Segmented controls: a glass well with a lit thumb sliding in it. */
+.view-toggle {
+  border-radius: var(--radius-md);
+  background: var(--glass-1);
+  box-shadow: inset 0 1px 0 var(--rim-top);
+}
+/* The well lightens the ground a little, which took muted labels just
+   under 4.5:1 in the dark theme; unselected segments sit nearer ink. */
+.view-toggle > .view-toggle-btn:not(.active) {
+  color: color-mix(in srgb, var(--ink) 70%, var(--muted));
+}
+.segment-thumb {
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0) 60%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+
+/* Tonight's hero: the one action, as the brightest piece of glass on the
+   screen. No backdrop blur -- it's a button that scales under a press, and
+   a blur that moves is recomputed every frame (web-animation rule 5) -- so
+   it's the heavier chrome stock, washed with the identity in view and
+   edged in foil. The light crosses it once on hover or keyboard focus. */
+.tonight-action {
+  position: relative;
+  overflow: hidden;
+  padding: 24px 18px;
+  border-color: color-mix(in srgb, var(--foil) 70%, var(--border));
+  background:
+    linear-gradient(120deg, color-mix(in srgb, var(--id-1) 24%, transparent), color-mix(in srgb, var(--id-2) 20%, transparent)),
+    var(--chrome-bg);
+  box-shadow: inset 0 1px 0 var(--rim-top), var(--lift-2);
+}
+@media (hover: hover) and (pointer: fine) {
+  .tonight-action:hover {
+    border-color: var(--foil);
+    background:
+      linear-gradient(120deg, color-mix(in srgb, var(--id-1) 30%, transparent), color-mix(in srgb, var(--id-2) 26%, transparent)),
+      var(--chrome-bg);
+  }
+}
+.tonight-action-title {
+  font-family: var(--font-title);
+  font-optical-sizing: auto;
+  font-size: clamp(1.75rem, 7.6vw, 2.3rem);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1;
+  text-transform: none;
+}
+.tonight-action-sub {
+  margin-top: 6px;
+  font-size: 0.88rem;
+  /* Ink, not muted: this surface is tinted, and it's the line that says
+     what the big button does. */
+  color: var(--ink);
+}
+.tonight-action-icon svg {
+  width: 38px;
+  height: 38px;
+}
+.tonight-action::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: var(--foil-sheen);
+  transform: translateX(-110%);
+}
+@media (hover: hover) and (pointer: fine) {
+  .tonight-action:hover::after { animation: verdict-foil 0.8s ease-in-out both; }
+}
+.tonight-action:focus-visible::after { animation: verdict-foil 0.8s ease-in-out both; }
+@media (prefers-reduced-motion: reduce) {
+  .tonight-action::after { display: none; }
+}
+/* Your season, as numbers you can read from your seat. */
+.tonight-stat {
+  border-radius: var(--radius-lg);
+}
+.tonight-stat-value {
+  font-size: clamp(2.6rem, 11vw, 3.4rem);
+  line-height: 0.9;
+  letter-spacing: -0.01em;
+}
+.tonight-board {
+  border-radius: var(--radius-lg);
+}
+
+/* Standings' hero: first place (.is-leader, set by rank in
+   buildWinRateCard). The ruled row becomes a foil-edged plate with the
+   rank and the win rate at headline size; everyone below stays a ruled
+   row, so the list still reads as a list. */
+button.wr-card.is-leader {
+  margin: 0 0 8px;
+  padding: 16px 14px 14px;
+  border: 1px solid color-mix(in srgb, var(--foil) 65%, var(--border));
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(120deg, color-mix(in srgb, var(--foil) 16%, transparent), transparent 62%),
+    var(--glass-1);
+  box-shadow: inset 0 1px 0 var(--rim-top);
+}
+@media (hover: hover) and (pointer: fine) {
+  button.wr-card.is-leader:hover {
+    background:
+      linear-gradient(120deg, color-mix(in srgb, var(--foil) 24%, transparent), transparent 62%),
+      var(--glass-1);
+  }
+}
+.wr-card.is-leader .wr-card-header { align-items: center; }
+.wr-card.is-leader .wr-rank {
+  font-size: 3rem;
+  line-height: 0.8;
+  min-width: 0.9em;
+  color: var(--accent);
+}
+.wr-card.is-leader .wr-name { font-size: 1.55rem; line-height: 1; }
+.wr-card.is-leader .wr-metric-value { font-size: 2.1rem; line-height: 0.9; }
+.wr-card.is-leader .wr-meter { margin-top: 12px; }
+/* Ink for the small print on the plate: its foil wash lifts the ground
+   enough that muted text measured under 4.5:1 there in the dark theme. */
+.wr-card.is-leader .wr-record,
+.wr-card.is-leader .wr-metric-secondary { color: var(--ink); }
+.wr-card.is-leader .wr-bar { height: 6px; }
+.wr-card.is-leader .wr-bar-fill {
+  background: linear-gradient(90deg, var(--accent), var(--accent-strong));
+}
+/* The win-rate bars sit in a glass channel rather than on a flat rule. */
+.wr-bar {
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.18);
+}
+
 /* ---------- Reduced transparency / increased contrast ----------
    The translucent materials (cards over the tab artwork, the tab bar, the
    avatar menu, the scroll edge) go solid for anyone who's asked their
@@ -6425,7 +6579,8 @@ header h1,
      content wins. The tier tags and the numbers still say everything. */
   .md-tile-art::after,
   .vet-plate::after,
-  .verdict::after {
+  .verdict::after,
+  .tonight-action::after {
     display: none;
   }
   body {

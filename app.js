@@ -7509,7 +7509,9 @@ const TREND_CLASS = { up: "trend-up", down: "trend-down", steady: "trend-steady"
 function buildWinRateCard(row, rank, sortKey, direction, race) {
   const card = document.createElement("button");
   card.type = "button";
-  card.className = "wr-card";
+  // First place gets the leader's plate (.is-leader): by rank, not by row
+  // position, so sorting the list upside down doesn't crown last place.
+  card.className = rank === 1 ? "wr-card is-leader" : "wr-card";
   card.dataset.flipKey = row.name;
   card.addEventListener("click", () => openDossier(row.name, card));
 
