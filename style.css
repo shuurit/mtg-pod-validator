@@ -2124,6 +2124,10 @@ textarea:focus-visible, select:focus-visible, input:focus-visible {
 .row[hidden] { display: none; }
 
 button {
+  /* Buttons don't inherit the page's font by default: without this every
+     label fell back to the browser's own (Arial on most desktops) beside
+     body text in IBM Plex Sans. Variants that name a face still win. */
+  font-family: inherit;
   border: 1px solid var(--border);
   background: var(--card-bg);
   color: var(--ink);
