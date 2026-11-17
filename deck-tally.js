@@ -78,6 +78,28 @@ function compareDecksByGames(a, b, direction = "desc", countOf = d => d.gamesLog
   return (countOf(a) - countOf(b)) * dir || a.name.localeCompare(b.name);
 }
 
+// Veteran foil: the material a deck has earned by being played, from its
+// game count. Index is the tier (0-4), used as the vet-<n> class; `at` is
+// the count that reaches it. Tuned for a pod's pace -- thirty games on one
+// deck is a deck someone loves.
+const VETERAN_TIERS = [
+  { name: "Sleeved", at: 0 },
+  { name: "Played", at: 1 },
+  { name: "Etched", at: 5 },
+  { name: "Foil", at: 15 },
+  { name: "Holo", at: 30 },
+];
+
+// { tier, name, next } for a game count; next is { name, in } for the tier
+// above (how many more games reach it), or null at the top.
+function veteranTier(games) {
+  const n = Number.isFinite(games) && games > 0 ? Math.floor(games) : 0;
+  let tier = 0;
+  for (let k = 1; k < VETERAN_TIERS.length; k++) if (n >= VETERAN_TIERS[k].at) tier = k;
+  const up = VETERAN_TIERS[tier + 1];
+  return { tier, name: VETERAN_TIERS[tier].name, next: up ? { name: up.name, in: up.at - n } : null };
+}
+
 if (typeof module !== "undefined") {
-  module.exports = { indexRowsByDeck, rowsForDeck, computeDeckTally, formatWinRate, compareDecksByGames };
+  module.exports = { indexRowsByDeck, rowsForDeck, computeDeckTally, formatWinRate, compareDecksByGames, VETERAN_TIERS, veteranTier };
 }

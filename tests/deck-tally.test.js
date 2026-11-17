@@ -104,3 +104,20 @@ test("a deck missing a games count sorts as zero", () => {
   const decks = [{ name: "B", gamesLogged: 2 }, { name: "A" }];
   assert.deepEqual(decks.sort((a, b) => compareDecksByGames(a, b)).map(d => d.name), ["B", "A"]);
 });
+
+test("veteranTier: tiers are reached at their own counts, with the next one named", () => {
+  const { veteranTier } = require("../deck-tally.js");
+  assert.deepStrictEqual(veteranTier(0), { tier: 0, name: "Sleeved", next: { name: "Played", in: 1 } });
+  assert.deepStrictEqual(veteranTier(1), { tier: 1, name: "Played", next: { name: "Etched", in: 4 } });
+  assert.strictEqual(veteranTier(4).tier, 1);
+  assert.strictEqual(veteranTier(5).tier, 2);
+  assert.deepStrictEqual(veteranTier(14), { tier: 2, name: "Etched", next: { name: "Foil", in: 1 } });
+  assert.strictEqual(veteranTier(15).name, "Foil");
+  assert.deepStrictEqual(veteranTier(30), { tier: 4, name: "Holo", next: null });
+  assert.strictEqual(veteranTier(400).tier, 4);
+});
+
+test("veteranTier: a missing or nonsense count is a fresh deck", () => {
+  const { veteranTier } = require("../deck-tally.js");
+  for (const bad of [undefined, null, NaN, -3, "x"]) assert.strictEqual(veteranTier(bad).tier, 0);
+});
