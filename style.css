@@ -4190,7 +4190,7 @@ input.gtu-in-prefilled {
   position: relative;
   width: 100%;
   max-width: 460px;
-  aspect-ratio: 1 / 1.08;
+  aspect-ratio: 1 / 1.12;
   margin: 4px auto 14px;
   border-radius: var(--radius-lg);
   background: var(--mat);
@@ -4200,11 +4200,19 @@ input.gtu-in-prefilled {
   /* Zone size: layoutPodMat reads the same numbers (POD_ZONE). */
   --zone-w: 108px;
   --zone-h: 80px;
+  /* The goblet seen from above, and where the ley lines start under its
+     rim (layoutPodMat writes --hub-r). */
+  --gob: 132px;
+  --hub-r: 58px;
 }
+/* A phone-width mat (layoutPodMat): side seats and the goblet used to
+   overlap by 20px each side at 390px, hiding half of "Sealed". Both give
+   a little. */
+.mat.is-narrow { --zone-w: 98px; --gob: 108px; }
 /* Taller for bigger pods (layoutPodMat), so evenly spaced zones keep
    clear of each other round the edge. */
 .mat.is-tall { aspect-ratio: 1 / 1.22; }
-.mat.is-dense { aspect-ratio: 1 / 1.36; --zone-w: 84px; --zone-h: 74px; }
+.mat.is-dense, .mat.is-dense.is-narrow { aspect-ratio: 1 / 1.36; --zone-w: 84px; --zone-h: 74px; }
 /* The art at its own 2:3 shape, full width, centred: every mat is wider
    than 2:3 is, so it always covers, and POD_MAT_MEDALS' % spots stay on
    the painted medallions. A dark edge keeps the zones readable over it. */
@@ -4258,6 +4266,15 @@ input.gtu-in-prefilled {
 @media (prefers-reduced-motion: reduce) {
   .mat-art::after, .mat-medal { transition: none; }
 }
+/* "Whole mat" <-> "My corner" (renderPodCorner adds .view-in to whichever
+   just came on, only when the view actually changed): the incoming one
+   settles in rather than snapping. Neither is a .card, so no backdrop blur
+   is being re-run (web-animation rule 5). */
+.mat.view-in, .corner.view-in { animation: pod-view-in 0.26s cubic-bezier(0.2, 0.8, 0.2, 1); }
+@keyframes pod-view-in { from { opacity: 0; transform: translateY(8px) scale(0.985); } }
+@media (prefers-reduced-motion: reduce) {
+  .mat.view-in, .corner.view-in { animation: pod-fade-in 0.15s ease; }
+}
 
 /* ---- ley lines ----
    One per seat, from the emblem's edge (translateX past POD_HUB_R) toward its
@@ -4274,13 +4291,41 @@ input.gtu-in-prefilled {
   margin-top: -1px;
   background: var(--mat-line);
   transform-origin: 0 50%;
-  transform: rotate(var(--a, 90deg)) translateX(48px);
-  transition: transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1), background-color 0.3s ease;
+  transform: rotate(var(--a, 90deg)) translateX(var(--hub-r));
+  transition: transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1), background-color 0.3s ease, box-shadow 0.3s ease;
 }
+/* A deck is in: its line takes the seat's sleeve colour (lightened, so the
+   dark sleeves still show on leather), and the table reads at a glance. */
+.mat-track.is-sealed { background: color-mix(in srgb, var(--sleeve, #8a8f97) 55%, #e9dcc0); box-shadow: 0 0 5px color-mix(in srgb, var(--sleeve, #8a8f97) 60%, transparent); }
 .mat-track.is-measured { background: rgba(201, 161, 63, 0.75); box-shadow: 0 0 6px rgba(201, 161, 63, 0.5); }
 .mat-track.is-over { background: rgba(226, 85, 63, 0.85); box-shadow: 0 0 6px rgba(226, 85, 63, 0.55); }
+/* Checking the spread (renderPodHub sets .mat.is-checking): a mote of light
+   runs each line from its seat into the goblet, seats out of step (--i).
+   Lasts only as long as the relay takes -- a moment, not a standing loop. */
+.mat-track::after {
+  content: "";
+  position: absolute;
+  left: -9px;
+  top: -2px;
+  width: 18px;
+  height: 6px;
+  border-radius: 3px;
+  background: radial-gradient(closest-side, #fff6dc, rgba(255, 194, 74, 0.7) 55%, transparent);
+  opacity: 0;
+  pointer-events: none;
+}
+.mat.is-checking .mat-track::after { animation: mat-track-run 0.85s cubic-bezier(0.45, 0, 0.75, 0.55) infinite; animation-delay: calc(var(--i, 0) * -0.21s); }
+@keyframes mat-track-run {
+  0% { transform: translateX(var(--len, 40px)); opacity: 0; }
+  20% { opacity: 1; }
+  85% { opacity: 1; }
+  100% { transform: translateX(0); opacity: 0; }
+}
 @media (prefers-reduced-motion: reduce) {
   .mat-track { transition: none; }
+  /* No motes; the lines just hold gold while the check is out. */
+  .mat.is-checking .mat-track::after { animation: none; }
+  .mat.is-checking .mat-track { background: rgba(201, 161, 63, 0.6); }
 }
 
 /* ---- command zones ---- */
@@ -4299,23 +4344,42 @@ input.gtu-in-prefilled {
   gap: 5px;
   border: 1.5px dashed var(--mat-line-strong);
   border-radius: 10px;
-  /* Opaque, so the ley line running under it doesn't show through. */
-  background: var(--mat);
-  box-shadow: none;
+  /* An empty seat is a ghost of a plate: the leather shows faintly through
+     it (its ley line stops at the zone's edge -- layoutPodMat -- so nothing
+     runs underneath). It turns into a solid plate once a deck is in. */
+  background: rgba(21, 15, 11, 0.8);
+  box-shadow: 0 6px 14px -4px rgba(0, 0, 0, 0.55);
   color: var(--mat-ink);
   font: inherit;
   transform: translate(var(--x, 50%), var(--y, 50%)) translate(-50%, -50%) rotate(var(--r, 0deg));
-  transition: transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1), border-color 0.15s ease, box-shadow 0.15s ease;
+  /* The press is on `scale`, its own property: `transform` is the zone's
+     place on the mat, and a press that rewrote it restarted the glide. */
+  transition: transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1), scale 0.12s ease, opacity 0.2s ease, border-color 0.15s ease, box-shadow 0.2s ease, background-color 0.2s ease;
 }
-.mat-zone:active { transform: translate(var(--x, 50%), var(--y, 50%)) translate(-50%, -50%) rotate(var(--r, 0deg)) translateY(1px); }
+.mat-zone:active { scale: 0.96; }
 .mat-zone:focus-visible { outline: 2px solid var(--foil); outline-offset: 2px; }
 @media (hover: hover) and (pointer: fine) {
   .mat-zone:hover { border-color: var(--mat-ink); }
 }
-.mat-zone.is-sealed, .mat-zone.is-revealed { border-style: solid; border-color: rgba(201, 161, 63, 0.65); }
-.mat-zone.is-flagged { border-style: solid; border-color: #e2553f; background: #2a1c17; }
+/* A plate: lit from above, a gold rim, and the seat's sleeve colour as a
+   glow underneath it. */
+.mat-zone.is-sealed, .mat-zone.is-revealed {
+  border-style: solid;
+  border-color: rgba(201, 161, 63, 0.65);
+  background: linear-gradient(180deg, #2a1e16, #17100c 70%);
+  box-shadow: inset 0 1px 0 rgba(255, 236, 200, 0.1), 0 8px 16px -6px rgba(0, 0, 0, 0.7), 0 10px 22px -8px color-mix(in srgb, var(--sleeve, #4a4f57) 85%, transparent);
+}
+.mat-zone.is-revealed { border-color: rgba(243, 220, 155, 0.9); }
+.mat-zone.is-flagged {
+  border-style: solid;
+  border-color: #e2553f;
+  background: linear-gradient(180deg, #3a1f18, #24130f 70%);
+  box-shadow: inset 0 1px 0 rgba(255, 200, 180, 0.1), 0 8px 18px -6px rgba(226, 60, 40, 0.5);
+}
+/* Your own seat: the name in foil. */
+.mat-zone.is-mine .mat-zone-name { color: #f3dc9b; }
 /* The seat whose deck panel is open on this phone. */
-.mat-zone.is-focus { border-color: var(--mat-ink); box-shadow: 0 0 0 3px rgba(239, 230, 210, 0.22); }
+.mat-zone.is-focus { border-color: var(--mat-ink); box-shadow: 0 0 0 3px rgba(239, 230, 210, 0.22), 0 8px 16px -6px rgba(0, 0, 0, 0.7); }
 .mat.has-focus .mat-zone:not(.is-focus) { opacity: 0.55; }
 /* Someone else's self-picked seat (podSeatLocked): still a settled seat,
    not a greyed-out broken one -- tapPodSeat explains the lock. */
@@ -4345,12 +4409,35 @@ input.gtu-in-prefilled {
   min-height: 24px;
   padding: 3px 9px;
   border-radius: 6px;
-  background: var(--sleeve, #4a4f57);
+  /* Light across the lid, over the sleeve colour. */
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0) 55%) var(--sleeve, #4a4f57);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16), inset 0 -5px 0 rgba(0, 0, 0, 0.22), 0 4px 10px rgba(0, 0, 0, 0.45);
   color: #f5efe2;
   font-size: 0.72rem;
   font-weight: 600;
   line-height: 1.1;
+  /* For the seal shine below. */
+  position: relative;
+  overflow: hidden;
+}
+/* A deck going in (renderPodZones / renderPodCorner add .just-sealed for
+   that one change): the box drops into the zone and light crosses its lid
+   once -- the one-shot shine, not the looping foil sweep. */
+.mat-box.just-sealed { animation: mat-box-seal 0.36s cubic-bezier(0.2, 0.8, 0.2, 1); }
+@keyframes mat-box-seal { from { opacity: 0.3; transform: translateY(-9px) scale(1.1); } }
+.mat-box.just-sealed::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(115deg, transparent 38%, rgba(255, 255, 255, 0.5) 50%, transparent 62%);
+  transform: translateX(-160%);
+  animation: mat-box-shine 0.7s ease-out 0.18s;
+  pointer-events: none;
+}
+@keyframes mat-box-shine { to { transform: translateX(160%); } }
+@media (prefers-reduced-motion: reduce) {
+  .mat-box.just-sealed { animation: none; }
+  .mat-box.just-sealed::after { display: none; }
 }
 .mat-box-text {
   min-width: 0;
@@ -4369,7 +4456,7 @@ input.gtu-in-prefilled {
   color: var(--mat-muted);
   font-weight: 500;
 }
-.mat-zone.is-flagged .mat-box { background: #8f2a20; }
+.mat-zone.is-flagged .mat-box, .corner-zone.is-flagged .mat-box { background: linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0) 55%) #8f2a20; }
 
 /* The seat's range gauge (updatePodZone): the left (gold) half is within
    ±1 of the pod's lightest deck, the right (red) half is over. Only drawn
@@ -4383,28 +4470,38 @@ input.gtu-in-prefilled {
   visibility: hidden;
 }
 .mat-range.is-measured { visibility: visible; }
+/* The marker is a full-width rail slid by a transform (--m is a % of the
+   gauge), with the diamond on its left end: it used to transition `left`,
+   a layout property, on every seat at once when a check landed. */
 .mat-marker {
   position: absolute;
+  inset: 0;
+  transform: translateX(var(--m, 0%));
+  transition: transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.mat-marker::before {
+  content: "";
+  position: absolute;
   top: 50%;
-  left: var(--m, 0%);
+  left: 0;
   width: 10px;
   height: 10px;
   margin: -5px 0 0 -5px;
   background: var(--foil);
   box-shadow: 0 0 8px rgba(201, 161, 63, 0.8);
   transform: rotate(45deg);
-  transition: left 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
-.mat-range.is-over .mat-marker { background: #e2553f; box-shadow: 0 0 8px rgba(226, 85, 63, 0.85); }
+.mat-range.is-over .mat-marker::before { background: #e2553f; box-shadow: 0 0 8px rgba(226, 85, 63, 0.85); }
 @media (prefers-reduced-motion: reduce) {
   .mat-marker { transition: none; }
 }
 
 .mat-zone.entering { animation: mat-zone-in 0.28s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
 .mat-zone.leaving { animation: mat-zone-out 0.2s ease-in both; pointer-events: none; }
-/* opacity only: transform belongs to the zone's place on the mat. */
-@keyframes mat-zone-in { from { opacity: 0; } }
-@keyframes mat-zone-out { to { opacity: 0; } }
+/* opacity and `scale` only: transform belongs to the zone's place on the
+   mat. */
+@keyframes mat-zone-in { from { opacity: 0; scale: 0.86; } }
+@keyframes mat-zone-out { to { opacity: 0; scale: 0.9; } }
 @media (prefers-reduced-motion: reduce) {
   .mat-zone { transition: none; }
   .mat-zone.entering, .mat-zone.leaving { animation: none; }
@@ -4490,7 +4587,7 @@ input.gtu-in-prefilled {
   position: absolute;
   left: 50%;
   top: 108px;
-  width: 132px;
+  width: var(--gob);
   aspect-ratio: 390 / 394;
   translate: -50% -50%;
 }
@@ -4522,6 +4619,24 @@ input.gtu-in-prefilled {
 @keyframes gob-ripple { from { transform: scale(0.15); opacity: 0.95; } to { transform: scale(1); opacity: 0; } }
 .mat-emblem.is-absorbing .gob-top-box { animation: gob-gulp 0.45s ease-out; }
 @keyframes gob-gulp { 40% { scale: 1.045; } }
+
+/* A check result landing (renderPodHub adds .is-flaring once per result): a
+   ring of the fire's own light runs out from the goblet across the mat. */
+.mat-emblem::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 108px;
+  width: 120px;
+  height: 120px;
+  margin: -60px 0 0 -60px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 2px var(--fire-core), inset 0 0 18px var(--fire-mid), 0 0 22px var(--fire-mid);
+  opacity: 0;
+  pointer-events: none;
+}
+.mat-emblem.is-flaring::after { animation: gob-flare 0.9s cubic-bezier(0.2, 0.8, 0.2, 1); }
+@keyframes gob-flare { from { transform: scale(0.35); opacity: 0.95; } to { transform: scale(2.7); opacity: 0; } }
 
 /* Standing: the fire behind the painting, its base inside the bowl. */
 .gob-side .gob-fire-canvas {
@@ -4608,10 +4723,17 @@ input.gtu-in-prefilled {
 }
 @media (prefers-reduced-motion: reduce) {
   .gob-view, .gob-gem, .gob-mouth, .gob-art, .mat-emblem::before { transition: none; }
-  .mat-emblem.is-ready::before, .mat-emblem.is-absorbing .gob-ripple, .mat-emblem.is-absorbing .gob-top-box { animation: none; }
+  .mat-emblem.is-ready::before, .mat-emblem.is-absorbing .gob-ripple, .mat-emblem.is-absorbing .gob-top-box, .mat-emblem.is-flaring::after { animation: none; }
 }
+/* An engraved plaque under the goblet: bare text here sat on the painted
+   rune ring and couldn't be read. One line, tucked up under the rim seen
+   from above (the button is taller than that view of the goblet). */
 .mat-hub-label {
-  max-width: 150px;
+  margin-top: 4px;
+  padding: 5px 11px 4px;
+  border-radius: 999px;
+  background: rgba(14, 9, 7, 0.82);
+  box-shadow: inset 0 0 0 1px var(--mat-line), 0 4px 10px rgba(0, 0, 0, 0.45);
   font-family: var(--font-display);
   font-size: 0.78rem;
   font-weight: 600;
@@ -4619,10 +4741,19 @@ input.gtu-in-prefilled {
   line-height: 1.1;
   text-align: center;
   text-transform: uppercase;
-  color: var(--mat-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--mat-ink);
+  transition: color 0.3s ease, box-shadow 0.3s ease;
 }
-.mat-emblem.is-passed + .mat-hub-label { color: #f3dc9b; }
-.mat-emblem.is-failed + .mat-hub-label { color: #ffb3a6; }
+.mat-emblem.is-top + .mat-hub-label { margin-top: calc(var(--gob) / 2 - 56px); }
+/* Ready: the plaque is the call to action's caption, so it takes the foil. */
+.mat-emblem.is-ready + .mat-hub-label { color: #f3dc9b; box-shadow: inset 0 0 0 1px rgba(201, 161, 63, 0.7), 0 4px 12px rgba(0, 0, 0, 0.5); }
+.mat-emblem.is-passed + .mat-hub-label { color: #f3dc9b; box-shadow: inset 0 0 0 1px rgba(201, 161, 63, 0.7), 0 4px 12px rgba(0, 0, 0, 0.5); }
+.mat-emblem.is-failed + .mat-hub-label { color: #ffb3a6; box-shadow: inset 0 0 0 1px rgba(226, 85, 63, 0.6), 0 4px 12px rgba(0, 0, 0, 0.5); }
+@media (prefers-reduced-motion: reduce) {
+  .mat-hub-label { transition: none; }
+}
 
 /* The card's heading row: "Set Up Pod" and the mat's "Lay flat" toggle,
    which turns every zone to face its own edge (layoutPodMat sets --r) for
@@ -4660,13 +4791,19 @@ input.gtu-in-prefilled {
 
 .mat-empty {
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 18px;
+  left: 50%;
+  bottom: 16px;
+  width: max-content;
+  max-width: calc(100% - 32px);
   margin: 0;
+  padding: 6px 13px;
+  border-radius: 999px;
+  translate: -50% 0;
+  background: rgba(14, 9, 7, 0.82);
+  box-shadow: inset 0 0 0 1px var(--mat-line);
   text-align: center;
   font-size: 0.82rem;
-  color: var(--mat-muted);
+  color: var(--mat-ink);
 }
 .mat-empty[hidden] { display: none; }
 .mat-flat-btn[hidden] { display: none; }
@@ -4790,6 +4927,14 @@ input.gtu-in-prefilled {
 .corner-zone .mat-box .ui-icon, .corner-zone .mat-box .id-coin { width: 16px; height: 16px; }
 .corner-zone.is-waiting .mat-box { font-family: var(--font-body); font-size: 0.9rem; text-transform: none; letter-spacing: 0; }
 .corner-zone .mat-range { width: 60%; }
+/* Empty: the outline of where a box goes, not a box (a solid sleeve-blue
+   "Empty" read as a button). */
+.corner-zone.is-waiting .mat-box {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--mat-line-strong);
+  color: var(--mat-muted);
+  font-weight: 500;
+}
 .corner-zone-note {
   max-width: 34ch;
   font-size: 0.78rem;
@@ -4891,6 +5036,14 @@ input.gtu-in-prefilled {
 @media (prefers-reduced-motion: reduce) {
   .corner-zone { transition: none; }
 }
+/* Your corner coming up (.view-in, see .mat.view-in): the boxes deal onto
+   the shelf, capped at eight boxes' worth of stagger. Not on a poll's
+   rebuild -- only the view change carries the class. */
+.corner.view-in .corner-deck { animation: corner-deck-in 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) both; animation-delay: calc(60ms + min(var(--i, 0), 8) * 35ms); }
+@keyframes corner-deck-in { from { opacity: 0; transform: translateY(12px) scale(0.96); } }
+@media (prefers-reduced-motion: reduce) {
+  .corner.view-in .corner-deck { animation: none; }
+}
 @media (hover: hover) and (pointer: fine) {
   .corner-deck:hover { transform: translateY(-2px); }
 }
@@ -4954,6 +5107,17 @@ input.gtu-in-prefilled {
   font-size: 0.85rem;
   font-weight: 600;
   min-height: 44px;
+  transition: transform 0.12s ease, border-color 0.15s ease, background-color 0.15s ease;
+}
+.pod-chip:not(:disabled):active { transform: scale(0.96); }
+/* Just seated (renderPodRoster marks only the chip that changed, so a
+   rebuild of the rail doesn't replay it): the seat number pops in. */
+.pod-chip.just-seated .pod-chip-avatar { animation: pod-chip-seat 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); }
+@keyframes pod-chip-seat { from { transform: scale(0.55); opacity: 0.4; } }
+@media (prefers-reduced-motion: reduce) {
+  .pod-chip { transition: none; }
+  .pod-chip:not(:disabled):active { transform: none; }
+  .pod-chip.just-seated .pod-chip-avatar { animation: none; }
 }
 .pod-chip-avatar {
   width: 28px;
@@ -4998,6 +5162,9 @@ input.gtu-in-prefilled {
 @keyframes pod-panel-in {
   from { opacity: 0; transform: translateY(10px); }
 }
+/* The reduced-motion stand-in for the pod's entrances. (Named by this rule
+   long before it was defined, so reduced motion got no fade at all.) */
+@keyframes pod-fade-in { from { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
   .pod-panel.opening { animation: pod-fade-in 0.15s ease; }
 }

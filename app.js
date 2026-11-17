@@ -3662,9 +3662,14 @@ const POD_MAX_SEATS = 8;
 // neighbours round the curve don't overlap.
 const POD_ZONE = { w: 108, h: 80 };
 const POD_ZONE_DENSE = { w: 84, h: 74 };
-// Where every range track starts, px: just outside the goblet's rim as
-// seen from above.
+// A phone-width mat (under POD_NARROW_W px across): the side seats and the
+// goblet each give a little so they clear one another -- see .mat.is-narrow.
+const POD_ZONE_NARROW = { w: 98, h: 80 };
+const POD_NARROW_W = 380;
+// Where every range track starts, px: just under the goblet's rim as seen
+// from above (narrower on a phone-width mat, where the goblet is smaller).
 const POD_HUB_R = 58;
+const POD_HUB_R_NARROW = 48;
 
 // playerId -> { zone, name, box, boxText, range, marker, track } per seat.
 const podSeatEls = new Map();
@@ -4337,6 +4342,18 @@ function renderPodCorner() {
   podUi.corner.hidden = !show;
   podUi.mat.hidden = show;
   podUi.flatBtn.hidden = show;
+  // The view that just came on settles in (.view-in) -- on a real change
+  // only, never the first draw or a poll's re-render.
+  if (podUi.cornerShown !== undefined && podUi.cornerShown !== show) {
+    const incoming = show ? podUi.corner : podUi.mat;
+    (show ? podUi.mat : podUi.corner).classList.remove("view-in");
+    incoming.classList.remove("view-in");
+    void incoming.offsetWidth;
+    incoming.classList.add("view-in");
+    clearTimeout(podUi.viewInTimer);
+    podUi.viewInTimer = setTimeout(() => incoming.classList.remove("view-in"), 700);
+  }
+  podUi.cornerShown = show;
   if (!show) return;
   // The rail and the deck panel are for the whole table; your corner has
   // its own shelf.
@@ -4414,11 +4431,13 @@ function renderPodCorner() {
     shelf.dataset.signature = signature;
     const focusedId = shelf.contains(document.activeElement) ? document.activeElement.dataset.deckId : null;
     shelf.innerHTML = "";
-    for (const d of decks) {
+    for (const [k, d] of decks.entries()) {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "corner-deck";
       btn.dataset.deckId = String(d.id);
+      // Deal-in order when your corner comes up (.corner.view-in).
+      btn.style.setProperty("--i", k);
       // A colour per deck box (by id), so the shelf reads as separate boxes.
       btn.style.setProperty("--sleeve", POD_SLEEVES[Math.abs(Number(d.id) || 0) % POD_SLEEVES.length]);
       const current = String(d.id) === mine.deckId;
@@ -4467,6 +4486,7 @@ function buildPodZone(playerId) {
   zone.addEventListener("click", () => tapPodSeat(playerId));
   const track = document.createElement("span");
   track.className = "mat-track";
+  track.style.setProperty("--sleeve", podSleeveOf(playerId));
   return {
     zone, track,
     name: zone.querySelector(".mat-zone-name"),
@@ -4489,6 +4509,9 @@ function updatePodZone(entry, slot, i) {
   zone.classList.add(`is-${state}`);
   zone.classList.toggle("is-focus", editingSeatIndex === i);
   zone.classList.toggle("is-locked", locked);
+  zone.classList.toggle("is-mine", slot.playerId === myPodPlayerId());
+  // A deck in lights this seat's line in its sleeve colour.
+  track.classList.toggle("is-sealed", state === "sealed" || state === "revealed");
   // Not `disabled`: a disabled button swallows the tap silently, which read
   // as being locked out with no reason given. aria-disabled keeps it
   // focusable and announced, and tapPodSeat explains the lock.
@@ -4589,7 +4612,11 @@ function layoutPodMat() {
   const w = podUi.mat.clientWidth;
   const h = podUi.mat.clientHeight;
   if (w === 0) return; // pod tab hidden; the ResizeObserver re-runs this on show
-  const size = n >= 7 ? POD_ZONE_DENSE : POD_ZONE;
+  const narrow = w < POD_NARROW_W;
+  podUi.mat.classList.toggle("is-narrow", narrow);
+  const size = n >= 7 ? POD_ZONE_DENSE : narrow ? POD_ZONE_NARROW : POD_ZONE;
+  const hubR = narrow ? POD_HUB_R_NARROW : POD_HUB_R;
+  podUi.mat.style.setProperty("--hub-r", `${hubR}px`);
   const flat = podUi.mat.classList.contains("is-flat");
   const mine = podSelections.findIndex(s => s.playerId === myPodPlayerId());
   const spots = podMatSpots(n, w, h, size);
@@ -4607,7 +4634,9 @@ function layoutPodMat() {
     // stopping at its edge just keeps it from showing through the border.
     const end = dist - podZoneEntry(spot.x / dist, spot.y / dist, size);
     entry.track.style.setProperty("--a", `${a.toFixed(1)}deg`);
-    entry.track.style.setProperty("--len", `${Math.max(0, end - POD_HUB_R).toFixed(1)}px`);
+    entry.track.style.setProperty("--len", `${Math.max(0, end - hubR).toFixed(1)}px`);
+    // Puts the seats' motes out of step while a check is out (.is-checking).
+    entry.track.style.setProperty("--i", i);
   });
 }
 
@@ -4640,6 +4669,9 @@ function renderPodZones() {
     const state = podSeatState(slot);
     const before = podSeatLastState.get(slot.playerId);
     if (before && (before === "waiting" || before === "flagged") && state === "sealed") sealedNow.push(slot.playerId);
+    // The box drops in as it seals, and catches the light again as it's
+    // revealed -- only on the change itself, never on a first draw or a poll.
+    if (before && before !== state && (state === "sealed" || state === "revealed")) playPodBoxSeal(entry.box);
     podSeatLastState.set(slot.playerId, state);
   });
   for (const id of podSeatLastState.keys()) if (!seated.has(id)) podSeatLastState.delete(id);
@@ -4649,6 +4681,17 @@ function renderPodZones() {
   // After layout, so each orb starts from its zone's new place.
   sealedNow.forEach(launchPodOrb);
   podUi.empty.hidden = n > 0 || !liveTableLoaded;
+}
+
+// Replays the deck box's one-shot seal (.mat-box.just-sealed). The class
+// comes off on a timer, not animationend, which never fires in a hidden tab.
+function playPodBoxSeal(box) {
+  if (REDUCED_MOTION.matches) return;
+  box.classList.remove("just-sealed");
+  void box.offsetWidth;
+  box.classList.add("just-sealed");
+  clearTimeout(box.sealTimer);
+  box.sealTimer = setTimeout(() => box.classList.remove("just-sealed"), 1000);
 }
 
 function removePodZone(id, entry) {
@@ -4727,6 +4770,8 @@ function renderPodHub() {
   emblem.classList.toggle("is-checking", podPendingCheck);
   podUi.mat.classList.toggle("is-passed", passed);
   podUi.mat.classList.toggle("is-failed", failed);
+  // Motes run the ley lines into the goblet while the check is out.
+  podUi.mat.classList.toggle("is-checking", podPendingCheck);
 
   // The flare plays once per check result, when it lands on this phone --
   // not when the app opens onto a table that already passed or failed.
@@ -4758,6 +4803,11 @@ function renderPodRoster() {
   roster.dataset.signature = signature;
   // Keep focus on the chip that had it -- rebuilding drops it otherwise.
   const focusedId = roster.contains(document.activeElement) ? document.activeElement.dataset.playerId : null;
+  // Who was already showing as seated, so only a chip that has just become
+  // seated pops its number in (.just-seated) -- not every chip on a rebuild.
+  const wasPressed = roster.childElementCount
+    ? new Set([...roster.querySelectorAll('.pod-chip[aria-pressed="true"]')].map(c => c.dataset.playerId))
+    : null;
   roster.innerHTML = "";
   for (const p of podPlayers) {
     const idx = podSelections.findIndex(s => s.playerId === String(p.id));
@@ -4795,6 +4845,7 @@ function renderPodRoster() {
     // list instead; leaving the table lives in that list, with Undo.
     chip.addEventListener("click", () => (seated ? tapPodSeat(String(p.id)) : addPodSeat(String(p.id))));
     chip.dataset.playerId = String(p.id);
+    if (wasPressed && (seated || pending) && !wasPressed.has(String(p.id))) chip.classList.add("just-seated");
     roster.appendChild(chip);
   }
   if (focusedId) roster.querySelector(`[data-player-id="${focusedId}"]`)?.focus({ preventScroll: true });
@@ -5100,8 +5151,8 @@ function closePodPanel() {
 }
 
 // Seals a deck on the shared table. Closes the panel straight away -- the
-// pick lands on every phone within a poll -- and settles a deck box into
-// this seat's zone once the relay confirms it.
+// pick lands on every phone within a poll -- and a deck box drops into
+// this seat's zone once the relay confirms it (playPodBoxSeal).
 async function pickPodDeck(playerId, deckId) {
   const slot = podSelections.find(s => s.playerId === playerId);
   if (!slot) return;
@@ -5111,11 +5162,10 @@ async function pickPodDeck(playerId, deckId) {
   const view = await tableOp({ op: "pick", playerId: Number(playerId), deckId: Number(deckId) });
   podPendingPicks.delete(playerId);
   renderPodSlots();
-  const box = view ? podSeatEls.get(playerId)?.box : null;
-  if (box && !REDUCED_MOTION.matches) {
-    box.animate([{ transform: "translateY(-10px) scale(1.08)", opacity: 0.4 }, { transform: "none", opacity: 1 }],
-      { duration: 320, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)" });
-  }
+  // A re-pick of an already sealed seat doesn't change its state, so
+  // renderPodZones won't have played the seal for it.
+  const entry = view ? podSeatEls.get(playerId) : null;
+  if (entry && !entry.box.classList.contains("just-sealed")) playPodBoxSeal(entry.box);
 }
 
 function shakeFlaggedZones() {
