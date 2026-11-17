@@ -97,6 +97,98 @@
   /* The reveal tile's card back (see .reveal-tile::after). */
   --leather-hi: #4c3066;
   --leather-lo: #1d1229;
+
+  /* ---------- Foil Glass ----------
+     The material layer on top of the playmat palette above. Glass is what
+     panels and chrome are made of, foil is what's earned (a veteran deck, a
+     clean verdict, a trophy), and a deck's colour identity tints both.
+     Everything below is theme-independent; the handful of values that
+     change with the theme are at the end of each palette block
+     (--rim-top .. --lift-3) and must stay in sync across all three. */
+
+  /* Screen titles and card names: a serif, as a card's title line is,
+     without being the card face's own font. Display (Saira Condensed)
+     keeps numerals, labels and player names. */
+  --font-title: "Fraunces", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+
+  /* Mana as light, for glows and tints. Brighter than --pip-* (which are
+     the coin's paint and stay as they are): a glow in --pip-b would be
+     black on black. Never the only cue -- the id coin carries the letters. */
+  --mana-w: #f4eecb;
+  --mana-u: #3d8fd6;
+  --mana-b: #8a7ca8;
+  --mana-r: #e2533f;
+  --mana-g: #2fa66a;
+  --mana-c: #b9c0c4;
+
+  /* The identity in view (setAmbientIdentity in app.js sets these on
+     <html> while a deck is open; a deck tile sets its own). The defaults
+     are the app's own: foil gold over mat green. Registered as colours
+     below so a change eases instead of snapping. */
+  --id-1: #c9a13f;
+  --id-2: #2fa66a;
+  --id-3: #c9a13f;
+
+  /* Blur per glass level. Level 1 (rows) has none on purpose: a blur per
+     row is what makes a 100-card list stutter on a phone. */
+  --blur-2: 24px;
+  --blur-3: 32px;
+  --glass-sat: 160%;
+
+  /* Foil. --foil-sheen is the white band the app has always swept;
+     --foil-holo is the rainbow a real foil throws, for the top tier only. */
+  --foil-sheen: linear-gradient(115deg, transparent 38%, rgba(255, 255, 255, 0.5) 50%, transparent 62%);
+  --foil-holo: linear-gradient(115deg, transparent 18%, rgba(255, 110, 150, 0.5) 34%, rgba(255, 226, 120, 0.5) 43%, rgba(120, 255, 196, 0.5) 52%, rgba(120, 170, 255, 0.5) 61%, rgba(196, 130, 255, 0.5) 70%, transparent 84%);
+
+  --radius-xl: 24px;
+
+  /* Type scale. --text-hero is for one number per screen (a deck's games). */
+  --text-xs: 0.76rem;
+  --text-sm: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.75rem;
+  --text-2xl: 2.5rem;
+  --text-hero: clamp(3rem, 12vw, 5.5rem);
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  /* Motion. The two springs are sampled from a real damped spring, so a
+     plain CSS transition settles like the JS Spring class in app.js does:
+     -settle is critically damped (no overshoot, the default), -pop
+     overshoots once (damping 0.55) and is for celebrations and releases
+     only. These are the fallbacks; the sampled curves replace them just
+     below this block where linear() is supported. */
+  --dur-press: 80ms;
+  --dur-fast: 150ms;
+  --dur-enter: 240ms;
+  --dur-spring: 420ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --spring-settle: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --spring-pop: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* Foil Glass, light: glass on paper. The rim is a bright lip, the tint
+     is light because cream shows colour easily. */
+  --rim-top: rgba(255, 255, 255, 0.9);
+  --rim-glow: rgba(255, 255, 255, 0.4);
+  --glass-1: rgba(21, 32, 27, 0.045);
+  --glass-tint: 9%;
+  --ambient-mix: 26%;
+  --lift-1: 0 1px 2px rgba(32, 26, 12, 0.06);
+  --lift-2: 0 12px 32px -16px rgba(32, 26, 12, 0.28);
+  --lift-3: 0 28px 60px -24px rgba(32, 26, 12, 0.4);
+}
+@supports (transition-timing-function: linear(0, 1)) {
+  :root {
+    --spring-settle: linear(0, 0.09, 0.264, 0.442, 0.594, 0.713, 0.801, 0.864, 0.908, 0.939, 0.96, 0.973, 0.983, 0.989, 0.993, 0.995, 0.997, 0.998, 1);
+    --spring-pop: linear(0, 0.117, 0.371, 0.645, 0.873, 1.026, 1.105, 1.126, 1.111, 1.079, 1.044, 1.016, 0.997, 0.987, 0.984, 0.986, 0.99, 0.994, 0.998, 1, 1.002, 1.002, 1.002, 1.001, 1.001, 1, 1);
+  }
 }
 
 /* :not([data-theme="light"]) so an explicit "Light" choice from the
@@ -136,6 +228,15 @@
     --cta: #dcb55a;
     --cta-strong: #ecc96f;
     --cta-ink: #1b1405;
+    /* Foil Glass, dark (keep in sync with the other dark block). */
+    --rim-top: rgba(255, 244, 214, 0.16);
+    --rim-glow: rgba(255, 244, 214, 0.045);
+    --glass-1: rgba(239, 230, 210, 0.055);
+    --glass-tint: 13%;
+    --ambient-mix: 30%;
+    --lift-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --lift-2: 0 16px 40px -18px rgba(0, 0, 0, 0.7);
+    --lift-3: 0 32px 70px -24px rgba(0, 0, 0, 0.85);
   }
 }
 
@@ -176,6 +277,15 @@
   --cta: #dcb55a;
   --cta-strong: #ecc96f;
   --cta-ink: #1b1405;
+  /* Foil Glass, dark (keep in sync with the other dark block). */
+  --rim-top: rgba(255, 244, 214, 0.16);
+  --rim-glow: rgba(255, 244, 214, 0.045);
+  --glass-1: rgba(239, 230, 210, 0.055);
+  --glass-tint: 13%;
+  --ambient-mix: 30%;
+  --lift-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --lift-2: 0 16px 40px -18px rgba(0, 0, 0, 0.7);
+  --lift-3: 0 32px 70px -24px rgba(0, 0, 0, 0.85);
 }
 
 /* ---------- Theme change ----------
@@ -214,6 +324,19 @@
 @property --card-bg-translucent { syntax: "<color>"; inherits: true; initial-value: rgba(251, 250, 243, 0.35); }
 @property --chrome-bg { syntax: "<color>"; inherits: true; initial-value: rgba(251, 250, 243, 0.78); }
 @property --chrome-edge { syntax: "<color>"; inherits: true; initial-value: rgba(255, 255, 255, 0.7); }
+
+/* The identity in view, as real colours so opening a deck eases the
+   ambient light and the glass tint toward its colours instead of snapping.
+   Same mechanism as the theme change above: the same elements repaint, no
+   second full-screen layer (web-animation rule 3). Not held back under
+   reduced motion for the same reason the theme fade isn't: it's a colour
+   fade, not movement. */
+@property --id-1 { syntax: "<color>"; inherits: true; initial-value: #c9a13f; }
+@property --id-2 { syntax: "<color>"; inherits: true; initial-value: #2fa66a; }
+@property --id-3 { syntax: "<color>"; inherits: true; initial-value: #c9a13f; }
+html {
+  transition: --id-1 0.6s ease, --id-2 0.6s ease, --id-3 0.6s ease;
+}
 
 html.theme-easing {
   transition-property: --bg, --bg-accent, --card-bg, --ink, --muted, --border, --border-soft, --accent, --accent-strong, --accent-soft, --accent-ink, --focus-ring, --good, --good-bg, --good-border, --bad, --bad-bg, --bad-border, --warn, --warn-bg, --warn-border, --bg-scrim, --card-bg-translucent, --chrome-bg, --chrome-edge;
@@ -265,7 +388,16 @@ body {
      see below) are the real background now; this radial accent still
      sits on top of them, unlit corners stay transparent so the artwork
      shows through. */
-  background: radial-gradient(1200px 480px at 15% -10%, var(--accent-soft), transparent 60%);
+  /* The ambient light the glass sits in: three static pools in the colours
+     of the identity in view (--id-1..3; gold and mat green until a deck is
+     open). Static on purpose -- a drifting full-screen layer is exactly
+     what web-animation rule 3 rules out -- so it changes by its colours
+     easing (see the @property block above), never by moving. */
+  background:
+    radial-gradient(900px 520px at 10% -8%, color-mix(in srgb, var(--id-1) var(--ambient-mix), transparent), transparent 62%),
+    radial-gradient(820px 480px at 100% 2%, color-mix(in srgb, var(--id-2) var(--ambient-mix), transparent), transparent 60%),
+    radial-gradient(700px 620px at 50% 46%, color-mix(in srgb, var(--id-3) 9%, transparent), transparent 66%);
+  background-repeat: no-repeat;
   color: var(--ink);
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
@@ -756,12 +888,19 @@ body {
    down with the viewport rather than forcing a second line. */
 header h1 {
   margin: 0 0 6px;
-  font-family: var(--font-display);
-  font-size: clamp(1.75rem, 6.5vw, 2.5rem);
-  font-weight: 700;
-  line-height: 0.98;
-  letter-spacing: 0.01em;
-  text-transform: uppercase;
+  font-family: var(--font-title);
+  font-optical-sizing: auto;
+  font-size: clamp(1.9rem, 7.4vw, 3rem);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.025em;
+}
+
+/* With a mouse the avatar is pinned to the window's corner (.auth-control),
+   over the header's own line: on a narrow window the title keeps clear of
+   it and wraps instead of running underneath. */
+@media (pointer: fine) and (max-width: 640px) {
+  header h1 { padding-right: 52px; }
 }
 
 .subtitle {
@@ -1892,12 +2031,19 @@ header h1 {
 }
 
 .card {
-  background: var(--card-bg-translucent);
-  backdrop-filter: blur(30px);
-  -webkit-backdrop-filter: blur(30px);
+  /* Glass level 2: the theme's translucent stock, washed corner to corner
+     with the identity in view, over a blur that also lifts saturation so
+     the artwork behind reads as colour rather than grey fog. Depth comes
+     from the rim -- a bright top lip and a faint inner glow, like the edge
+     of a top-loader -- more than from the shadow. */
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--id-1) var(--glass-tint), transparent), color-mix(in srgb, var(--id-2) var(--glass-tint), transparent) 72%),
+    var(--card-bg-translucent);
+  backdrop-filter: blur(var(--blur-2)) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(var(--blur-2)) saturate(var(--glass-sat));
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
+  box-shadow: inset 0 1px 0 var(--rim-top), inset 0 0 28px var(--rim-glow), var(--lift-2);
   /* The playmat's printed inner rule. A negative-offset outline rather than
      a pseudo-element: it follows the radius, takes no layout, and leaves
      ::before/::after free for the cards that already use them. */
@@ -1912,13 +2058,15 @@ header h1 {
    more width. Uppercase with tracking so a two-word heading still reads
    as a heading rather than a bolded sentence. */
 .card h2 {
-  margin: 0 0 6px;
-  font-family: var(--font-display);
-  font-size: clamp(1.35rem, 5vw, 1.6rem);
+  margin: 0 0 8px;
+  font-family: var(--font-title);
+  font-optical-sizing: auto;
+  font-size: clamp(1.6rem, 6.4vw, 2.1rem);
   font-weight: 600;
-  line-height: 1.05;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
+  line-height: 1.04;
+  /* Tightened as it grows: large serif letters read too far apart at the
+     tracking body text wants. */
+  letter-spacing: -0.02em;
 }
 
 .hint {
@@ -1984,8 +2132,13 @@ button {
   font-size: 0.9rem;
   font-weight: 500;
   cursor: pointer;
-  /* transform eases out slowly on release; :active below snaps it in. */
-  transition: border-color 0.15s ease, background-color 0.15s ease, transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.15s ease;
+  /* No rim on the base button: tabs, segments and icon buttons are all
+     <button>s with no surface of their own, and a lit top edge drew a
+     stray line over each. The rim belongs to .primary and to panels. */
+  /* :active below snaps the press in; the release springs back with one
+     small overshoot (--spring-pop), so a button gives and recovers like
+     something with a little rubber in it. */
+  transition: border-color 0.15s ease, background-color 0.15s ease, transform var(--dur-spring) var(--spring-pop), box-shadow 0.15s ease;
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -2014,16 +2167,23 @@ button:active {
 }
 
 button.primary {
-  background: var(--cta);
+  background-color: var(--cta);
+  /* A lit top half: the main action is the one glossy thing on the mat. */
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 58%);
   color: var(--cta-ink);
   border-color: var(--cta);
   font-weight: 600;
-  box-shadow: 0 6px 16px -8px var(--cta);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.38), 0 6px 16px -8px var(--cta);
+}
+/* Pressed, the highlight floods the whole face: it catches the light as
+   it tips under the finger. */
+button.primary:active {
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0.08));
 }
 
 @media (hover: hover) and (pointer: fine) {
   button.primary:hover {
-    background: var(--cta-strong);
+    background-color: var(--cta-strong);
     border-color: var(--cta-strong);
     color: var(--cta-ink);
   }
@@ -2657,11 +2817,16 @@ button.deck-plate-open:active { transform: none; }
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 14px;
-  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
   margin-bottom: 8px;
   border: 1px solid transparent;
+  box-shadow: inset 0 1px 0 var(--rim-top);
 }
+/* A deck out of range is the row to find first: renderPodCheckResults
+   lists those first, and each carries a heavier edge on the reading side
+   as well as its "Over by" label and colour. */
+.result-row.out { border-left-width: 4px; }
 
 .result-row.ok { background: var(--good-bg); border-color: var(--good-border); }
 .result-row.out { background: var(--bad-bg); border-color: var(--bad-border); }
@@ -2709,39 +2874,48 @@ button.deck-plate-open:active { transform: none; }
    was decided, then the rule it was judged by as three figures -- the
    spread, what's allowed, and how many decks landed inside it. */
 .verdict {
+  position: relative;
+  overflow: hidden;
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 14px 16px;
-  border-radius: var(--radius-md);
+  gap: 16px;
+  padding: 22px 18px;
+  border-radius: var(--radius-lg);
   border: 1px solid transparent;
   margin-bottom: 10px;
+  box-shadow: inset 0 1px 0 var(--rim-top);
 }
+/* A pass glows from underneath, the way a resolved spell leaves light on
+   the table. */
+.verdict.good { box-shadow: inset 0 1px 0 var(--rim-top), 0 18px 40px -24px var(--good); }
 .verdict.good { background: var(--good-bg); border-color: var(--good-border); color: var(--good); }
 .verdict.bad { background: var(--bad-bg); border-color: var(--bad-border); color: var(--bad); }
 .verdict.warn { background: var(--warn-bg); border-color: var(--warn-border); color: var(--warn); }
 .verdict-mark {
   flex: none;
-  width: 40px;
-  height: 40px;
+  width: 52px;
+  height: 52px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   border: 2px solid currentColor;
 }
-.verdict-mark svg { width: 22px; height: 22px; }
+.verdict-mark svg { width: 28px; height: 28px; }
 .verdict-text { min-width: 0; }
+/* The screen's one big line: what was decided, at a size you can read
+   from across the table. */
 .verdict-title {
   margin: 0;
-  font-family: var(--font-display);
-  font-size: 1.5rem;
-  font-weight: 700;
-  letter-spacing: 0.02em;
+  font-family: var(--font-title);
+  font-optical-sizing: auto;
+  font-size: clamp(1.9rem, 8.4vw, 2.7rem);
+  font-weight: 600;
+  letter-spacing: -0.025em;
   line-height: 1;
-  text-transform: uppercase;
+  text-wrap: balance;
 }
-.verdict-detail { margin: 5px 0 0; font-size: 0.86rem; line-height: 1.35; color: var(--ink); }
+.verdict-detail { margin: 7px 0 0; font-size: 0.9rem; line-height: 1.35; color: var(--ink); }
 .verdict-stats {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2784,6 +2958,26 @@ button.deck-plate-open:active { transform: none; }
 @keyframes verdict-stamp { from { opacity: 0; transform: scale(1.7); } }
 @media (prefers-reduced-motion: reduce) {
   .results-fresh > *, .results-fresh .verdict-mark { animation: none; }
+}
+/* A fresh pass also gets the foil: one holographic band across the verdict,
+   once, as the mark stamps. Only on .results-fresh (a verdict this phone
+   hasn't shown), so a poll's rebuild never replays it. Clipped by the
+   verdict's own overflow; transform only. */
+.results-fresh .verdict.good::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: var(--foil-holo);
+  transform: translateX(-110%);
+  animation: verdict-foil 0.95s ease-in-out 0.2s both;
+}
+@keyframes verdict-foil {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(110%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .results-fresh .verdict.good::after { display: none; }
 }
 
 /* Power spread, drawn -- see buildPowerGauge in app.js. Sits between the
@@ -2928,10 +3122,14 @@ button.deck-plate-open:active { transform: none; }
      the actual pod size) so this never needs to scroll -- hidden here is
      just a safety net, not the intended fit mechanism. */
   overflow: hidden;
+  /* Solid stock, not blurred glass: on touch this is a sheet that gets
+     dragged, and a backdrop blur that moves is recomputed every frame
+     (web-animation rule 5). It keeps the glass's lit rim and takes the
+     deepest lift, over the scrim. */
   background: var(--card-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-md);
+  box-shadow: inset 0 1px 0 var(--rim-top), var(--lift-3);
   padding: 26px 24px 24px;
 }
 /* Focused by presentModal so keyboard and screen-reader users land inside
@@ -2974,13 +3172,13 @@ button.deck-plate-open:active { transform: none; }
 }
 
 .modal-card h2 {
-  margin: 0 0 4px;
-  font-family: var(--font-display);
-  font-size: 2.1rem;
-  font-weight: 700;
-  line-height: 1;
-  letter-spacing: 0.01em;
-  text-transform: uppercase;
+  margin: 0 0 6px;
+  font-family: var(--font-title);
+  font-optical-sizing: auto;
+  font-size: clamp(1.7rem, 7vw, 2.1rem);
+  font-weight: 600;
+  line-height: 1.02;
+  letter-spacing: -0.02em;
   padding-right: 30px;
 }
 
@@ -3234,8 +3432,9 @@ button.deck-plate-open:active { transform: none; }
   margin: 0 0 14px;
 }
 
+/* The fix for the row above it, tucked under that row's heavy edge. */
 .suggestions {
-  margin: -2px 0 14px 14px;
+  margin: -2px 0 14px 2px;
   padding: 10px 14px;
   border-left: 3px solid var(--bad);
   font-size: 0.88rem;
@@ -3250,6 +3449,8 @@ button.deck-plate-open:active { transform: none; }
   position: relative;
   overflow: hidden;
   border: 1px solid var(--border);
+  background: var(--glass-1);
+  box-shadow: inset 0 1px 0 var(--rim-top);
   border-radius: var(--radius-md);
   padding: 14px 16px;
   margin-bottom: 10px;
@@ -3277,7 +3478,9 @@ button.deck-plate-open:active { transform: none; }
   content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(100deg, transparent 30%, rgba(255, 255, 255, 0.35) 50%, transparent 70%);
+  /* Foil rather than plain white: the band carries a little of the
+     identity in view on either side of its bright core. */
+  background: linear-gradient(100deg, transparent 28%, color-mix(in srgb, var(--id-1) 24%, transparent) 42%, rgba(255, 255, 255, 0.32) 50%, color-mix(in srgb, var(--id-2) 24%, transparent) 58%, transparent 72%);
   transform: translateX(-100%);
   animation: skeleton-shimmer 1.6s ease-in-out infinite;
 }
@@ -6218,6 +6421,16 @@ header h1,
   .modal-overlay::before {
     background: rgba(0, 0, 0, 0.75);
   }
+  /* Foil is light laid over content; with more contrast asked for, the
+     content wins. The tier tags and the numbers still say everything. */
+  .md-tile-art::after,
+  .vet-plate::after,
+  .verdict::after {
+    display: none;
+  }
+  body {
+    background: none;
+  }
 }
 
 /* ---------- Dossiers (Standings) ----------
@@ -7388,9 +7601,11 @@ button.uta-bracket-btn[aria-pressed="true"] {
 }
 .db-commander {
   margin: 0;
-  font-family: var(--font-display);
-  font-size: 1.45rem;
-  font-weight: 700;
+  font-family: var(--font-title);
+  font-optical-sizing: auto;
+  font-size: clamp(1.6rem, 6.4vw, 2.1rem);
+  font-weight: 600;
+  letter-spacing: -0.02em;
   line-height: 1.05;
   text-wrap: balance;
 }
@@ -8193,14 +8408,21 @@ button.md-tile {
   color: inherit;
   background: var(--card-bg);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-sm);
+  border-radius: var(--radius-lg);
+  box-shadow: inset 0 1px 0 var(--rim-top), var(--lift-1);
   overflow: hidden;
-  transition: border-color 0.15s ease, transform 0.12s ease-out;
+  transition: border-color 0.15s ease, box-shadow 0.2s ease, transform var(--dur-spring) var(--spring-pop);
 }
 button.md-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-/* Press: the whole tile gives a little, like a card under a thumb. */
-button.md-tile:active { transform: scale(0.98); }
+/* Press: the whole tile gives a little, like a card under a thumb, and
+   springs back on release. */
+button.md-tile:active { transform: scale(0.97); transition-duration: var(--dur-press); }
+/* With a mouse the tile tilts toward the pointer (initTrophyTilt), and
+   that spring writes transform every frame -- a CSS transition on the same
+   property would chase each frame's value and lag behind it. */
+@media (hover: hover) and (pointer: fine) {
+  button.md-tile { transition: border-color 0.15s ease, box-shadow 0.2s ease; }
+}
 .md-tile-art {
   aspect-ratio: 4 / 3;
 }
@@ -8223,21 +8445,32 @@ button.md-tile:focus-visible .md-tile-art img { transform: scale(1.04); }
 .md-tile-text {
   display: grid;
   gap: 2px;
-  padding: 8px 10px 10px;
+  padding: 9px 11px 11px;
+  /* The deck's colours as a line of light under its art (--id-1..3, set on
+     the tile by applyIdentityVars). Decoration: the coin beside the record
+     is what says which colours they are. */
+  border-top: 2px solid transparent;
+  border-image: linear-gradient(90deg, var(--id-1), var(--id-2), var(--id-3)) 1;
 }
 .md-tile-name {
-  font-family: var(--font-display);
-  font-size: 1.08rem;
+  font-family: var(--font-title);
+  font-optical-sizing: auto;
+  font-size: 1.02rem;
   font-weight: 600;
-  line-height: 1.1;
+  letter-spacing: -0.01em;
+  line-height: 1.12;
   overflow-wrap: anywhere;
   text-wrap: balance;
 }
 .md-tile-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 0.78rem;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
+.md-tile-meta .id-coin { width: 14px; height: 14px; }
 .md-tile-flags {
   display: flex;
   flex-wrap: wrap;
@@ -8266,17 +8499,249 @@ button.md-tile-new {
 }
 .md-tile-plus svg { width: 36px; height: 36px; }
 
+/* ---- Veteran foil (veteranTier in deck-tally.js, myDeckTile) ----
+   A deck's surface is earned by playing it. Every tile carries its games
+   as a number over the art; from the third tier up the tile also takes a
+   material -- an etched gold edge, then a foil sheen, then full holo --
+   and says which in a tag, so the tier never rests on the look alone.
+   The sheen is one ::after per tile, wider than the art and slid sideways
+   by --foil-x (-1..1, the pointer's position across the tile, set by
+   initTrophyTilt): transform only, nothing repaints. No loop anywhere
+   (web-animation rule 6: a grid of tiles is a list). */
+.md-count {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  z-index: 3;
+  display: grid;
+  justify-items: center;
+  min-width: 40px;
+  padding: 5px 8px 4px;
+  border-radius: 11px;
+  /* On a photograph, not a theme surface: the same in both themes, dark
+     enough that white clears 4.5:1 whatever the art behind it. */
+  background: rgba(10, 9, 14, 0.72);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  color: #fff;
+  line-height: 1;
+}
+.md-count b {
+  font-family: var(--font-display);
+  font-size: 1.4rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.md-count span {
+  margin-top: 1px;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.md-tile-art::after {
+  content: "";
+  position: absolute;
+  inset: 0 -60%;
+  z-index: 2;
+  pointer-events: none;
+  opacity: 0;
+  background: var(--foil-sheen);
+  transform: translateX(calc(var(--foil-x, -0.35) * 45%));
+  transition: opacity 0.2s ease;
+}
+button.md-tile.vet-2,
+button.md-tile.vet-3,
+button.md-tile.vet-4 {
+  border-color: color-mix(in srgb, var(--foil) 60%, var(--border));
+}
+/* Foil: nothing at rest with a mouse (it appears as the tile tilts under
+   the pointer); a still glint on touch, where there's no pointer to bring
+   it out. */
+@media (hover: hover) and (pointer: fine) {
+  button.md-tile.vet-3:hover .md-tile-art::after { opacity: 0.85; }
+}
+button.md-tile.vet-3:focus-visible .md-tile-art::after { opacity: 0.85; }
+@media (pointer: coarse) {
+  button.md-tile.vet-3 .md-tile-art::after { opacity: 0.4; }
+}
+/* Holo: the rainbow is always on the card, brighter under the pointer,
+   and the tile throws a little of its own colours onto the mat. */
+button.md-tile.vet-4 {
+  box-shadow: inset 0 1px 0 var(--rim-top), 0 12px 28px -16px var(--id-1), 0 12px 28px -18px var(--id-2);
+}
+button.md-tile.vet-4 .md-tile-art::after {
+  background: var(--foil-holo);
+  mix-blend-mode: screen;
+  opacity: 0.5;
+}
+@media (hover: hover) and (pointer: fine) {
+  button.md-tile.vet-4:hover .md-tile-art::after { opacity: 0.95; }
+}
+button.md-tile.vet-4:focus-visible .md-tile-art::after { opacity: 0.95; }
+@media (prefers-reduced-motion: reduce) {
+  .md-tile-art::after { transition: none; transform: translateX(-16%); }
+}
+/* The tier, said: a drawn lozenge plus the word. */
+.md-vet-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px 1px 5px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--foil) 55%, var(--border));
+  background: var(--accent-soft);
+  color: var(--ink);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+.md-vet-tag svg { width: 9px; height: 9px; color: var(--accent); }
+
+/* The veteran plate (myDeckVeteranPlate): a deck's own screen opens on its
+   games as one big number, the way a life total sits on the table. The
+   number rolls when it changes (rollText); the plate's sheen crosses once
+   when the screen is opened, for decks that have earned foil. */
+.vet-plate {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-4) var(--space-3);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  background:
+    linear-gradient(120deg, color-mix(in srgb, var(--id-1) 9%, transparent), color-mix(in srgb, var(--id-2) 9%, transparent)),
+    var(--glass-1);
+  box-shadow: inset 0 1px 0 var(--rim-top);
+}
+.vet-plate.vet-2,
+.vet-plate.vet-3,
+.vet-plate.vet-4 {
+  border-color: color-mix(in srgb, var(--foil) 60%, var(--border));
+}
+.vet-plate-num {
+  flex: none;
+  min-width: 1.1ch;
+  font-family: var(--font-display);
+  font-size: var(--text-hero);
+  font-weight: 700;
+  line-height: 0.86;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.vet-plate-side {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.vet-plate-label {
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  line-height: 1;
+}
+.vet-plate-tier {
+  font-size: 0.86rem;
+  /* Ink, not muted: the plate is tinted with the deck's colours, and a
+     white-identity tint lifts the ground enough that muted text measured
+     3.2:1 on it. */
+  color: var(--ink);
+  text-wrap: pretty;
+}
+.vet-plate-tier b { color: var(--ink); font-weight: 600; }
+.vet-plate .id-pips { margin-top: 4px; }
+.vet-plate.vet-3::after,
+.vet-plate.vet-4::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: var(--foil-sheen);
+  transform: translateX(-110%);
+}
+.vet-plate.vet-4::after { background: var(--foil-holo); }
+.vet-plate-fresh.vet-3::after,
+.vet-plate-fresh.vet-4::after {
+  animation: verdict-foil 0.95s ease-in-out 0.15s both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .vet-plate.vet-3::after,
+  .vet-plate.vet-4::after { display: none; }
+}
+
+/* A colour identity spelled out: one small coin per colour with its letter
+   on it (buildIdentityPips), for the places with room to say it rather
+   than blend it into the single id coin. The app's own drawn coins, not
+   the game's mana symbols. */
+.id-pips {
+  display: inline-flex;
+  gap: 4px;
+}
+.id-pip {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(0, 0, 0, 0.55);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18);
+  font-family: var(--font-display);
+  font-size: 0.82rem;
+  font-weight: 700;
+  line-height: 1;
+  color: #fff;
+}
+.id-pip-W { background: var(--pip-w); color: #15120d; }
+.id-pip-U { background: var(--pip-u); }
+.id-pip-B { background: var(--pip-b); }
+.id-pip-R { background: var(--pip-r); }
+.id-pip-G { background: var(--pip-g); }
+.id-pip-C { background: linear-gradient(135deg, #b9b6ad, #8a877e); color: #15120d; }
+
+/* No decks at all: an invitation, not an apology. */
+.empty-state {
+  display: grid;
+  gap: 4px;
+  justify-items: center;
+  padding: var(--space-6) var(--space-4);
+  margin-bottom: var(--space-3);
+  text-align: center;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--glass-1);
+}
+.empty-state-title {
+  margin: 0;
+  font-family: var(--font-title);
+  font-size: var(--text-xl);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.05;
+}
+.empty-state-text {
+  margin: 0;
+  max-width: 34ch;
+  color: var(--muted);
+  font-size: 0.9rem;
+  text-wrap: pretty;
+}
+
 /* The struggling deck: its art full width, the record and the action laid
    over a scrim at the bottom. White on the scrim, in both themes, because
    it sits on a photograph, not on a theme surface. */
 .md-feature {
   position: relative;
   display: grid;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   overflow: hidden;
   border: 1px solid var(--border);
-  box-shadow: var(--shadow-md);
+  box-shadow: inset 0 1px 0 var(--rim-top), var(--lift-2);
 }
+.md-feature .md-count { top: 10px; right: 10px; bottom: auto; }
 .md-feature-art {
   grid-area: 1 / 1;
   aspect-ratio: 16 / 10;
@@ -8301,9 +8766,11 @@ button.md-tile-new {
 }
 .md-feature-name {
   margin: 0;
-  font-family: var(--font-display);
-  font-size: 1.7rem;
-  font-weight: 700;
+  font-family: var(--font-title);
+  font-optical-sizing: auto;
+  font-size: clamp(1.7rem, 7vw, 2.3rem);
+  font-weight: 600;
+  letter-spacing: -0.02em;
   line-height: 1.02;
   text-wrap: balance;
   overflow-wrap: anywhere;
@@ -8323,8 +8790,9 @@ button.md-tile-new {
 .md-head-art {
   width: 100%;
   aspect-ratio: 21 / 9;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border);
+  box-shadow: inset 0 1px 0 var(--rim-top), var(--lift-2);
 }
 .db-head.md-head {
   flex-direction: column;
@@ -8333,9 +8801,11 @@ button.md-tile-new {
 }
 .md-sub-name {
   margin: 0;
-  font-family: var(--font-display);
-  font-size: 1.45rem;
-  font-weight: 700;
+  font-family: var(--font-title);
+  font-optical-sizing: auto;
+  font-size: 1.6rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
   line-height: 1.05;
 }
 
@@ -8416,8 +8886,11 @@ button.md-tile-new {
 }
 .cs-name {
   margin: 4px 0 0;
-  font-family: var(--font-display);
+  font-family: var(--font-title);
+  font-optical-sizing: auto;
   font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
   line-height: 1.05;
   text-wrap: balance;
 }
@@ -8574,10 +9047,13 @@ button.db-swap-info {
   z-index: 300;
   width: 244px;
   aspect-ratio: 63 / 88;
-  border-radius: 12px;
+  /* A real card's corner (about 4.75% of its width), a hairline of light
+     round the edge, and the deepest lift: the card floats over the page
+     like one held up in a sleeve. Nothing is drawn over the picture. */
+  border-radius: 4.75% / 3.4%;
   overflow: hidden;
   background: var(--bg-accent);
-  box-shadow: var(--shadow-md);
+  box-shadow: 0 0 0 1px var(--rim-top), 0 0 0 5px var(--glass-1), var(--lift-3);
   pointer-events: none;
   animation: card-preview-in 0.12s ease-out;
 }

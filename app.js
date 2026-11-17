@@ -1090,6 +1090,9 @@ async function syncFromD1() {
     gameLogSeason3Rows = gameLogRowsFromD1(gamesData);
     gameLogAllRows = gamesData.games.map(gameRowFromD1);
     gameLogLoaded = true;
+    // The Decks tab's veteran tiers count these rows too; if its list drew
+    // before they landed, it redraws once.
+    refreshMyDeckVeterans();
     // Deck plates show each deck's record and open tallies list its games,
     // both read from the rows just loaded.
     renderPlayersTable();
@@ -2362,6 +2365,61 @@ function rangePower(power) {
 const WUBRG_ORDER = ["W", "U", "B", "R", "G"];
 const PIP_COLOR_VAR = { W: "--pip-w", U: "--pip-u", B: "--pip-b", R: "--pip-r", G: "--pip-g" };
 const WUBRG_NAMES = { W: "White", U: "Blue", B: "Black", R: "Red", G: "Green" };
+
+// ---------- Foil Glass: identity light ----------
+// A colour identity as light, for the ambient glow and the glass tint (the
+// --mana-* tokens in style.css; brighter than the coin's own --pip-* paint).
+const MANA_LIGHT_VAR = { W: "--mana-w", U: "--mana-u", B: "--mana-b", R: "--mana-r", G: "--mana-g" };
+
+// The three colours an identity lights with: one colour fills all three,
+// two alternate, three or more take the first, middle and last so a
+// five-colour deck spans the wheel. null for an identity never captured
+// (the app's own gold and green stay); colourless is its own grey.
+function identityLights(colorIdentity) {
+  if (colorIdentity === null || colorIdentity === undefined) return null;
+  const colors = WUBRG_ORDER.filter(c => colorIdentity.includes(c)).map(c => `var(${MANA_LIGHT_VAR[c]})`);
+  if (!colors.length) return ["var(--mana-c)", "var(--mana-c)", "var(--mana-c)"];
+  if (colors.length === 1) return [colors[0], colors[0], colors[0]];
+  if (colors.length === 2) return [colors[0], colors[1], colors[0]];
+  return [colors[0], colors[Math.floor(colors.length / 2)], colors[colors.length - 1]];
+}
+
+// Sets --id-1..3 on an element (a deck tile lights itself), or clears them
+// so it inherits whatever is in view.
+function applyIdentityVars(el, colorIdentity) {
+  const lights = identityLights(colorIdentity);
+  ["--id-1", "--id-2", "--id-3"].forEach((name, k) => {
+    if (lights) el.style.setProperty(name, lights[k]);
+    else el.style.removeProperty(name);
+  });
+}
+
+// The identity in view for the whole page: opening a deck tints the ambient
+// light and every glass panel with its colours; null hands the page back to
+// the app's own. The colours ease (see the @property block in style.css).
+function setAmbientIdentity(colorIdentity) {
+  applyIdentityVars(document.documentElement, colorIdentity);
+}
+
+// A colour identity spelled out as lettered coins (.id-pips), for places
+// with room to say it. One labelled image to a screen reader, same wording
+// as the single coin.
+function buildIdentityPips(colorIdentity) {
+  if (colorIdentity === null || colorIdentity === undefined) return null;
+  const colors = WUBRG_ORDER.filter(c => colorIdentity.includes(c));
+  const wrap = document.createElement("span");
+  wrap.className = "id-pips";
+  wrap.setAttribute("role", "img");
+  wrap.setAttribute("aria-label", colors.length ? `Color identity: ${colors.map(c => WUBRG_NAMES[c]).join(", ")}` : "Colorless");
+  for (const c of colors.length ? colors : ["C"]) {
+    const pip = document.createElement("span");
+    pip.className = `id-pip id-pip-${c}`;
+    pip.textContent = c;
+    pip.setAttribute("aria-hidden", "true");
+    wrap.append(pip);
+  }
+  return wrap;
+}
 
 // A deck's color identity as a single fixed-size coin -- see the design
 // review this came out of: a row of one dot per color got wider (and
@@ -6127,7 +6185,12 @@ function renderPodCheckResults() {
     resultsDiv.appendChild(key);
   }
 
-  for (const entry of entries) {
+  // Listed by what needs attention: decks out of range first, then exempt
+  // new decks, then the ones that are fine. Display order only -- the
+  // verdict, the gauge and what each row says are unchanged.
+  const severity = e => (e.exempt ? 1 : e.compatible ? 2 : 0);
+  const ordered = [...entries].sort((a, b) => severity(a) - severity(b));
+  for (const entry of ordered) {
     const row = document.createElement("div");
     row.className = "result-row " + (entry.exempt ? "exempt" : (entry.compatible ? "ok" : "out"));
     row.dataset.playerId = entry.playerId;
@@ -6157,7 +6220,7 @@ function renderPodCheckResults() {
       ? "🆕 New deck — exempt this game"
       : (entry.compatible ? "✓ In range" : `⚠ Over by ${formatPower(entry.overBy)}`);
     // Deal-in order on a fresh verdict (.results-fresh).
-    row.style.setProperty("--i", entries.indexOf(entry));
+    row.style.setProperty("--i", ordered.indexOf(entry));
 
     row.appendChild(name);
     row.appendChild(power);
@@ -7097,7 +7160,8 @@ function initTrophyTilt() {
   };
   document.addEventListener("pointermove", (e) => {
     if (e.pointerType !== "mouse" || REDUCED_MOTION.matches) return;
-    const card = e.target instanceof Element ? e.target.closest(".tc-card") : null;
+    // Trophy cards, and deck tiles (which catch their foil the same way).
+    const card = e.target instanceof Element ? e.target.closest(".tc-card, .md-tile:not(.md-tile-new)") : null;
     if (card !== current) {
       release(current);
       current = card;
@@ -7109,6 +7173,8 @@ function initTrophyTilt() {
     card.classList.add("is-tilting");
     card.style.setProperty("--sheen-x", `${((nx + 1) / 2) * 100}%`);
     card.style.setProperty("--sheen-y", `${((ny + 1) / 2) * 100}%`);
+    // Where the foil band sits across a deck tile (.md-tile-art::after).
+    card.style.setProperty("--foil-x", nx.toFixed(3));
     const s = springsFor(card);
     s.x.to(-ny * MAX_TILT, { response: 0.3 });
     s.y.to(nx * MAX_TILT, { response: 0.3 });
@@ -7254,6 +7320,12 @@ function activateTab(tabName) {
   document.querySelectorAll(`[data-tab="${tabName}"]`).forEach(b => b.classList.add("active"));
   // Build a Deck lives under the Decks tab: keep that tab lit while it's open.
   if (tabName === "deck-builder") document.querySelectorAll('[data-tab="my-decks"]').forEach(b => b.classList.add("active"));
+  // A deck's colours light the page only while that deck's screen is the
+  // one showing; any other tab gets the app's own light back.
+  // (setAmbientIdentity.openDeck, not myDecksUi: that const is declared
+  // far below and a tab can be activated while this file is still loading.)
+  const openDeck = tabName === "my-decks" ? setAmbientIdentity.openDeck : null;
+  applyIdentityVars(document.documentElement, openDeck ? openDeck.colorIdentity : null);
   document.querySelectorAll(".tab-panel").forEach(p => { p.hidden = true; });
   panel.hidden = false;
   // Same id scheme as the tab panel (#bg-<tab> next to #tab-<tab>).
@@ -13866,19 +13938,91 @@ function myDeckArt(d, cls) {
   return wrap;
 }
 
+// Every game a deck has played, in any season: what its veteran tier is
+// earned on. From the game log the app already holds (GET /games returns
+// every season; nothing extra is fetched). Before that log lands, or if it
+// knows fewer games than /my-decks does, this season's count stands in.
+function myDeckLifetimeGames(d) {
+  const season = d.gamesPlayed || 0;
+  if (!gameLogLoaded) return season;
+  const rows = allGameRowIndex().byId.get(d.podDeckId) || [];
+  return Math.max(season, rows.length);
+}
+
+// What the Decks list last drew its tiers from. The game log and /my-decks
+// load independently; when the log lands (or gains a game) after the list
+// has drawn, the list redraws once -- and only if a count really changed,
+// so a routine refresh never rebuilds the tiles.
+function myDeckVeteranSignature() {
+  return myDecksUi.data ? myDecksUi.data.decks.map(d => `${d.podDeckId}:${myDeckLifetimeGames(d)}`).join(",") : "";
+}
+function refreshMyDeckVeterans() {
+  if (!myDecksUi.data || myDecksUi.view !== "list") return;
+  if (myDecksUi.veteranSignature !== myDeckVeteranSignature()) renderMyDecks();
+}
+
+// The games counter laid over a deck's art (.md-count). Decorative copy:
+// the tile's own label says the number.
+function myDeckCountChip(games) {
+  const chip = makeEl("span", "md-count");
+  chip.append(makeEl("b", null, String(games)), makeEl("span", null, games === 1 ? "game" : "games"));
+  return chip;
+}
+
+function veteranTagEl(vet) {
+  const tag = makeEl("span", "md-vet-tag");
+  tag.innerHTML = '<svg viewBox="0 0 10 10" fill="currentColor" aria-hidden="true"><path d="M5 0l5 5-5 5-5-5z"></path></svg>';
+  tag.append(vet.name);
+  return tag;
+}
+
+// A deck's own screen opens on its games played as one big number, with
+// the tier it has earned and how far the next one is. The number rolls
+// when a new game lands (rollText is keyed by deck, so it remembers).
+function myDeckVeteranPlate(d) {
+  const games = myDeckLifetimeGames(d);
+  const vet = veteranTier(games);
+  const plate = makeEl("div", `vet-plate vet-${vet.tier}`);
+  // The foil crosses once, the first time this deck's screen draws after
+  // being opened -- not on every re-render as its settings change.
+  if (myDecksUi.plateShownFor !== d.podDeckId) plate.classList.add("vet-plate-fresh");
+  myDecksUi.plateShownFor = d.podDeckId;
+  plate.setAttribute("role", "group");
+  plate.setAttribute("aria-label", `${games} game${games === 1 ? "" : "s"} played, all seasons. ${vet.name}.${vet.next ? ` ${vet.next.in} more to ${vet.next.name}.` : ""}`);
+  const num = makeEl("span", "vet-plate-num");
+  rollText(num, games, `vet-plate-${d.podDeckId}`);
+  const side = makeEl("span", "vet-plate-side");
+  side.append(makeEl("span", "vet-plate-label", games === 1 ? "game played" : "games played"));
+  const tier = makeEl("span", "vet-plate-tier");
+  tier.append(makeEl("b", null, vet.name), vet.next ? ` · ${vet.next.in} more to ${vet.next.name}` : " · as shiny as it gets");
+  side.append(tier);
+  const pips = buildIdentityPips(d.colorIdentity);
+  if (pips) side.append(pips);
+  plate.append(num, side);
+  return plate;
+}
+
 function myDeckTile(d) {
-  const btn = makeEl("button", "md-tile");
+  const games = myDeckLifetimeGames(d);
+  const vet = veteranTier(games);
+  const btn = makeEl("button", `md-tile vet-${vet.tier}`);
   btn.type = "button";
+  applyIdentityVars(btn, d.colorIdentity);
   const struggling = isStrugglingDeck(d);
   const linked = myDeckArchidektName(d);
-  btn.setAttribute("aria-label", `${d.name}. ${myDeckRecordText(d)}${d.bracket ? `, Bracket ${d.bracket}` : ""}${struggling ? ", struggling" : ""}${linked ? "" : ", not linked to Archidekt yet"}. Upgrade`);
-  btn.append(myDeckArt(d, "md-tile-art"));
+  btn.setAttribute("aria-label", `${d.name}. ${myDeckRecordText(d)}${d.bracket ? `, Bracket ${d.bracket}` : ""}. ${games} game${games === 1 ? "" : "s"} all-time, ${vet.name}${struggling ? ", struggling" : ""}${linked ? "" : ", not linked to Archidekt yet"}. Upgrade`);
+  const art = myDeckArt(d, "md-tile-art");
+  art.append(myDeckCountChip(games));
+  btn.append(art);
   const text = makeEl("span", "md-tile-text");
   text.append(makeEl("span", "md-tile-name", d.name));
-  const meta = makeEl("span", "md-tile-meta", myDeckRecordText(d, true));
-  if (d.bracket) meta.append(` · B${d.bracket}`);
+  const meta = makeEl("span", "md-tile-meta");
+  const coin = buildIdentityCoin(d.colorIdentity);
+  if (coin) meta.append(coin);
+  meta.append(makeEl("span", null, `${myDeckRecordText(d, true)}${d.bracket ? ` · B${d.bracket}` : ""}`));
   text.append(meta);
   const flags = makeEl("span", "md-tile-flags");
+  if (vet.tier >= 2) flags.append(veteranTagEl(vet));
   if (struggling) flags.append(makeEl("span", "md-flag", "Struggling"));
   if (!linked) flags.append(makeEl("span", "md-tile-unlinked", "Not linked"));
   if (flags.childNodes.length) text.append(flags);
@@ -13907,6 +14051,11 @@ function renderMyDecks() {
   if (!body || !data) return;
   myDecksUi.view = "list";
   setMyDecksSubview(false);
+  // Back on the list: the page's light is the app's own again.
+  setAmbientIdentity(null);
+  setAmbientIdentity.openDeck = null;
+  myDecksUi.plateShownFor = null;
+  myDecksUi.veteranSignature = myDeckVeteranSignature();
   document.getElementById("md-lead").hidden = false;
   const out = [];
   const arch = data.archidekt || {};
@@ -13922,7 +14071,10 @@ function renderMyDecks() {
   if (featured) {
     const tile = makeEl("article", "md-feature");
     tile.setAttribute("aria-labelledby", "md-feature-name");
-    tile.append(myDeckArt(featured, "md-feature-art"));
+    applyIdentityVars(tile, featured.colorIdentity);
+    // The counter sits on the tile, not the art: the art is wider than the
+    // tile at phone width and clipped, which would clip the counter too.
+    tile.append(myDeckArt(featured, "md-feature-art"), myDeckCountChip(myDeckLifetimeGames(featured)));
     const over = makeEl("div", "md-feature-body");
     over.append(makeEl("span", "md-flag", "Struggling"));
     const name = makeEl("h3", "md-feature-name", featured.name);
@@ -13947,7 +14099,14 @@ function renderMyDecks() {
     item.append(el);
     grid.append(item);
   }
-  if (!data.decks.length) out.push(makeEl("p", "hint", "No pod decks yet. New decks come in through Update the App; meanwhile you can build one."));
+  if (!data.decks.length) {
+    const empty = makeEl("div", "empty-state");
+    empty.append(
+      makeEl("p", "empty-state-title", "No decks yet. Shuffle one up."),
+      makeEl("p", "empty-state-text", "New decks come in through Update the App; meanwhile you can build one."),
+    );
+    out.push(empty);
+  }
   out.push(grid);
   if (arch.connected && arch.username) {
     out.push(makeEl("p", "db-note md-arch-note", `Archidekt: ${arch.username}, ${arch.decks.length} deck${arch.decks.length === 1 ? "" : "s"}`));
@@ -14019,6 +14178,9 @@ async function openMyDeckUpgrade(podDeckId, { relink = false } = {}) {
   const token = ++myDecksUi.token;
   const sameDeck = myDecksUi.deck && myDecksUi.deck.podDeckId === podDeckId;
   myDecksUi.deck = deck;
+  // The deck's colours take over the page's light while it's open.
+  setAmbientIdentity(deck.colorIdentity);
+  setAmbientIdentity.openDeck = deck;
   if (!sameDeck) {
     myDecksUi.keep = new Set();
     myDecksUi.skip = new Set();
@@ -14036,7 +14198,7 @@ async function openMyDeckUpgrade(podDeckId, { relink = false } = {}) {
   if (!arch.connected) {
     myDecksUi.view = "link";
     const body = document.getElementById("md-body");
-    body.replaceChildren(myDeckArt(deck, "md-head-art"), makeEl("h3", "md-sub-name", deck.name), makeEl("p", "db-note db-note-warn", archidektReasonText(arch.reason)));
+    body.replaceChildren(myDeckArt(deck, "md-head-art"), makeEl("h3", "md-sub-name", deck.name), myDeckVeteranPlate(deck), makeEl("p", "db-note db-note-warn", archidektReasonText(arch.reason)));
     return;
   }
   if (!deck.archidektDeckId || relink) return renderMyDeckLink(deck);
@@ -14070,7 +14232,7 @@ function renderMyDeckLink(deck) {
   go.addEventListener("click", () => linkMyDeck(deck, go));
   const row = makeEl("div", "row");
   row.append(go);
-  body.replaceChildren(myDeckArt(deck, "md-head-art"), makeEl("h3", "md-sub-name", deck.name), lead, set, row);
+  body.replaceChildren(myDeckArt(deck, "md-head-art"), makeEl("h3", "md-sub-name", deck.name), myDeckVeteranPlate(deck), lead, set, row);
 }
 
 async function linkMyDeck(deck, btn) {
@@ -14157,7 +14319,7 @@ async function loadMyDeckUpgrade(token) {
   const skeleton = makeEl("div", "md-skeleton");
   skeleton.setAttribute("aria-hidden", "true");
   renderSkeletonCards(skeleton, 3, ["medium", "short"]);
-  body.replaceChildren(myDeckArt(deck, "md-head-art"), makeEl("h3", "md-sub-name", deck.name), skeleton);
+  body.replaceChildren(myDeckArt(deck, "md-head-art"), makeEl("h3", "md-sub-name", deck.name), myDeckVeteranPlate(deck), skeleton);
   const hasCopy = myDecksUi.cardsCache.has(deck.archidektDeckId) || (deck.snapshot && deck.snapshot.fetchedAt);
   setMyDecksStatus(hasCopy ? "" : "Reading your Archidekt deck for the first time…");
   try {
@@ -14440,7 +14602,7 @@ function renderMyDeckUpgrade() {
   titles.append(sub);
   const freshLine = myDeckFreshnessLine();
   if (freshLine) titles.append(freshLine);
-  head.append(titles);
+  head.append(titles, myDeckVeteranPlate(deck));
 
   const lead = makeEl("p", "db-note", `Swaps toward what Bracket ${myDecksUi.bracket} decks with this commander run on EDHREC. Your current cards count as owned, so a swap only shows up when the new card is clearly better.`);
 
