@@ -34,7 +34,7 @@ top of `style.css`. Never hard-code a hex value for UI chrome.
 | `--card-bg`, `--card-bg-translucent` | panels, cards, modals |
 | `--ink`, `--muted` | primary and secondary text |
 | `--border`, `--border-soft` | card borders; table row rules |
-| `--accent`, `--accent-strong`, `--accent-soft`, `--accent-ink` | violet brand accent; hover; tinted fill; text on accent |
+| `--accent`, `--accent-strong`, `--accent-soft`, `--accent-ink` | sleeve-blue brand accent; hover; tinted fill; text on accent |
 | `--good*`, `--bad*`, `--warn*` | status. Each has text, `-bg`, `-border` variants, used as a set |
 | `--shadow-sm`, `--shadow-md` | elevation |
 | `--radius-lg` (16) / `--radius-md` (10) / `--radius-sm` (7) | modal and section / card / control |
@@ -56,9 +56,11 @@ Light lives in the base `:root`. If you add or change a token, update
 avatar-menu toggle. An explicit choice must beat the OS setting, which is
 what the `:not([data-theme="light"])` guard is for.
 
-Light is "warm paper" (`#f3efe5`), not white, and dark is "ink"
-(`#0b0a10`), not grey. New surfaces should keep that warmth. Check every
-new colour pairing in both themes, especially the `-bg` status fills.
+The palette is "Blue Sleeve", shared with the Amass Trading app: light is
+cool paper (`#eef2f7`) with a sleeve-blue accent, dark is deck-box navy
+(`#0a111f`), not grey. New surfaces should stay in that cool navy/blue
+family. Check every new colour pairing in both themes, especially the
+`-bg` status fills.
 
 ## Typography
 
