@@ -64,7 +64,7 @@ function authHeaders() {
 // of truth -- keep this roughly in sync, but a brand-new player will still
 // show up correctly once the live known_players field loads even if this
 // list is stale.
-const PLAYERS_WITH_PLAYGROUP_ACCOUNT = ["Becca", "Manny", "Mateo", "Ryan", "Michelle", "Red"];
+const PLAYERS_WITH_PLAYGROUP_ACCOUNT = ["Becca", "Manny", "Mateo", "Ryan", "Michelle", "Red", "Hiccup_The_Hero"];
 
 // Fallback roster shown only if the D1-backed /players read fails entirely
 // (e.g. offline, or the Worker's down). Real data always comes from D1.
@@ -10255,8 +10255,16 @@ function renderActivePlayersAdmin() {
   hint.textContent = "Only you see this. A player switched off disappears from the app; their games still count.";
   host.appendChild(hint);
 
+  // `players`, not podPlayers: podPlayers is filtered by
+  // knownPlaygroupPlayers, which until /playgroup-games lands is the
+  // hard-coded PLAYERS_WITH_PLAYGROUP_ACCOUNT fallback -- and
+  // applyKnownPlayers doesn't re-render this list when the real one
+  // arrives. A newly added player (Hiccup_The_Hero, 2026-11-20) was missing
+  // here for exactly that reason. /players already returns only
+  // playgroup-linked players (computePlayersData in relay.js), so
+  // `players` is the right set on its own.
   const rows = [
-    ...podPlayers.map(p => ({ id: p.id, name: p.name, active: true })),
+    ...players.map(p => ({ id: p.id, name: p.name, active: true })),
     ...inactivePlayers.map(p => ({ id: p.id, name: p.name, active: false })),
   ].sort((a, b) => a.name.localeCompare(b.name));
 
